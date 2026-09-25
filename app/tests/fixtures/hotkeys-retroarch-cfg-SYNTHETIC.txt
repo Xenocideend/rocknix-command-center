@@ -1,0 +1,14 @@
+# SYNTHETIC fixture (rp5deck test_hotkeys.py) - shaped like a RetroArch
+# retroarch.cfg after setsettings.sh's configure_hotkeys() has run, but this
+# exact file was never read from a device. input_enable_hotkey_btn is
+# changed away from the shipped default (8) to prove the override-detection
+# path notices a device change without inventing a glyph for it.
+input_driver = "udev"
+input_enable_hotkey_btn = "12"
+input_exit_emulator_btn = "9"
+input_fps_toggle_btn = "3"
+input_menu_toggle_btn = "2"
+input_save_state_btn = "5"
+input_load_state_btn = "4"
+input_toggle_fast_forward_axis = "+5"
+input_rewind_axis = "+2"

@@ -1,0 +1,31 @@
+# SYNTHETIC: adversarial ordering, not a real capture. The real device
+# happens to list the base "...DualSense Wireless Controller" device BEFORE
+# its "...Motion Sensors" sibling, so a bug that matches by PREFIX instead of
+# exact name equality still finds the right block first and passes by
+# accident. This fixture puts the longer-named sibling FIRST, so a prefix
+# match (`device_name.startswith(search_name)`) incorrectly returns the
+# sibling's event number when asked for the short base name, while an exact
+# match correctly skips it and finds the base device below.
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Sony Interactive Entertainment DualSense Wireless Controller Motion Sensors"
+P: Phys=
+S: Sysfs=/devices/virtual/misc/uhid/0003:054C:0CE6.0001/input/input10
+U: Uniq=02:00:00:00:00:00
+H: Handlers=js2 event10
+B: PROP=40
+B: EV=19
+B: ABS=3f
+B: MSC=20
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Sony Interactive Entertainment DualSense Wireless Controller"
+P: Phys=
+S: Sysfs=/devices/virtual/misc/uhid/0003:054C:0CE6.0001/input/input9
+U: Uniq=02:00:00:00:00:00
+H: Handlers=js1 event9
+B: PROP=0
+B: EV=20000b
+B: KEY=7fdb000000000000 0 0 0 0
+B: ABS=3003f
+B: FF=107030000 0

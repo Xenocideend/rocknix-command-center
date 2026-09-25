@@ -1,0 +1,936 @@
+{
+ "version": 1,
+ "ok": false,
+ "nothing_scanned": false,
+ "roots": [
+  "/storage/roms",
+  "/storage/games-internal/roms",
+  "/storage/games-external/roms"
+ ],
+ "roots_missing": [],
+ "files_checked": 429952,
+ "gamelists": 88,
+ "entries_checked": 56086,
+ "gamelists_skipped": 0,
+ "findings": [
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/genesis/gamelist.xml",
+   "field": "name",
+   "value": "Skitchin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 11293
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/genesis/gamelist.xml",
+   "field": "name",
+   "value": "Wiz'n'Liz",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 14548
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/nes/Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "field": "filename",
+   "value": "Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "L'Empereur",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 5287
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "path",
+   "value": "./Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12585
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "The Ren & Stimpy Show : Buckeroo$!",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12586
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Toobin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 16302
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Spook-o'-tron",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22065
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "D'Veel'Ng",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22324
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Steins;Gate",
+   "reasons": [
+    "; (ends the hook command, runs the rest) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22583
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/themes/AI-HYPERTOCERA-THE-MINI-CAKE-TV/art/logos/collections/Baldur`s Gate.svg",
+   "field": "filename",
+   "value": "Baldur`s Gate.svg",
+   "reasons": [
+    "backtick (command substitution even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/gba/gamelist.xml",
+   "field": "path",
+   "value": "./WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 6949
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/gba/WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "field": "filename",
+   "value": "WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/gbc/gamelist.xml",
+   "field": "name",
+   "value": "Toobin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 5901
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamrtarm64\\swiftshader",
+   "field": "dirname",
+   "value": "steamrtarm64\\swiftshader",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamrtarm64\\libs\\libnghttp2.so.14",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libnghttp2.so.14",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamrtarm64\\libs",
+   "field": "dirname",
+   "value": "steamrtarm64\\libs",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamrtarm64\\libs\\libcurl.so",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libcurl.so",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamrtarm64\\libs\\libnghttp2.so",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libnghttp2.so",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4121-poweramorskin(airforce).esl",
+   "field": "filename",
+   "value": "ccbgsfo4121-poweramorskin(airforce).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4014-pipboy(white).esl",
+   "field": "filename",
+   "value": "ccbgsfo4014-pipboy(white).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4023-powerarmorskin(camo02).esl",
+   "field": "filename",
+   "value": "ccbgsfo4023-powerarmorskin(camo02).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4002-pipboy(blue).esl",
+   "field": "filename",
+   "value": "ccbgsfo4002-pipboy(blue).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4025-powerarmorskin(chrome).esl",
+   "field": "filename",
+   "value": "ccbgsfo4025-powerarmorskin(chrome).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4124-poweramorskin(tribalhelmets).esl",
+   "field": "filename",
+   "value": "ccbgsfo4124-poweramorskin(tribalhelmets).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4003-pipboy(camo01).esl",
+   "field": "filename",
+   "value": "ccbgsfo4003-pipboy(camo01).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4120-poweramorskin(pittraider).esl",
+   "field": "filename",
+   "value": "ccbgsfo4120-poweramorskin(pittraider).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4123-poweramorskin(inferno).esl",
+   "field": "filename",
+   "value": "ccbgsfo4123-poweramorskin(inferno).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4012-pipboy(red).esl",
+   "field": "filename",
+   "value": "ccbgsfo4012-pipboy(red).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4022-powerarmorskin(camo01).esl",
+   "field": "filename",
+   "value": "ccbgsfo4022-powerarmorskin(camo01).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4001-pipboy(black).esl",
+   "field": "filename",
+   "value": "ccbgsfo4001-pipboy(black).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4006-pipboy(chrome).esl",
+   "field": "filename",
+   "value": "ccbgsfo4006-pipboy(chrome).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4004-pipboy(camo02).esl",
+   "field": "filename",
+   "value": "ccbgsfo4004-pipboy(camo02).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4122-poweramorskin(scorchedsierra).esl",
+   "field": "filename",
+   "value": "ccbgsfo4122-poweramorskin(scorchedsierra).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4020-powerarmorskin(black).esl",
+   "field": "filename",
+   "value": "ccbgsfo4020-powerarmorskin(black).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/English(US)",
+   "field": "dirname",
+   "value": "English(US)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/Spanish(Spain)",
+   "field": "dirname",
+   "value": "Spanish(Spain)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/French(France)",
+   "field": "dirname",
+   "value": "French(France)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/FINAL FANTASY FFX&FFX-2 HD Remaster/FFX&X-2_Will.exe",
+   "field": "filename",
+   "value": "FFX&X-2_Will.exe",
+   "reasons": [
+    "& (backgrounds the hook, runs the rest as a command) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/steamapps/common/FINAL FANTASY FFX&FFX-2 HD Remaster/FFX&X-2_LAUNCHER.exe",
+   "field": "filename",
+   "value": "FFX&X-2_LAUNCHER.exe",
+   "reasons": [
+    "& (backgrounds the hook, runs the rest as a command) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/steam/userdata/30897629/241100/remote/controller_config/413080/$$$autosave.vdf",
+   "field": "filename",
+   "value": "$$$autosave.vdf",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/snes/gamelist.xml",
+   "field": "name",
+   "value": "The Ren & Stimpy Show : Buckeroo$!",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12524
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/msx/gamelist.xml",
+   "field": "name",
+   "value": "Squish'em",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 13478
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/roms/nds/Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "field": "filename",
+   "value": "Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/nds/gamelist.xml",
+   "field": "path",
+   "value": "./Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 29705
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/famicom/gamelist.xml",
+   "field": "name",
+   "value": "Wit's",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 4572
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/roms/megadrive/gamelist.xml",
+   "field": "name",
+   "value": "Wiz'n'Liz",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 3190
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/genesis/gamelist.xml",
+   "field": "name",
+   "value": "Skitchin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 11293
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/genesis/gamelist.xml",
+   "field": "name",
+   "value": "Wiz'n'Liz",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 14548
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/nes/Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "field": "filename",
+   "value": "Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "L'Empereur",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 5287
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "path",
+   "value": "./Ren & Stimpy Show, The - Buckeroo$! (USA).nes",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12585
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "The Ren & Stimpy Show : Buckeroo$!",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12586
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Toobin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 16302
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Spook-o'-tron",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22065
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "D'Veel'Ng",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22324
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nes/gamelist.xml",
+   "field": "name",
+   "value": "Steins;Gate",
+   "reasons": [
+    "; (ends the hook command, runs the rest) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 22583
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/themes/AI-HYPERTOCERA-THE-MINI-CAKE-TV/art/logos/collections/Baldur`s Gate.svg",
+   "field": "filename",
+   "value": "Baldur`s Gate.svg",
+   "reasons": [
+    "backtick (command substitution even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/gba/gamelist.xml",
+   "field": "path",
+   "value": "./WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 6949
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/gba/WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "field": "filename",
+   "value": "WarioWare, Inc. - Mega Microgame$! (USA).gba",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/gbc/gamelist.xml",
+   "field": "name",
+   "value": "Toobin'",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 5901
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamrtarm64\\swiftshader",
+   "field": "dirname",
+   "value": "steamrtarm64\\swiftshader",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamrtarm64\\libs\\libnghttp2.so.14",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libnghttp2.so.14",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamrtarm64\\libs",
+   "field": "dirname",
+   "value": "steamrtarm64\\libs",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamrtarm64\\libs\\libcurl.so",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libcurl.so",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamrtarm64\\libs\\libnghttp2.so",
+   "field": "filename",
+   "value": "steamrtarm64\\libs\\libnghttp2.so",
+   "reasons": [
+    "\\ (shell escape: the character after it is changed) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4121-poweramorskin(airforce).esl",
+   "field": "filename",
+   "value": "ccbgsfo4121-poweramorskin(airforce).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4014-pipboy(white).esl",
+   "field": "filename",
+   "value": "ccbgsfo4014-pipboy(white).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4023-powerarmorskin(camo02).esl",
+   "field": "filename",
+   "value": "ccbgsfo4023-powerarmorskin(camo02).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4002-pipboy(blue).esl",
+   "field": "filename",
+   "value": "ccbgsfo4002-pipboy(blue).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4025-powerarmorskin(chrome).esl",
+   "field": "filename",
+   "value": "ccbgsfo4025-powerarmorskin(chrome).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4124-poweramorskin(tribalhelmets).esl",
+   "field": "filename",
+   "value": "ccbgsfo4124-poweramorskin(tribalhelmets).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4003-pipboy(camo01).esl",
+   "field": "filename",
+   "value": "ccbgsfo4003-pipboy(camo01).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4120-poweramorskin(pittraider).esl",
+   "field": "filename",
+   "value": "ccbgsfo4120-poweramorskin(pittraider).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4123-poweramorskin(inferno).esl",
+   "field": "filename",
+   "value": "ccbgsfo4123-poweramorskin(inferno).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4012-pipboy(red).esl",
+   "field": "filename",
+   "value": "ccbgsfo4012-pipboy(red).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4022-powerarmorskin(camo01).esl",
+   "field": "filename",
+   "value": "ccbgsfo4022-powerarmorskin(camo01).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4001-pipboy(black).esl",
+   "field": "filename",
+   "value": "ccbgsfo4001-pipboy(black).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4006-pipboy(chrome).esl",
+   "field": "filename",
+   "value": "ccbgsfo4006-pipboy(chrome).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4004-pipboy(camo02).esl",
+   "field": "filename",
+   "value": "ccbgsfo4004-pipboy(camo02).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4122-poweramorskin(scorchedsierra).esl",
+   "field": "filename",
+   "value": "ccbgsfo4122-poweramorskin(scorchedsierra).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Fallout 4/Data/ccbgsfo4020-powerarmorskin(black).esl",
+   "field": "filename",
+   "value": "ccbgsfo4020-powerarmorskin(black).esl",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/English(US)",
+   "field": "dirname",
+   "value": "English(US)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/Spanish(Spain)",
+   "field": "dirname",
+   "value": "Spanish(Spain)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/Batman Arkham City GOTY/BmGame/CookedPCConsole/French(France)",
+   "field": "dirname",
+   "value": "French(France)",
+   "reasons": [
+    "( (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)",
+    ") (shell syntax error: the hook never runs) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/FINAL FANTASY FFX&FFX-2 HD Remaster/FFX&X-2_Will.exe",
+   "field": "filename",
+   "value": "FFX&X-2_Will.exe",
+   "reasons": [
+    "& (backgrounds the hook, runs the rest as a command) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/steamapps/common/FINAL FANTASY FFX&FFX-2 HD Remaster/FFX&X-2_LAUNCHER.exe",
+   "field": "filename",
+   "value": "FFX&X-2_LAUNCHER.exe",
+   "reasons": [
+    "& (backgrounds the hook, runs the rest as a command) in a value without an ASCII space (ES leaves it unquoted)"
+   ]
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/steam/userdata/30897629/241100/remote/controller_config/413080/$$$autosave.vdf",
+   "field": "filename",
+   "value": "$$$autosave.vdf",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/snes/gamelist.xml",
+   "field": "name",
+   "value": "The Ren & Stimpy Show : Buckeroo$!",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 12524
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/msx/gamelist.xml",
+   "field": "name",
+   "value": "Squish'em",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 13478
+  },
+  {
+   "source": "filesystem",
+   "file": "/storage/games-internal/roms/nds/Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "field": "filename",
+   "value": "Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ]
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/nds/gamelist.xml",
+   "field": "path",
+   "value": "./Metropolis Crime$ (Europe) (En,Fr,De,Es,It).zip",
+   "reasons": [
+    "$ (expanded even inside ES's double quotes)"
+   ],
+   "line": 29705
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/famicom/gamelist.xml",
+   "field": "name",
+   "value": "Wit's",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 4572
+  },
+  {
+   "source": "gamelist",
+   "file": "/storage/games-internal/roms/megadrive/gamelist.xml",
+   "field": "name",
+   "value": "Wiz'n'Liz",
+   "reasons": [
+    "' (starts a shell quote) in a value without an ASCII space (ES leaves it unquoted)"
+   ],
+   "line": 3190
+  }
+ ],
+ "errors": [],
+ "error_count": 0,
+ "elapsed_s": 1.172
+}

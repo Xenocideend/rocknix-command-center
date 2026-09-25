@@ -1,0 +1,930 @@
+#!/bin/bash
+# Retroid Dual Screen Add-on - make the working layout survive a reboot.
+#
+# Install to: /storage/.config/autostart/092-dual-screen-persist   (chmod +x)
+#
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS
+#
+# Three separate mechanisms undo the dual-screen layout on every boot:
+#
+#  1. /usr/bin/output_monitor (spawned by sway's config, which 111-sway-init
+#     regenerates from scratch each boot) watches for a DP/HDMI output and, the
+#     moment it sees one, runs `wlr-randr --output <internal> --off` for every
+#     internal panel. On a device docked to a TV that is right. On a handheld
+#     whose add-on IS the second screen it is exactly wrong: it turns the
+#     built-in panel off. It also switches the audio card to its "HDMI" profile,
+#     which on this device deletes the speaker sink entirely - the add-on has no
+#     audio endpoint, so sound goes nowhere.
+#
+#  2. 111-sway-init writes `for_window [app_id="emulationstation"] focus output
+#     DP-1`, so EmulationStation jumps to the add-on every time its window is
+#     created - including after any ES restart, not just at boot.
+#
+#  3. Nothing anywhere persists DSI-1's position, DSI-1's scale, or the
+#     workspace assignment. 111-sway-init also sets the built-in touchscreen to
+#     `events disabled`.
+#
+# Editing /storage/.config/sway/config is useless: 111-sway-init overwrites it
+# every boot ("Copy base config, we are overwriting any user config"), and
+# /usr/bin is a read-only squashfs, so output_monitor itself cannot be patched.
+# The only durable place to stand is here, in an autostart script that runs
+# after both, replacing output_monitor's policy with one suited to this device.
+#
+# ---------------------------------------------------------------------------
+# SAFETY PROPERTY
+#
+# This script NEVER disables an output and never powers a panel off. Every
+# action it takes is additive: enable, position, move, map. So if it crashes,
+# hangs, or is killed, the worst case is both screens on with an imperfect
+# layout - never a dark device. output_monitor's failure mode is the opposite,
+# which is why it is stopped rather than left to race.
+#
+# Kill switch: create /storage/.disable-dualscreen and this exits immediately at
+# next boot, leaving stock behaviour. Remove it to re-enable.
+
+set -u
+
+LOG=/storage/.config/autostart/092-dual-screen-persist.log
+LOCK=/run/092-dual-screen-persist.pid
+DISABLE=/storage/.disable-dualscreen
+
+EXTERNAL="DP-1"          # the add-on, over USB-C DisplayPort Alt Mode
+INTERNAL="DSI-1"         # the handheld's own panel - PRIMARY on the Retroid
+TOUCH_EXT="8746:1:RetroidPocket_RDS_Touchscreen"
+TOUCH_INT='0:0:generic_ft5x06_(a0)'
+AUDIO_CARD_NAME="Built-in Audio"
+
+POLL=5
+MAX_LOG=262144
+
+# --- SW1: screen swap (rp5deck's "Swap screens") ------------------------------
+#
+# rp5deck (the Command Center, /storage/rp5deck) stores the owner's choice of
+# which panel EmulationStation and the games live on in its config.json:
+#     "screens": {"es_screen": "addon_top" | "builtin_bottom", ...}
+# This daemon is what actually moves ES, so it reads the same key. Contract,
+# shared with rp5deck's config.es_screen_from_raw() and tested against it:
+# "builtin_bottom" only if the file is a JSON object whose screens.es_screen
+# is literally "builtin_bottom"; no file, bad JSON, a missing key, a typo or
+# any other value mean "addon_top" - the pre-SW1 layout. While undocked the
+# choice is ignored (dominant_for): ES goes to the built-in panel as before.
+# rp5deck binds its own panel to whichever output ES is NOT on, by itself.
+RP5_CONFIG=/storage/rp5deck/config.json
+SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
+
+rp5_es_screen() {
+    local v
+    [ -f "$RP5_CONFIG" ] || { echo addon_top; return 0; }
+    v=$(python3 -c '
+import json,sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f: d=json.load(f)
+    v=d["screens"]["es_screen"]
+except Exception: v=None
+print("builtin_bottom" if v=="builtin_bottom" else "addon_top")
+' "$RP5_CONFIG" 2>/dev/null)
+    case "$v" in
+        builtin_bottom) echo builtin_bottom ;;
+        *) echo addon_top ;;
+    esac
+}
+
+# The windows that belong on the Command Center's screen - rp5deck's Firefox
+# and mpv (B15) and the emulators' second windows (DS2) - moved to $1. The
+# same app_id / title patterns as ensure_rp5deck_rules below.
+place_cc_windows() {
+    swaymsg "[app_id=\"^rp5deck-(web|yt|ytapp)\$\"] move container to output $1" >/dev/null 2>&1
+    swaymsg "[title=\"(^|\\| )(Secondary Window|DSperate \\(Bottom\\)|GamePad View)\$|\\[w2\\]\"] move container to output $1" >/dev/null 2>&1
+    return 0
+}
+
+# Exec'd by sway (ensure_swap_rules) the moment one of those windows maps;
+# sway's environment carries SWAYSOCK. Acts only when docked AND swapped -
+# otherwise ensure_rp5deck_rules' static rules have already put the window on
+# the built-in panel, which is where it belongs. Takes no lock, forks nothing.
+# With "game" (exec'd only by the Azahar game-window rule): swapped, the games
+# live on the built-in panel with ES, so Azahar's game window - sent to the
+# add-on by the static rule - comes back there, with focus. Only that rule
+# passes "game", so a Command Center window opening never steals focus.
+if [ "${1:-}" = "--place-cc-windows" ]; then
+    [ -e "$DISABLE" ] && exit 0
+    if [ "$(rp5_es_screen)" = "builtin_bottom" ] &&
+       swaymsg -t get_outputs 2>/dev/null | grep "\"name\": *\"$EXTERNAL\"" >/dev/null; then
+        if [ "${2:-}" = "game" ]; then
+            swaymsg "[title=\"^Azahar [^|]+ \\| (?!.*Secondary Window\$)\" app_id=\"^org\\.azahar_emu\\.Azahar\$\"] move container to output $INTERNAL, focus" >/dev/null 2>&1
+        else
+            place_cc_windows "$EXTERNAL"
+        fi
+    fi
+    exit 0
+fi
+
+# --- run in the background so autostart is not blocked ----------------------
+if [ "${1:-}" != "--fg" ]; then
+    nohup "$0" --fg >/dev/null 2>&1 &
+    exit 0
+fi
+
+[ -e "$DISABLE" ] && exit 0
+
+# --- single instance --------------------------------------------------------
+if [ -f "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null)
+    if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+        exit 0
+    fi
+fi
+echo $$ > "$LOCK"
+
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') 092-dual-screen-persist starting (pid $$) ==="
+
+log() { echo "$(date '+%H:%M:%S') $*"; }
+
+rotate_log() {
+    local sz
+    sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+    if [ "$sz" -gt "$MAX_LOG" ]; then
+        tail -c 65536 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+# --- wait for sway IPC ------------------------------------------------------
+for i in $(seq 1 60); do
+    SWAYSOCK=$(find /run /tmp -name 'sway-ipc.*.sock' 2>/dev/null | head -1)
+    [ -n "$SWAYSOCK" ] && export SWAYSOCK && break
+    sleep 1
+done
+if [ -z "${SWAYSOCK:-}" ]; then
+    log "FATAL: no sway IPC socket after 60s - doing nothing"
+    rm -f "$LOCK"
+    exit 1
+fi
+log "sway socket: $SWAYSOCK"
+
+# --- stop output_monitor ----------------------------------------------------
+# Matched on the full path and filtered against our own pid. `pkill -f` is not
+# used deliberately: this script's own command line would match the pattern.
+stop_output_monitor() {
+    local pids p
+    pids=$(ps -o pid= -o args= 2>/dev/null \
+           | grep '/usr/bin/output_monitor' \
+           | grep -v grep \
+           | awk '{print $1}')
+    for p in $pids; do
+        [ "$p" = "$$" ] && continue
+        kill "$p" 2>/dev/null && log "stopped output_monitor pid $p"
+    done
+}
+
+# Killing it repeatedly is a losing game: sway's config contains
+# `exec /usr/bin/output_monitor` and re-runs it whenever the config is
+# reloaded, so a fresh one keeps appearing. Each new instance starts with
+# _LAST_STATE=init, and 3 seconds later disables the internal panel.
+#
+# Bind-mounting an inert script over it stops it being spawned at all. The
+# rootfs is a read-only squashfs, but a bind mount is an operation on the
+# mountpoint, not a write to the filesystem, so this is allowed. It lives only
+# until reboot, which is exactly right - nothing is permanently modified, and
+# an OS update cannot inherit a broken override.
+NOOP=/storage/.config/noop-output-monitor
+
+neutralise_output_monitor() {
+    if grep -q ' /usr/bin/output_monitor ' /proc/mounts 2>/dev/null; then
+        return 0    # already bound
+    fi
+    if [ ! -x "$NOOP" ]; then
+        printf '#!/bin/sh\n# inert stand-in bind-mounted over ROCKNIX output_monitor\nexit 0\n' > "$NOOP"
+        chmod +x "$NOOP"
+    fi
+    if mount --bind "$NOOP" /usr/bin/output_monitor 2>/dev/null; then
+        log "bind-mounted an inert stand-in over /usr/bin/output_monitor"
+        return 0
+    fi
+    log "WARNING: could not bind-mount over output_monitor; falling back to killing it"
+    return 1
+}
+
+# Returns "dual", "single", or "unknown". NEVER conflates a failed query with
+# an absent display.
+#
+# This distinction is the whole reason the first version of this script was
+# wrong: swaymsg momentarily returns empty while sway is busy applying a burst
+# of output commands - which is exactly when this loop asks. Reading that empty
+# result as "the add-on is gone" made the daemon undo the layout it had just
+# applied, 7 seconds after applying it. Measured while idle, get_outputs fails
+# 0 times in 20; during a layout burst it can fail once. So a failed probe must
+# mean "ask again", not "no external display".
+probe_state() {
+    local json
+    json=$(swaymsg -t get_outputs 2>/dev/null)
+    if [ -z "$json" ]; then
+        echo "unknown"
+        return
+    fi
+    # grep without -q reads all its input, so echo never hits a closed pipe
+    # (-q exits at the first match and logged "write error: Broken pipe").
+    if echo "$json" | grep "\"name\": *\"$EXTERNAL\"" >/dev/null; then
+        echo "dual"
+    else
+        echo "single"
+    fi
+}
+
+es_output() {
+    # which output currently holds the EmulationStation window
+    swaymsg -t get_tree 2>/dev/null | tr -d ' \n' \
+        | grep -o '"name":"\(DP-1\|DSI-1\)"[^@]*' | tail -1 >/dev/null 2>&1
+    swaymsg -t get_tree 2>/dev/null | python3 -c '
+import json,sys
+try: t=json.load(sys.stdin)
+except Exception: sys.exit(0)
+def walk(n,out=None):
+    if n.get("type")=="output": out=n.get("name")
+    if n.get("app_id")=="emulationstation": print(out or ""); return True
+    for k in ("nodes","floating_nodes"):
+        for c in n.get(k,[]) or []:
+            if walk(c,out): return True
+    return False
+walk(t)
+' 2>/dev/null
+}
+
+set_audio_internal() {
+    local card target
+    card=$(wpctl status 2>/dev/null | awk -v n="$AUDIO_CARD_NAME" '
+        index($0,n) && /\[alsa\]/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.$/) { gsub(/\./,"",$i); print $i; exit } }')
+    [ -n "$card" ] || return 0
+    target=$(pw-cli enum-params "$card" EnumProfile 2>/dev/null | awk '
+        /Param:Profile:index/ { getline; idx=$2 }
+        /Param:Profile:name/  { getline; gsub(/"/,"",$2); if ($2=="HiFi") { print idx; exit } }')
+    [ -n "$target" ] || return 0
+    local cur
+    # Count only inside the Sinks block. `wpctl status` also prints the
+    # *configured* default device (HiFi__Speaker__sink) under Settings, which
+    # says "Speaker" whatever profile is actually active - grepping the whole
+    # output therefore reports a speaker that does not exist, and never moves
+    # when the profile changes.
+    cur=$(wpctl status 2>/dev/null | sed -n '/Sinks:/,/Sources:/p' \
+          | grep -c 'Speaker Playback')
+    if [ "$cur" -eq 0 ]; then
+        wpctl set-profile "$card" "$target" 2>/dev/null \
+            && log "audio: restored HiFi profile (card $card, profile $target)"
+    fi
+}
+
+# --- bring the add-on up when the port comes back as a sink ----------------
+#
+# After a reboot the Type-C port sometimes settles as a SINK. It then never
+# sources VBUS, the add-on never powers up, PD never completes and DP-1 stays
+# disconnected - even though the vdd-vbus-supply DT fix is present and the
+# regulator has its consumer. Observed directly: usb_vbus showed 1 consumer but
+# 0 enabled, 0 mV.
+#
+# Writing "source" to power_role is rejected, because a PD role swap needs the
+# partner to be PD-capable, and it cannot be until it is powered. Writing
+# "source" to port_type is a different lever - it changes what the port
+# advertises rather than requesting a swap - and it works:
+#     power_role  source [sink] -> [source] sink
+#     usb_vbus    0 enabled     -> 1 enabled
+#     partner PD  no            -> yes
+#     DP-1        disconnected  -> connected
+# Restoring port_type to "dual" afterwards leaves it connected, so the nudge is
+# one-shot and does not have to be held.
+#
+# GUARD: never do this while a charger is attached. Forcing the port to source
+# would stop the charge. pm8150b-charger/online distinguishes the two cleanly -
+# it reads 0 with the add-on attached and 1 on a charger.
+CHARGER=/sys/class/power_supply/pm8150b-charger/online
+PORT=/sys/class/typec/port0
+
+# Is real power arriving on the port?
+#
+# The old guard read pm8150b-charger/online and compared it to "1". Two faults:
+# the value is not a boolean (it reads 16 with a charger attached), and it
+# FLICKERS between 16 and 0 from one poll to the next. So the guard passed, the
+# daemon nudged port_type to source, and each nudge cut the charge -
+# Charging -> Discharging -> Charging -> Discharging, four times, with a plain
+# charger plugged straight into the handheld and no add-on present at all.
+#
+# Measure the thing that matters instead: actual voltage on the charger input,
+# or the battery actively charging. The bare add-on delivers 0V (measured), a
+# real charger delivers ~4.5V, so this separates them cleanly.
+# --- screen-vs-charging mode ------------------------------------------------
+#
+# UPDATE 23 Sep: the premise below is superseded. With the 9 V sink PDO the dock
+# charges the handheld with the screen up, and on a 5 V supply a PR_Swap hands
+# power to the dock with the screen up - measured, both. The charge input also
+# recovered after sourcing without a reboot. The mode switch is kept for now
+# ("screen" still forces a wake while power is arriving), but the history is
+# left as written so the reasoning can be followed.
+#
+# Original note - these two cannot coexist on this hardware, and the choice has
+# to be made before the port is touched:
+#
+#   The add-on only wakes its bridge chip - and therefore only offers
+#   DisplayPort - when the handheld SOURCES VBUS into it. But sourcing VBUS
+#   jams the pm8150b's charging input for the rest of that boot: APSD never
+#   completes, USBIN reads 0V, and nothing recovers it. Not a power-role swap
+#   (the driver has no pr_set), not raising the current limit (clobbered by the
+#   APSD rerun loop), not re-probing the charger (its remove path leaks the wake
+#   IRQ, so bind fails -EEXIST). Only a reboot.
+#
+#   Left alone, the dock is a plain Type-C charger: HVDCP negotiates 9V and the
+#   handheld charges at ~2.2A, with no data and no screen.
+#
+# So: one or the other, per boot.
+#
+#   charge  (default) - if power is arriving, leave the port alone and charge.
+#                       The screen will not come up.
+#   screen            - always wake the display, even though that ends charging
+#                       until the next reboot.
+#
+# Re-read every poll, so flipping it takes effect without restarting anything -
+# though charge->screen still costs the charge, and screen->charge needs a
+# reboot to un-jam the charger input.
+MODEFILE=/storage/dual-screen-mode
+
+prefer_screen() {
+    [ -f "$MODEFILE" ] || return 1
+    case "$(tr -d ' \t\n\r' < "$MODEFILE" 2>/dev/null)" in
+        screen|SCREEN|display|Screen) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Ask tcpm, which negotiated the contract. Its psy reads online=1 exactly when
+# the port is a SINK with VBUS present, PD or plain Type-C, and 0 while the
+# handheld is sourcing.
+#
+# The previous version read pm8150b-charger/voltage_now, but the driver returns
+# 0 for that whenever status is not "Charging" - so on a full battery a powered
+# dock looked unpowered, the daemon forced source, and the dock's own PR_Swap
+# request was refused while port_type was held at source (23 Sep, 97%).
+power_present() {
+    local f
+    for f in /sys/class/power_supply/tcpm-source-psy-*/online; do
+        [ "$(cat "$f" 2>/dev/null)" = "1" ] && return 0
+    done
+    [ "$(cat /sys/class/power_supply/battery/status 2>/dev/null)" = "Charging" ] && return 0
+    return 1
+}
+
+role_is() { case "$(cat "$PORT/power_role" 2>/dev/null)" in *"[$1]"*) return 0 ;; esac; return 1; }
+
+try_wake_dp() {
+    [ -d "${PORT}-partner" ] || return 1
+    [ "$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)" = "connected" ] && return 1
+    # A plain charger is also a "partner". Forcing source with one attached
+    # breaks the charge for several seconds each time, for no benefit - there is
+    # no display to wake. Unless the user has explicitly chosen the screen.
+    if power_present; then
+        if prefer_screen; then
+            log "wake: power is arriving, but mode=screen - waking the display anyway."
+            log "      this ends charging until the next reboot."
+        else
+            log "wake: power is arriving on the port - not forcing source role"
+            log "      (set mode=screen in $MODEFILE to prioritise the display)"
+            return 1
+        fi
+    fi
+
+    local st i
+    if role_is source; then
+        # Already sourcing - DRP toggling got there on its own. Writing
+        # port_type now would only pin it, and tcpm answers PR_Swap with
+        # Not_Supported while port_type is not dual.
+        log "wake: already source - waiting for $EXTERNAL without touching port_type"
+    else
+        log "wake: partner present but $EXTERNAL disconnected - nudging port_type to source"
+        echo source > "$PORT/port_type" 2>/dev/null || { log "wake: port_type write rejected"; return 1; }
+        # Release the pin the moment the role flips, so a dock that later gets
+        # its own supply can take over with PR_Swap.
+        i=0; while ! role_is source && [ $i -lt 8 ]; do sleep 1; i=$((i + 1)); done
+        echo dual > "$PORT/port_type" 2>/dev/null
+    fi
+    i=0
+    while [ $i -lt 8 ]; do
+        st=$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)
+        [ "$st" = "connected" ] && break
+        sleep 1; i=$((i + 1))
+    done
+    if [ "$st" = "connected" ]; then
+        log "wake: $EXTERNAL is now connected"
+        return 0
+    fi
+    log "wake: no luck, $EXTERNAL still $st"
+    return 1
+}
+
+# --- hand power back to the dock once the screen is up ----------------------
+#
+# Waking DP may need the handheld to source VBUS. Parked at source it powers the
+# add-on off its own battery. If the add-on has its own supply, the right end
+# state is the reverse - the add-on sources and charges the handheld - which is
+# what Android does.
+#
+# The lever is a PD power-role swap (write "sink" to power_role), NOT
+# port_type. Measured 23 Sep on a dock fed by a 5 V supply:
+#     PR_Swap accepted -> dock offers 5000 mV / 1500 mA -> SNK_READY
+#     battery +237 mA (draining) -> -340..-1087 mA (charging)
+#     DP-1 connected throughout
+# A dock WITHOUT a supply rejects the swap, and a rejection changes nothing, so
+# trying is harmless. The dock also sends PR_Swap by itself when its supply
+# appears; tcpm accepts that only while port_type is "dual" - which is why
+# try_wake_dp must never leave port_type pinned at source.
+#
+# The old lever, port_type=sink, forced PORT_RESET: on an unpowered dock that
+# killed the dock and then needed a recovery cycle.
+# --- DP alt-mode race: alt mode entered, but no display ----------------------
+#
+# Plugging a supply into the add-on while docked makes it re-attach and send
+# DR_SWAP at once. typec_displayport's first probe collides with that and fails
+# (-71); the second discovery enters DP mode, but HPD never arrives, so DP-1
+# stays disconnected while the handheld charges (24 Sep, kernel v3). Toggling
+# the alt mode's "active" does not recover it. A port reset does: writing
+# port_type=source forces PORT_RESET (with a supplied dock the role never
+# actually flips), writing dual straight back keeps PR_Swap acceptable, and the
+# re-attach sets DP up cleanly - measured hpd=1, DP-1 connected in 3 s, the
+# charge uninterrupted.
+dp_altmode_dir() {
+    local a
+    for a in "${PORT}-partner"/port0-partner.*; do
+        [ "$(cat "$a/svid" 2>/dev/null)" = "ff01" ] && { echo "$a"; return 0; }
+    done
+    return 1
+}
+
+dp_race_detected() {
+    local a
+    a=$(dp_altmode_dir) || return 1
+    [ "$(cat "$a/active" 2>/dev/null)" = "yes" ] || return 1
+    [ "$(cat "$a/displayport/hpd" 2>/dev/null)" = "0" ] || return 1
+    [ "$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)" != "connected" ]
+}
+
+reset_port_for_dp() {
+    local i=0
+    log "dp-race: DP alt mode active but no HPD and $EXTERNAL disconnected - resetting the port ($dp_race_resets/$DP_RACE_MAX)"
+    echo source > "$PORT/port_type" 2>/dev/null || { log "dp-race: port_type write rejected"; return 1; }
+    while ! role_is source && [ $i -lt 8 ]; do sleep 1; i=$((i + 1)); done
+    echo dual > "$PORT/port_type" 2>/dev/null
+    i=0
+    while [ "$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)" != "connected" ] && [ $i -lt 15 ]; do
+        sleep 1; i=$((i + 1))
+    done
+    log "dp-race: after reset $EXTERNAL $(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null), role $(cat "$PORT/power_role" 2>/dev/null)"
+}
+
+settle_to_sink() {
+    [ "$sink_settled" = "yes" ] && return 0
+    [ "$sink_failed" -ge 2 ] && return 1
+    [ "$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)" = "connected" ] || return 1
+
+    if role_is sink; then sink_settled=yes; return 0; fi
+
+    log "sink: requesting PR_Swap so the add-on can power the handheld"
+    # The write can return ENOTCONN mid-swap even when it succeeds (the link
+    # drops briefly), so judge by the resulting role, not the exit status.
+    echo sink > "$PORT/power_role" 2>/dev/null
+    local i=0
+    while ! role_is sink && [ $i -lt 8 ]; do sleep 1; i=$((i + 1)); done
+    sleep 2
+
+    local dp
+    dp=$(cat /sys/class/drm/card0-${EXTERNAL}/status 2>/dev/null)
+    if role_is sink; then
+        log "sink: swapped - now $(cat "$PORT/power_role"), $EXTERNAL $dp"
+        sink_settled=yes
+        return 0
+    fi
+
+    # The add-on has no supply of its own. Stay source; that is the only way
+    # its screen can run. Do not retry beyond the budget - if it gets a supply
+    # later it will ask for the swap itself.
+    sink_failed=$((sink_failed + 1))
+    log "sink: swap declined (add-on unpowered?) - staying source (attempt $sink_failed)"
+    return 1
+}
+
+apply_layout() {
+    local dual="$1"
+
+    if [ "$dual" = "yes" ]; then
+        # Add-on above, built-in below. Logical sizes after transform+scale:
+        #   DP-1  1080x1920 @270 scale 2 ->  960x540
+        #   DSI-1 1080x1920 @270 scale 1 -> 1920x1080
+        swaymsg output "$EXTERNAL" enable            >/dev/null 2>&1
+        swaymsg output "$EXTERNAL" transform 270     >/dev/null 2>&1
+        # scale 1, NOT the 2 the ROCKNIX wiki gives. That page treats the add-on
+        # as a secondary info screen where chunky UI is wanted; here it is the
+        # dominant display, and scale 2 renders EmulationStation at a logical
+        # 960x540 on a 1920x1080 panel - quarter resolution, upscaled.
+        swaymsg output "$EXTERNAL" scale 1           >/dev/null 2>&1
+        swaymsg output "$EXTERNAL" position 0 0      >/dev/null 2>&1
+        swaymsg output "$EXTERNAL" bg '#000000' solid_color >/dev/null 2>&1
+
+        swaymsg output "$INTERNAL" enable            >/dev/null 2>&1
+        swaymsg output "$INTERNAL" transform 270     >/dev/null 2>&1
+        swaymsg output "$INTERNAL" scale 1           >/dev/null 2>&1
+        # y=1080, not 540: DP-1 runs at scale 1 now, so its logical height is
+        # 1080 rather than 540. At 540 the two panels would overlap.
+        swaymsg output "$INTERNAL" position 0 1080   >/dev/null 2>&1
+
+        swaymsg input "$TOUCH_EXT" map_to_output "$EXTERNAL" >/dev/null 2>&1
+        swaymsg input "$TOUCH_EXT" calibration_matrix 0 1 0 -1 0 1 >/dev/null 2>&1
+    else
+        swaymsg output "$INTERNAL" enable            >/dev/null 2>&1
+        swaymsg output "$INTERNAL" transform 270     >/dev/null 2>&1
+        swaymsg output "$INTERNAL" scale 1           >/dev/null 2>&1
+        swaymsg output "$INTERNAL" position 0 0      >/dev/null 2>&1
+    fi
+
+    # The built-in touchscreen is set to `events disabled` by 111-sway-init.
+    swaymsg input "$TOUCH_INT" events enabled          >/dev/null 2>&1
+    swaymsg input "$TOUCH_INT" map_to_output "$INTERNAL" >/dev/null 2>&1
+
+    local dom
+    if [ "$dual" = "yes" ]; then dom=$(dominant_for dual); else dom="$INTERNAL"; fi
+    swaymsg workspace 1 output "$dom"                >/dev/null 2>&1
+    set_audio_internal
+}
+
+# rp5deck (the bottom-screen Command Center) launches Firefox (app_id
+# rp5deck-web), the YouTube App's own Firefox (app_id rp5deck-ytapp) and mpv
+# (app_id rp5deck-yt). All must open on the built-in panel,
+# never over the game on the add-on. for_window rules live in sway's memory, so
+# they are re-applied whenever sway's pid changes (a sway restart forgets them).
+#  - rp5deck-web and rp5deck-ytapp may take focus: the owner types into and
+#    steers them (Discord, search, the YouTube App's D-pad).
+#  - rp5deck-yt gets no_focus: a video opening must never pause the game.
+#  - DS2: the emulators' own second windows (Azahar "Secondary Window", Cemu
+#    "GamePad View", melonDS "[w2] ...", dsperate "DSperate (Bottom)") also go
+#    to the built-in panel. No no_focus: the emulator keeps focus on its main
+#    window, and touch on the second window must still reach it.
+#  - The 3DS game window (Azahar's main window, "Azahar <build> | <game>", not
+#    "... | Secondary Window") goes to the add-on and takes focus. Azahar
+#    restores its saved Qt geometry, and one saved on the built-in panel maps
+#    the game window there, on top of the Secondary Window; with no frame
+#    callbacks for the covered window Azahar's renderer blocks and the game
+#    freezes (25 Sep). Undocked there is no add-on and the move does nothing.
+# rp5deck's own panel is a layer-shell surface, not a window, so no rule for it.
+ensure_rp5deck_rules() {
+    local pid
+    pid=$(pidof sway 2>/dev/null | awk '{print $1}')
+    [ -n "$pid" ] || return 0
+    [ "$pid" = "$rp5deck_rules_pid" ] && return 0
+    if swaymsg "for_window [app_id=\"^rp5deck-web\$\"] move container to output $INTERNAL" >/dev/null 2>&1 &&
+       swaymsg "for_window [app_id=\"^rp5deck-ytapp\$\"] move container to output $INTERNAL" >/dev/null 2>&1 &&
+       swaymsg "for_window [app_id=\"^rp5deck-yt\$\"] move container to output $INTERNAL" >/dev/null 2>&1 &&
+       swaymsg "no_focus [app_id=\"^rp5deck-yt\$\"]" >/dev/null 2>&1 &&
+       swaymsg "for_window [title=\"(^|\\| )(Secondary Window|DSperate \\(Bottom\\)|GamePad View)\$|\\[w2\\]\"] move container to output $INTERNAL" >/dev/null 2>&1 &&
+       swaymsg "for_window [title=\"^Azahar [^|]+ \\| (?!.*Secondary Window\$)\" app_id=\"^org\\.azahar_emu\\.Azahar\$\"] move container to output $EXTERNAL, focus" >/dev/null 2>&1; then
+        rp5deck_rules_pid="$pid"
+        log "rp5deck window rules applied (sway pid $pid)"
+    else
+        log "rp5deck window rules: swaymsg failed - will retry next poll"
+    fi
+}
+
+# SW1 rules - only once the screens have been swapped (docked) in this daemon's
+# lifetime, so an owner who never swaps runs with exactly the pre-SW1 rule
+# set. Re-applied whenever sway's pid changes, like ensure_rp5deck_rules.
+#  - ES: ROCKNIX's `for_window [app_id="emulationstation"] move output DP-1`
+#    (or `focus output DP-1`) fires every time ES maps a window - after every
+#    game. Swapped, that throws ES onto the add-on until the next poll, with
+#    keyboard focus left behind. This rule runs after it: back into workspace
+#    1, which park_es keeps on the ES screen in either orientation, and focus.
+#  - Command Center windows: the static rules in ensure_rp5deck_rules send
+#    them to the built-in panel, and a for_window rule can be neither removed
+#    nor re-pointed while sway runs. So they also exec this script with
+#    --place-cc-windows, which moves them to the add-on only when docked and
+#    swapped, and does nothing otherwise.
+#  - Azahar's game window: the static rule sends it to the add-on; this one
+#    execs --place-cc-windows game, which brings it back to the built-in
+#    panel (where the games live) only when docked and swapped.
+ensure_swap_rules() {
+    local pid
+    [ "$es_swapped_seen" = "yes" ] || return 0
+    pid=$(pidof sway 2>/dev/null | awk '{print $1}')
+    [ -n "$pid" ] || return 0
+    [ "$pid" = "$swap_rules_pid" ] && return 0
+    if swaymsg "for_window [app_id=\"emulationstation\"] move container to workspace number 1, focus" >/dev/null 2>&1 &&
+       swaymsg "for_window [app_id=\"^rp5deck-(web|yt|ytapp)\$\"] exec $SELF --place-cc-windows" >/dev/null 2>&1 &&
+       swaymsg "for_window [title=\"(^|\\| )(Secondary Window|DSperate \\(Bottom\\)|GamePad View)\$|\\[w2\\]\"] exec $SELF --place-cc-windows" >/dev/null 2>&1 &&
+       swaymsg "for_window [title=\"^Azahar [^|]+ \\| (?!.*Secondary Window\$)\" app_id=\"^org\\.azahar_emu\\.Azahar\$\"] exec $SELF --place-cc-windows game" >/dev/null 2>&1; then
+        swap_rules_pid="$pid"
+        log "swap window rules applied (sway pid $pid)"
+    else
+        log "swap window rules: swaymsg failed - will retry next poll"
+    fi
+}
+
+# SW1: es_swap=yes|no from rp5deck's config, re-read only when the file
+# changes (inode + mtime + size: rp5deck saves by atomic rename, so every
+# save is a new inode), so a steady poll costs one stat, not a python3 run.
+read_es_swap() {
+    local sig
+    sig=$(stat -c '%i %Y %s' "$RP5_CONFIG" 2>/dev/null)
+    [ "$sig" = "$rp5_cfg_sig" ] && return 0
+    rp5_cfg_sig="$sig"
+    if [ "$(rp5_es_screen)" = "builtin_bottom" ]; then es_swap=yes; else es_swap=no; fi
+}
+
+# Which screen leads. With the add-on attached the TOP screen (the add-on) is
+# dominant: EmulationStation lives there and workspace 1 is assigned to it -
+# unless the owner swapped the screens (SW1, es_swap), in which case the
+# built-in panel leads while docked. Undocked, the built-in panel takes over
+# either way. Unswapped this matches ROCKNIX's own
+# `for_window [app_id="emulationstation"] focus output DP-1` rule, so while
+# docked the two no longer fight; the daemon's job there is only to put ES back
+# on the built-in panel when the add-on goes away.
+dominant_for() {
+    if [ "$1" = "dual" ] && [ "$es_swap" != "yes" ]; then echo "$EXTERNAL"; else echo "$INTERNAL"; fi
+}
+
+# The other panel while docked: where the Command Center's windows go.
+cc_output_for() {
+    if [ "$1" = "dual" ] && [ "$es_swap" = "yes" ]; then echo "$EXTERNAL"; else echo "$INTERNAL"; fi
+}
+
+# The output workspace 1 is on, or empty if it does not exist (or sway did
+# not answer).
+ws1_output() {
+    swaymsg -t get_workspaces 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for w in d:
+    if str(w.get("name"))=="1":
+        print(w.get("output") or ""); break
+' 2>/dev/null
+}
+
+# SW1: once a swap has been seen, workspace 1 is moved explicitly. park_es
+# puts ES into "workspace number 1" wherever that workspace is, and ROCKNIX's
+# `workspace 1 output DP-1 DSI-1` keeps it on the add-on - so ES sent to the
+# built-in panel would be dragged straight back up, every poll. Assigning a
+# workspace to an output is not relied on to move an existing one;
+# `workspace number 1` + `move workspace to output` is (the pair the early
+# dualscreen-layout.sh used). Only called when es_swapped_seen=yes: the
+# unswapped and undocked paths run exactly the pre-SW1 commands.
+ws1_follow() {
+    local target="$1" at
+    swaymsg "workspace 1 output $target" >/dev/null 2>&1
+    at=$(ws1_output)
+    if [ -n "$at" ] && [ "$at" != "$target" ]; then
+        swaymsg 'workspace number 1' >/dev/null 2>&1
+        swaymsg "move workspace to output $target" >/dev/null 2>&1
+        log "moved workspace 1 from $at to $target"
+    fi
+}
+
+park_es() {
+    local target="$1" where
+    where=$(es_output)
+    if [ -n "$where" ] && [ "$where" != "$target" ]; then
+        [ "$es_swapped_seen" = "yes" ] && ws1_follow "$target"
+        swaymsg "[app_id=\"emulationstation\"] move container to output $target" >/dev/null 2>&1
+        swaymsg focus output "$target" >/dev/null 2>&1
+        # Assigning a workspace to an output does NOT switch to it. Without this
+        # the panel can sit on an empty workspace while ES is on another one that
+        # is not visible - which looks exactly like a dead screen. Observed after
+        # unplugging the add-on: DSI-1 showed empty workspace 2 while ES sat on
+        # workspace 1, invisible.
+        swaymsg '[app_id="emulationstation"] move container to workspace number 1' >/dev/null 2>&1
+        swaymsg 'workspace number 1' >/dev/null 2>&1
+        log "moved EmulationStation from $where to $target (workspace 1)"
+        return 0
+    fi
+    # Even when ES is already on the right output, make sure that output is
+    # actually SHOWING the workspace ES lives on.
+    local vis
+    vis=$(swaymsg -t get_outputs 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for o in d:
+    if o.get("name")=="'"$target"'":
+        print(o.get("current_workspace") or ""); break
+' 2>/dev/null)
+    if [ -n "$vis" ] && [ "$vis" != "1" ]; then
+        # SW1: a swap while a game runs (ES has no window then) lands here.
+        [ "$es_swapped_seen" = "yes" ] && ws1_follow "$target"
+        swaymsg focus output "$target" >/dev/null 2>&1
+        swaymsg 'workspace number 1' >/dev/null 2>&1
+        log "switched $target from workspace $vis to 1"
+        return 0
+    fi
+    return 1
+}
+
+# --- main -------------------------------------------------------------------
+neutralise_output_monitor
+stop_output_monitor
+
+last=""
+candidate=""
+confirm=0
+CONFIRM_NEEDED=2      # a change must be seen twice running before it is acted on
+wake_tries=0
+WAKE_MAX=4            # attempts to nudge the port per partner attachment
+sink_settled=no       # have we dropped back to sink role for this attach
+sink_failed=0         # give up after 2 failed attempts rather than looping
+swap_retry=0          # polls since the last attempt, while given up
+SWAP_RETRY_POLLS=60   # ~5 min at a 5 s poll: then allow one more PR_Swap
+rp5deck_rules_pid=""  # sway pid the rp5deck window rules were applied to
+dp_race_polls=0       # consecutive polls with DP alt mode active but no HPD
+dp_race_resets=0      # port resets spent on that this attach
+DP_RACE_MAX=2         # never more than this per attach
+es_swap=no            # SW1: ES belongs on the built-in panel while docked
+es_swap_last=no       # es_swap as last acted on (placement of CC windows)
+es_swapped_seen=no    # a swap was seen while docked: SW1 rules + ws1_follow on
+swap_rules_pid=""     # sway pid the SW1 rules were applied to
+rp5_cfg_sig="unread"  # stat signature of rp5deck's config at the last read
+ws1_at=""             # where workspace 1 is, while a swap is being carried out
+
+while true; do
+    [ -e "$DISABLE" ] && { log "kill switch present - exiting"; rm -f "$LOCK"; exit 0; }
+
+    # output_monitor is respawned whenever sway restarts; keep it down.
+    stop_output_monitor
+    ensure_rp5deck_rules
+
+    state=$(probe_state)
+
+    # Nothing attached: re-arm the per-attach state for the next dock.
+    if [ ! -d "${PORT}-partner" ]; then
+        sink_settled=no
+        sink_failed=0
+        dp_race_polls=0
+        dp_race_resets=0
+    fi
+
+    if [ "$state" = "unknown" ]; then
+        # sway was busy or not answering. Change nothing at all.
+        confirm=0
+        candidate=""
+        rotate_log
+        sleep "$POLL"
+        continue
+    fi
+
+    # SW1: which panel ES belongs on (rp5deck's "Swap screens"). Picked up at
+    # the next poll after the owner changes it; ignored while undocked.
+    read_es_swap
+    if [ "$state" = "dual" ]; then
+        [ "$es_swap" = "yes" ] && es_swapped_seen=yes
+        ensure_swap_rules
+        # The Command Center's windows follow once workspace 1 (ES, or the
+        # running game) has reached its new panel - park_es below moves it.
+        # Moved earlier, they would land IN workspace 1 on its way out and
+        # travel with it to the wrong panel.
+        if [ "$es_swap" != "$es_swap_last" ]; then
+            ws1_at=$(ws1_output)
+            if [ -z "$ws1_at" ] || [ "$ws1_at" = "$(dominant_for dual)" ]; then
+                log "screens: swap $es_swap_last -> $es_swap (ES on $(dominant_for dual), Command Center windows to $(cc_output_for dual))"
+                place_cc_windows "$(cc_output_for dual)"
+                es_swap_last="$es_swap"
+            fi
+        fi
+    fi
+
+    # A partner is attached but no external output exists: the port probably
+    # came up as a sink. Try to wake it, but only a few times per partner
+    # attachment, so a charger or an unrelated cable is not cycled forever.
+    if [ "$state" = "single" ]; then
+        # Both guards have to agree to SKIP. The power_present test lives here
+        # as well as inside try_wake_dp so a charger does not burn the retry
+        # budget - but that meant the mode check inside try_wake_dp was
+        # unreachable while charging, and the toggle silently did nothing.
+        # prefer_screen must therefore override the guard at this level too.
+        if [ -d "${PORT}-partner" ] && { prefer_screen || ! power_present; }; then
+            # Only count attempts we actually make. Declining because a charger
+            # is attached must not burn the budget, or plugging the add-on in
+            # later would find it exhausted and never wake the screen.
+            if [ "$wake_tries" -lt "$WAKE_MAX" ]; then
+                wake_tries=$((wake_tries + 1))
+                if try_wake_dp; then
+                    wake_tries=0
+                    continue      # re-probe immediately; next pass sees dual
+                fi
+            fi
+        else
+            wake_tries=0          # nothing attached, or it is a charger; rearm
+            # Power is arriving, so the wake nudge above is skipped - which also
+            # skips the one case that needs a nudge while charging: DP alt mode
+            # entered but HPD never came (see dp_race_detected). Seen for 3
+            # polls in a row, reset the port once; at most DP_RACE_MAX per attach.
+            if [ -d "${PORT}-partner" ] && dp_race_detected; then
+                dp_race_polls=$((dp_race_polls + 1))
+                if [ "$dp_race_polls" -ge 3 ] && [ "$dp_race_resets" -lt "$DP_RACE_MAX" ]; then
+                    dp_race_resets=$((dp_race_resets + 1))
+                    dp_race_polls=0
+                    reset_port_for_dp
+                    continue      # re-probe immediately
+                fi
+            else
+                dp_race_polls=0
+            fi
+        fi
+    else
+        wake_tries=0
+        dp_race_polls=0
+    fi
+
+    if [ "$state" = "$last" ]; then
+        confirm=0
+        candidate=""
+        # Steady state. Keep ES on whichever screen leads right now - docked
+        # that is the add-on, undocked the built-in panel. Cheap to check, and
+        # it catches ES restarts as well as hotplug.
+        park_es "$(dominant_for "$state")"
+
+        # A re-attach inside one poll (the dock's supply swapped, say) never
+        # changes the confirmed state, so the transition branch never runs
+        # settle_to_sink. Check the role directly: sourcing while "settled"
+        # means the world changed underneath us.
+        if [ "$state" = "dual" ]; then
+            if role_is source && [ "$sink_settled" = "yes" ]; then
+                sink_settled=no
+            fi
+            # After two declined swaps (unpowered dock) settle_to_sink stops
+            # trying. If the dock gains a supply while still attached, ask
+            # again every ~5 min: a declined PR_Swap disturbs nothing.
+            if role_is source && [ "$sink_failed" -ge 2 ]; then
+                swap_retry=$((swap_retry + 1))
+                if [ "$swap_retry" -ge "$SWAP_RETRY_POLLS" ]; then
+                    swap_retry=0
+                    sink_failed=1      # allow exactly one more attempt
+                fi
+            else
+                swap_retry=0
+            fi
+            settle_to_sink
+        fi
+        # Audio has to be checked every pass, not only on a state change:
+        # output_monitor may switch the card to its HDMI profile AFTER this
+        # script has already applied the layout, and that ordering is a race we
+        # do not control. set_audio_internal no-ops when speakers are present.
+        set_audio_internal
+
+        # Self-heal: if anything switched the internal panel off while the
+        # add-on stayed attached, the STATE has not changed, so the transition
+        # branch above would never fire and the panel would stay dark. Detect
+        # that directly and re-apply.
+        if [ "$state" = "dual" ]; then
+            if ! swaymsg -t get_outputs 2>/dev/null \
+                 | tr -d ' \n' | grep "\"name\":\"$INTERNAL\",[^}]*\"active\":true" >/dev/null; then
+                internal_active=$(swaymsg -t get_outputs 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("unknown"); sys.exit()
+for o in d:
+    if o.get("name")=="DSI-1":
+        print("yes" if o.get("active") else "no"); sys.exit()
+print("absent")
+' 2>/dev/null)
+                if [ "$internal_active" = "no" ]; then
+                    log "self-heal: $INTERNAL went inactive while docked - re-applying"
+                    apply_layout yes
+                    sleep 1
+                    park_es "$(dominant_for dual)"
+                fi
+            fi
+        fi
+    else
+        if [ "$state" = "$candidate" ]; then
+            confirm=$((confirm + 1))
+        else
+            candidate="$state"
+            confirm=1
+        fi
+
+        if [ "$confirm" -ge "$CONFIRM_NEEDED" ]; then
+            log "state: ${last:-none} -> $state (confirmed $confirm polls)"
+            if [ "$state" = "dual" ]; then
+                apply_layout yes
+            else
+                apply_layout no
+            fi
+            sleep 1
+            park_es "$(dominant_for "$state")"
+            if [ "$state" = "dual" ]; then
+                settle_to_sink
+                # the reset above can move ES, so re-park afterwards
+                park_es "$(dominant_for "$state")"
+            else
+                sink_settled=no      # rearm for the next dock attach
+                sink_failed=0
+            fi
+            last="$state"
+            candidate=""
+            confirm=0
+        fi
+    fi
+
+    rotate_log
+    sleep "$POLL"
+done

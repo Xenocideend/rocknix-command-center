@@ -1,0 +1,14 @@
+/* YouTube App (tvprofile) only - never the Browser/Discord profile.
+ *
+ * Device, 24 Sep: the tab strip and address bar took ~170 px of the 940 px
+ * window above rp5deck's control strip, so YouTube's 16:9 TV interface shrank
+ * into a pillarboxed column and was cut off at the bottom. Hiding Firefox's
+ * toolbars gives the page the whole window. --kiosk is NOT used: it makes the
+ * window fullscreen, which can cover rp5deck's layer-shell strip.
+ *
+ * Needs toolkit.legacyUserProfileCustomizations.stylesheets = true
+ * (tvprofile-user.js). browser.Browser installs this file as
+ * <profile>/chrome/userChrome.css on every start (TV_PROFILE_FILES). */
+#navigator-toolbox {
+  visibility: collapse !important;
+}

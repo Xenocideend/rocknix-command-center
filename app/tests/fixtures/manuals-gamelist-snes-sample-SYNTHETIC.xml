@@ -1,0 +1,39 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- SYNTHETIC: hand-written, modeled on the real gamelist.xml shape observed
+     on-device in research/E9a-es-integration.md (SNES sample game), plus
+     three entries added to exercise apostrophes, an entity-escaped ampersand,
+     and a game with no <manual> field at all. Not a real capture. -->
+<gameList>
+    <game id="101">
+        <path>./90 Minutes - European Prime Goal (Europe).sfc</path>
+        <name>90 Minutes : European Prime Goal</name>
+        <desc>90 Minutes: European Prime Goal is a soccer game...</desc>
+        <image>./images/90 Minutes - European Prime Goal (Europe)-image.png</image>
+        <video>./videos/90 Minutes - European Prime Goal (Europe)-video.mp4</video>
+        <manual>./manuals/90 Minutes - European Prime Goal (Europe)-manual.pdf</manual>
+    </game>
+    <game id="102">
+        <path>./Bob's Adventure (USA).sfc</path>
+        <name>Bob's Adventure</name>
+        <desc>A game whose filename contains an apostrophe.</desc>
+        <manual>./manuals/Bob's Adventure (USA)-manual.pdf</manual>
+    </game>
+    <game id="103">
+        <path>./Asterix &amp; Obelix (Europe).sfc</path>
+        <name>Ast&#233;rix &amp; Ob&#233;lix</name>
+        <desc>A game whose filename contains an ampersand, entity-escaped per
+        ES-DE convention (only &amp; is escaped; the apostrophe above is not,
+        which is valid XML text content and is not a bug).</desc>
+        <manual>./manuals/Asterix &amp; Obelix (Europe)-manual.pdf</manual>
+    </game>
+    <game id="104">
+        <path>./No Manual Game (USA).sfc</path>
+        <name>No Manual Game</name>
+        <desc>Has a gamelist entry but no &lt;manual&gt; field.</desc>
+    </game>
+    <game id="105">
+        <path>./Dangling Manual Reference (USA).sfc</path>
+        <name>Dangling Manual Reference</name>
+        <manual>./manuals/does-not-exist-on-disk-manual.pdf</manual>
+    </game>
+</gameList>

@@ -1,0 +1,16 @@
+[Unit]
+Description=Turn the add-on DisplayPort output off across suspend (RP5 resets if DP is lit at s2idle)
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/storage/.config/dp-sleep-guard.sh off
+ExecStop=/storage/.config/dp-sleep-guard.sh on
+# "on" waits up to 20 s for the add-on after a battery resume (it cold-starts);
+# ROCKNIX's default stop timeout is 5 s, which would kill it before the enable.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=sleep.target

@@ -1,0 +1,380 @@
+{
+  "systems_count": 47,
+  "runningGame_raw": "{\"msg\":\"NO GAME RUNNING\"}",
+  "gb_total_games": 555,
+  "gb_picked_ids": [
+    "3634b46a9e5f4906c8af487c10268f3d",
+    "2c11eca7c7698b4dc12d0e2f0acb4a3a",
+    "5550d80a1a92ce85f3d0f3408b216293"
+  ],
+  "gb_local_exists": [
+    {
+      "game": "Bomberman GB",
+      "key": "image",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-image.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "thumbnail",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "marquee",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "fanart",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "titleshot",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "mix",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "video",
+      "path": "/storage/roms/gb/videos/Bomberman GB (USA, Europe) (SGB Enhanced)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "manual",
+      "path": "/storage/roms/gb/manuals/Bomberman GB (USA, Europe) (SGB Enhanced)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "cartridge",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "Bomberman GB",
+      "key": "boxback",
+      "path": "/storage/roms/gb/images/Bomberman GB (USA, Europe) (SGB Enhanced)-boxback.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "image",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-image.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "thumbnail",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "marquee",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "fanart",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "titleshot",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "mix",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "video",
+      "path": "/storage/roms/gb/videos/CutThroat Island (USA, Europe)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "manual",
+      "path": "/storage/roms/gb/manuals/CutThroat Island (USA, Europe)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "cartridge",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "CutThroat Island",
+      "key": "boxback",
+      "path": "/storage/roms/gb/images/CutThroat Island (USA, Europe)-boxback.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "image",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-image.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "thumbnail",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "marquee",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "fanart",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "titleshot",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "mix",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "video",
+      "path": "/storage/roms/gb/videos/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "manual",
+      "path": "/storage/roms/gb/manuals/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "cartridge",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "Pok\u00e9mon : Blue Version",
+      "key": "boxback",
+      "path": "/storage/roms/gb/images/Pokemon - Blue Version (USA, Europe) (SGB Enhanced)-boxback.png",
+      "exists": true
+    }
+  ],
+  "sfc_total_games": 432,
+  "sfc_picked_ids": [
+    "2adf019d13ef536fba7a41739deb60ac",
+    "c4488b9cab1d1617c15960d37b12e426",
+    "c57b7b8d448c00d9c4948d122ab0d2d2"
+  ],
+  "sfc_local_exists": [
+    {
+      "game": "Mario To Wario",
+      "key": "image",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-image.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "thumbnail",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "marquee",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "fanart",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "titleshot",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "mix",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "video",
+      "path": "/storage/roms/sfc/videos/Mario and Wario (J)(1993)(Nintendo)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "manual",
+      "path": "/storage/roms/sfc/manuals/Mario and Wario (J)(1993)(Nintendo)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "cartridge",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "Mario To Wario",
+      "key": "boxback",
+      "path": "/storage/roms/sfc/images/Mario and Wario (J)(1993)(Nintendo)-boxback.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "image",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-image.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "thumbnail",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "marquee",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "fanart",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "titleshot",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "mix",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "video",
+      "path": "/storage/roms/sfc/videos/Spark World (J)(1995)(ITC)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "manual",
+      "path": "/storage/roms/sfc/manuals/Spark World (J)(1995)(ITC)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "cartridge",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "Spark World",
+      "key": "boxback",
+      "path": "/storage/roms/sfc/images/Spark World (J)(1995)(ITC)-boxback.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "image",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-image.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "thumbnail",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-thumb.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "marquee",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-marquee.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "fanart",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-fanart.jpg",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "titleshot",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-titleshot.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "mix",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-mix.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "video",
+      "path": "/storage/roms/sfc/videos/Dharma Doujou (J)(1994)(Metro Corp.)-video.mp4",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "manual",
+      "path": "/storage/roms/sfc/manuals/Dharma Doujou (J)(1994)(Metro Corp.)-manual.pdf",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "cartridge",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-cartridge.png",
+      "exists": true
+    },
+    {
+      "game": "Dharma Doujou",
+      "key": "boxback",
+      "path": "/storage/roms/sfc/images/Dharma Doujou (J)(1994)(Metro Corp.)-boxback.png",
+      "exists": true
+    }
+  ]
+}

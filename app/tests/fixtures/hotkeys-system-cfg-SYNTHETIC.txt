@@ -1,0 +1,15 @@
+# SYNTHETIC fixture (rp5deck test_hotkeys.py) - shaped like ROCKNIX's
+# /storage/.config/system/configs/system.cfg, but this exact file was never
+# read from a device. It deliberately mixes in credential-looking keys
+# (wifi.psk, root.password) alongside the key.* fields hotkeys.py is allowed
+# to read, to prove the parser's allow-list excludes everything else.
+system.autohotkeys=1
+wifi.ssid=SomeNetwork
+wifi.psk=hunter2-not-a-real-password
+root.password=also-not-real
+key.hotkey.a=BTN_TR
+key.hotkey.b=BTN_SELECT
+key.hotkey.c=BTN_START
+key.function.a=BTN_MODE
+key.dpad.events=1
+key.touchscreen.events=0

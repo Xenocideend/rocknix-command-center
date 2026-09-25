@@ -1,0 +1,81 @@
+I: Bus=0000 Vendor=0000 Product=0000 Version=0001
+N: Name="spmi_haptics"
+P: Phys=
+S: Sysfs=/devices/platform/soc@0/c440000.spmi/spmi-0/0-03/c440000.spmi:pmic@3:haptics@c000/input/input0
+U: Uniq=
+H: Handlers=event0
+B: PROP=0
+B: EV=200001
+B: FF=107030000 0
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="pm8941_pwrkey"
+P: Phys=pm8941_pwrkey/input0
+S: Sysfs=/devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:pon@800/c440000.spmi:pmic@0:pon@800:pwrkey/input/input1
+U: Uniq=
+H: Handlers=kbd event1
+B: PROP=0
+B: EV=3
+B: KEY=10000000000000 0
+
+I: Bus=0019 Vendor=0001 Product=0001 Version=0100
+N: Name="gpio-keys"
+P: Phys=gpio-keys/input0
+S: Sysfs=/devices/platform/gpio-keys/input/input3
+U: Uniq=
+H: Handlers=kbd event3
+B: PROP=0
+B: EV=3
+B: KEY=8000000000000 0
+
+I: Bus=0003 Vendor=2020 Product=3001 Version=0001
+N: Name="Retroid Pocket Gamepad"
+P: Phys=retroid-pocket-gamepad/input0
+S: Sysfs=/devices/platform/soc@0/8c0000.geniqup/888000.serial/888000.serial:0/888000.serial:0.0/serial0/serial0-0/input/input5
+U: Uniq=
+H: Handlers=js0 event5
+B: PROP=0
+B: EV=20000b
+B: KEY=f00000000 0 0 0 7cdb000000400000 0 0 0 0
+B: ABS=30003f
+B: FF=107030000 0
+
+# --- SYNTHETIC: InputPlumber was restarted (simulating a hotplug/replug
+# event), so the two virtual devices below reappear under NEW event numbers
+# (14, 15) instead of their original (8, 9). Everything else about them -
+# name, capability bitmap - is unchanged from the real capture. This fixture
+# proves find_event_path() re-resolves by NAME after a renumbering, which a
+# hardcoded /dev/input/eventN never could.
+
+I: Bus=0003 Vendor=1234 Product=5678 Version=0111
+N: Name="InputPlumber Keyboard"
+P: Phys=
+S: Sysfs=/devices/virtual/input/input14
+U: Uniq=
+H: Handlers=sysrq kbd event14
+B: PROP=0
+B: EV=3
+B: KEY=300000c07 ff9f207ac07057ff fabeffdfffefffff fffffffffffffffe
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Sony Interactive Entertainment DualSense Wireless Controller"
+P: Phys=
+S: Sysfs=/devices/virtual/misc/uhid/0003:054C:0CE6.0002/input/input15
+U: Uniq=02:00:00:00:00:00
+H: Handlers=js3 event15
+B: PROP=0
+B: EV=20000b
+B: KEY=7fdb000000000000 0 0 0 0
+B: ABS=3003f
+B: FF=107030000 0
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Sony Interactive Entertainment DualSense Wireless Controller Motion Sensors"
+P: Phys=
+S: Sysfs=/devices/virtual/misc/uhid/0003:054C:0CE6.0002/input/input16
+U: Uniq=02:00:00:00:00:00
+H: Handlers=js4 event16
+B: PROP=40
+B: EV=19
+B: ABS=3f
+B: MSC=20

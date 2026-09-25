@@ -1,0 +1,230 @@
+[
+  {
+    "id": 201,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x",
+      "m"
+    ],
+    "info": {
+      "max-input-ports": 0,
+      "max-output-ports": 65,
+      "change-mask": [
+        "input-ports",
+        "output-ports",
+        "state",
+        "props",
+        "params"
+      ],
+      "n-input-ports": 0,
+      "n-output-ports": 2,
+      "state": "running",
+      "error": null,
+      "props": {
+        "adapt.follower.spa-node": "",
+        "application.name": null,
+        "application.process.binary": "retroarch",
+        "application.process.host": "ROCKNIX",
+        "application.process.id": 4501,
+        "application.process.machine-id": "5a5521afcb8b106f102ee949777ab5bc",
+        "application.process.user": "root",
+        "client.api": "pipewire-pulse",
+        "client.id": 180,
+        "clock.quantum-limit": 8192,
+        "factory.id": 7,
+        "library.name": "audioconvert/libspa-audioconvert",
+        "media.class": "Stream/Output/Audio",
+        "media.name": "Audio Stream",
+        "node.autoconnect": true,
+        "node.driver-id": 51,
+        "node.latency": "1107/44100",
+        "node.loop.name": "data-loop.0",
+        "node.name": "retroarch",
+        "node.rate": "1/44100",
+        "node.want-driver": true,
+        "object.id": 201,
+        "object.register": false,
+        "object.serial": 1201,
+        "port.group": "stream.0",
+        "pulse.attr.maxlength": 4194304,
+        "pulse.attr.minreq": 3764,
+        "pulse.attr.prebuf": 8196,
+        "pulse.attr.tlength": 11956,
+        "pulse.server.type": "unix",
+        "stream.is-live": true,
+        "window.x11.display": ":0.0",
+        "_synthetic_note": "SYNTHETIC fixture, not a device capture - see AUDIO-NOTES.md"
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "audio",
+            "mediaSubtype": "raw",
+            "format": "S16LE",
+            "rate": 44100,
+            "channels": 2,
+            "position": [
+              "FL",
+              "FR"
+            ]
+          }
+        ],
+        "Props": [
+          {
+            "volume": 1.0,
+            "mute": false,
+            "channelVolumes": [
+              0.343,
+              0.343
+            ],
+            "channelMap": [
+              "FL",
+              "FR"
+            ],
+            "softMute": false,
+            "softVolumes": [
+              0.343,
+              0.343
+            ],
+            "monitorMute": false,
+            "monitorVolumes": [
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "Format": [
+          {
+            "mediaType": "audio",
+            "mediaSubtype": "raw",
+            "format": "S16LE",
+            "rate": 44100,
+            "channels": 2,
+            "position": [
+              "FL",
+              "FR"
+            ]
+          }
+        ]
+      }
+    },
+    "_synthetic": true
+  },
+  {
+    "id": 202,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x",
+      "m"
+    ],
+    "info": {
+      "max-input-ports": 0,
+      "max-output-ports": 65,
+      "change-mask": [
+        "input-ports",
+        "output-ports",
+        "state",
+        "props",
+        "params"
+      ],
+      "n-input-ports": 0,
+      "n-output-ports": 2,
+      "state": "running",
+      "error": null,
+      "props": {
+        "adapt.follower.spa-node": "",
+        "application.name": "YouTube",
+        "application.process.binary": "mpv",
+        "application.process.host": "ROCKNIX",
+        "application.process.id": 4599,
+        "application.process.machine-id": "5a5521afcb8b106f102ee949777ab5bc",
+        "application.process.user": "root",
+        "client.api": "pipewire-pulse",
+        "client.id": 181,
+        "clock.quantum-limit": 8192,
+        "factory.id": 7,
+        "library.name": "audioconvert/libspa-audioconvert",
+        "media.class": "Stream/Output/Audio",
+        "media.name": "audio-youtube-track",
+        "node.autoconnect": true,
+        "node.driver-id": 51,
+        "node.latency": "1107/44100",
+        "node.loop.name": "data-loop.0",
+        "node.name": "YouTube",
+        "node.rate": "1/44100",
+        "node.want-driver": true,
+        "object.id": 202,
+        "object.register": false,
+        "object.serial": 1202,
+        "port.group": "stream.0",
+        "pulse.attr.maxlength": 4194304,
+        "pulse.attr.minreq": 3764,
+        "pulse.attr.prebuf": 8196,
+        "pulse.attr.tlength": 11956,
+        "pulse.server.type": "unix",
+        "stream.is-live": true,
+        "window.x11.display": ":0.0",
+        "_synthetic_note": "SYNTHETIC fixture, not a device capture - see AUDIO-NOTES.md"
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "audio",
+            "mediaSubtype": "raw",
+            "format": "S16LE",
+            "rate": 44100,
+            "channels": 2,
+            "position": [
+              "FL",
+              "FR"
+            ]
+          }
+        ],
+        "Props": [
+          {
+            "volume": 1.0,
+            "mute": true,
+            "channelVolumes": [
+              0.064,
+              0.064
+            ],
+            "channelMap": [
+              "FL",
+              "FR"
+            ],
+            "softMute": false,
+            "softVolumes": [
+              0.064,
+              0.064
+            ],
+            "monitorMute": false,
+            "monitorVolumes": [
+              1.0,
+              1.0
+            ]
+          }
+        ],
+        "Format": [
+          {
+            "mediaType": "audio",
+            "mediaSubtype": "raw",
+            "format": "S16LE",
+            "rate": 44100,
+            "channels": 2,
+            "position": [
+              "FL",
+              "FR"
+            ]
+          }
+        ]
+      }
+    },
+    "_synthetic": true
+  }
+]

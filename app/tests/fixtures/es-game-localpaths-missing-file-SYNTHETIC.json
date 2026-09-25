@@ -1,0 +1,17 @@
+{
+  "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "path": "/storage/roms/gb/Deleted Media Game.zip",
+  "name": "Deleted Media Game",
+  "systemName": "gb",
+  "desc": "Gamelist still references media files that were since deleted from disk.",
+  "image": "/nonexistent/rp5deck-test-path/gb/images/Deleted Media Game-image.png",
+  "manual": "/nonexistent/rp5deck-test-path/gb/manuals/Deleted Media Game-manual.pdf",
+  "rating": "0",
+  "players": "1",
+  "favorite": "false",
+  "hidden": "false",
+  "kidgame": "false",
+  "playcount": "0",
+  "lastplayed": "0",
+  "gametime": "0"
+}

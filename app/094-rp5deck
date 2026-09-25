@@ -1,0 +1,624 @@
+#!/bin/bash
+# rp5deck supervisor - start the bottom-screen companion app AND the focus
+# guard (FOC1 fix), and keep both running.
+#
+# Install to: /storage/.config/autostart/094-rp5deck   (chmod +x)
+# App files:  /storage/rp5deck/*.py   (main.py, focus_guard.py, and modules)
+# NOT installed by B1; installing is V1.
+#
+# Self-backgrounds so autostart is not blocked, single instance via a pid
+# lock, kill switch file, waits for the sway IPC socket - and additionally
+# for the add-on (DP-1), because without it EmulationStation lives on DSI-1
+# and the panel has nothing to do. Then it runs TWO independent children,
+# each in its own restart loop with exponential backoff:
+#
+#   main.py         the companion app itself (layer surface on DSI-1).
+#                    Gives up (RAPID_MAX rapid exits in a row, each under
+#                    RAPID_SECS) means the WHOLE supervisor gives up: a
+#                    broken app must not respawn forever on a battery
+#                    device.
+#   focus_guard.py   FOC1 fix: after a game exits, EmulationStation's new
+#                    window does not always get keyboard focus back unless
+#                    something re-focuses it; see focus_guard.py. This is a
+#                    safety net, not the app - if IT gives up (its own,
+#                    independently configurable rapid-exit budget), that is
+#                    logged as a WARNING and the supervisor keeps rp5deck
+#                    itself running without it, rather than taking the whole
+#                    companion screen down over a guard bug.
+#   cc_overlay.py    SW1: the same Command Center on the GAME/ES screen, as a
+#                    pull-down over the game (small tab while closed). Like
+#                    the guard: its own loop and rapid-exit budget, and a
+#                    give-up is a WARNING - the main panel keeps running.
+#                    Not started if the file is absent.
+#
+# Ownership (DESIGN.md): 092 owns outputs, touch mapping and the audio
+# profile; 092/093 are a separate session's files and are never touched
+# here. Neither this script nor the app nor the focus guard issues output,
+# input or workspace commands - the guard's sway client (focus_guard.py)
+# refuses every command except exactly '[app_id="emulationstation"] focus'.
+#
+# Kill switches (create the file; no content needed):
+#   /storage/.disable-rp5deck               stops EVERYTHING (app + guard).
+#                                            Checked at start, while waiting
+#                                            for DP-1, and before every
+#                                            restart of either child.
+#   /storage/.disable-rp5deck-focus-guard    stops ONLY the focus guard;
+#                                            rp5deck itself keeps running.
+#                                            Checked before every restart of
+#                                            the guard.
+#   /storage/.disable-rp5deck-overlay        stops ONLY the game-screen
+#                                            Command Center (SW1); checked
+#                                            before every restart of it.
+# To stop a running instance right now (a clean, documented stop that MUST
+# stay stopped - it does not get relaunched by anything in this file):
+#     kill $(cat /run/094-rp5deck.pid)
+# This sends SIGTERM to the supervisor, which forwards it to both the app
+# and the focus guard's own loop (which forwards it to ITS current child in
+# turn) and exits without restarting anything. Re-running 094-rp5deck after
+# that starts a fresh supervisor as normal (subject to the kill-switch files
+# above).
+#
+# Optional overrides: $RP5DECK_HOME/env is sourced if present (for example
+# RP5DECK_AUDIO_DRYRUN=1). The RP5DECK_* variables below exist so the script
+# can be exercised outside the real paths; normal installs set none of them.
+# RP5DECK_GUARD_ARGS can carry focus_guard.py flags, e.g. "--dry-run" for a
+# first on-device pass (see the device test plan in the FX-E report).
+#
+# Testing the restart/backoff decision on a PC (no sway/python/device
+# needed at all): the pure decision function below is exposed as a hidden
+# CLI mode -
+#     sh 094-rp5deck --print-backoff-decision PREV_RAPID RAN RAPID_SECS RAPID_MAX BACKOFF_MAX
+# prints "<new_rapid> <action>" (action is a sleep-seconds number, or the
+# literal GIVEUP) and exits immediately, running nothing else. See
+# tests/test_supervisor.py.
+
+set -u
+
+RP5DECK_HOME=${RP5DECK_HOME:-/storage/rp5deck}
+APP=${RP5DECK_MAIN:-$RP5DECK_HOME/main.py}
+GUARD=${RP5DECK_GUARD:-$RP5DECK_HOME/focus_guard.py}
+GUARD_ARGS=${RP5DECK_GUARD_ARGS:-}
+OVERLAY=${RP5DECK_OVERLAY:-$RP5DECK_HOME/cc_overlay.py}
+# SW2: the hang detector (main.py's own loop touches HEARTBEAT about every
+# 2s - see main.App._touch_heartbeat/HEARTBEAT_PERIOD; cc_overlay.py touches
+# HEARTBEAT_OVERLAY the same way via its own heartbeat_path() override).
+# Exported (not just defaulted) so the python children agree with this
+# script on RP5DECK_RUN_DIR even when the caller never set it.
+RUN_DIR=${RP5DECK_RUN_DIR:-/run/rp5deck}
+export RP5DECK_RUN_DIR="$RUN_DIR"
+HEARTBEAT=${RP5DECK_HEARTBEAT:-$RUN_DIR/heartbeat}
+HEARTBEAT_OVERLAY=${RP5DECK_HEARTBEAT_OVERLAY:-$RUN_DIR/heartbeat-overlay}
+HB_STALE_SECS=${RP5DECK_HB_STALE_SECS:-30}     # heartbeat older than this while alive = hung
+HB_GRACE_SECS=${RP5DECK_HB_GRACE_SECS:-30}     # no check within this long of a fresh start
+HB_CHECK_INTERVAL=${RP5DECK_HB_CHECK_INTERVAL:-5}
+HB_KILL_GRACE=${RP5DECK_HB_KILL_GRACE:-5}      # SIGTERM, then SIGKILL after this long
+LOG_DIR=${RP5DECK_LOG_DIR:-$RP5DECK_HOME/log}
+LOG=$LOG_DIR/094-rp5deck.log
+LOCK=${RP5DECK_LOCK:-/run/094-rp5deck.pid}
+DISABLE=${RP5DECK_DISABLE:-/storage/.disable-rp5deck}
+GUARD_DISABLE=${RP5DECK_GUARD_DISABLE:-/storage/.disable-rp5deck-focus-guard}
+OVERLAY_DISABLE=${RP5DECK_OVERLAY_DISABLE:-/storage/.disable-rp5deck-overlay}
+# Where resolve_sway_env looks for sway's IPC socket. The device default is
+# the same /run /tmp search every rp5deck tool uses. I2: tests set it to their
+# own temp dir, because a global search sees EVERY sway-ipc.*.sock on the
+# machine - another harness's, or one left by a killed run - and then "sway
+# is gone" never happens (that was the flaky WSL test_supervisor case).
+SWAY_SOCK_DIRS=${RP5DECK_SWAY_SOCK_DIRS:-/run /tmp}
+EXTERNAL="DP-1"
+
+MAX_LOG=262144
+RAPID_SECS=${RP5DECK_RAPID_SECS:-30}   # a run shorter than this is a "rapid" exit
+RAPID_MAX=${RP5DECK_RAPID_MAX:-5}      # give up after this many rapid exits in a row
+BACKOFF_MAX=${RP5DECK_BACKOFF_MAX:-60}
+GUARD_RAPID_SECS=${RP5DECK_GUARD_RAPID_SECS:-$RAPID_SECS}
+GUARD_RAPID_MAX=${RP5DECK_GUARD_RAPID_MAX:-$RAPID_MAX}
+GUARD_BACKOFF_MAX=${RP5DECK_GUARD_BACKOFF_MAX:-$BACKOFF_MAX}
+OVERLAY_RAPID_SECS=${RP5DECK_OVERLAY_RAPID_SECS:-$RAPID_SECS}
+OVERLAY_RAPID_MAX=${RP5DECK_OVERLAY_RAPID_MAX:-$RAPID_MAX}
+OVERLAY_BACKOFF_MAX=${RP5DECK_OVERLAY_BACKOFF_MAX:-$BACKOFF_MAX}
+
+# --- the pure restart/backoff decision --------------------------------------
+# args: prev_rapid ran rapid_secs rapid_max backoff_max
+# prints "<new_rapid> <action>": action is a sleep-seconds number, or GIVEUP.
+# No side effects (no date, no kill, no file I/O) - the whole reason this is
+# its own function is so it can be driven directly from a test with made-up
+# numbers, on a PC with no sway/python/device present (tests/test_supervisor.py).
+rp5deck_backoff_decide() {
+    _prev=$1; _ran=$2; _rsecs=$3; _rmax=$4; _bmax=$5
+    if [ "$_ran" -lt "$_rsecs" ]; then
+        _rapid=$((_prev + 1))
+    else
+        _rapid=0
+    fi
+    if [ "$_rapid" -ge "$_rmax" ]; then
+        echo "$_rapid GIVEUP"
+        return 0
+    fi
+    _backoff=$((1 << _rapid))
+    [ "$_backoff" -gt "$_bmax" ] && _backoff=$_bmax
+    echo "$_rapid $_backoff"
+}
+
+# Hidden entry point: exercise the decision function above with no other
+# side effect at all (not even the pid lock). Must come before every other
+# argument check below.
+if [ "${1:-}" = "--print-backoff-decision" ]; then
+    shift
+    rp5deck_backoff_decide "$@"
+    exit 0
+fi
+
+log() { echo "$(date '+%H:%M:%S') $*"; }
+
+# A sleep that a signal interrupts (bash runs traps only between commands, so
+# a foreground `sleep 60` would delay shutdown by up to a minute).
+nap() {
+    sleep "$1" &
+    local sp=$!
+    wait "$sp" 2>/dev/null
+    kill "$sp" 2>/dev/null
+}
+
+# --- ST1/ST2: never trust a sway socket/display resolved before now --------
+# ROCKNIX's start_steam.sh runs Steam through gamescope's DRM backend, which
+# calls `systemctl stop sway` for the WHOLE session and only brings it back
+# via `essway.service Requires=sway.service` on exit - so every Steam launch
+# is a full sway restart, both directions. The sway that comes back is a
+# brand-new process with a brand-new `sway-ipc.<newpid>.sock`, and possibly a
+# new `wayland-N` runtime socket too. The original bug (found by ST1): this
+# script used to resolve SWAYSOCK/WAYLAND_DISPLAY exactly ONCE, before the
+# respawn loops, so a respawn after Steam exited handed main.py/focus_guard.py
+# a stale, already-deleted path - and because that made them exit instantly,
+# every single time, it would burn through the rapid-restart budget in
+# seconds and take the WHOLE supervisor down (GIVEUP) instead of recovering.
+#
+# Fix: re-resolve fresh, every time, immediately before every (re)start (see
+# resolve_sway_env below, called at the top of both restart loops) - and
+# treat "sway is currently gone" as a PAUSE, never a crash: no restart-budget
+# consumption while there is no sway to run against, however long that lasts
+# (a Steam session's length is unbounded), and resume normal restart/backoff
+# accounting the moment sway is back (wait_while_sway_gone below; its callers
+# in each loop explicitly skip rp5deck_backoff_decide whenever sway is found
+# gone right after a child exit, rather than counting that exit as rapid).
+
+# resolve_sway_env: sets (and exports) SWAYSOCK and WAYLAND_DISPLAY fresh from
+# whatever is on disk RIGHT NOW. Returns 0 and both vars populated only if a
+# sway IPC socket currently exists; returns 1 (SWAYSOCK cleared) otherwise. No
+# blocking, no sleep - purely a point-in-time check, so callers control the
+# waiting/backoff themselves.
+resolve_sway_env() {
+    local sock disp
+    # word-splitting of $SWAY_SOCK_DIRS is intended (a list of dirs)
+    # shellcheck disable=SC2086
+    sock=$(find $SWAY_SOCK_DIRS -name 'sway-ipc.*.sock' 2>/dev/null | head -1)
+    if [ -z "$sock" ]; then
+        SWAYSOCK=""
+        return 1
+    fi
+    SWAYSOCK=$sock
+    export SWAYSOCK
+    disp=$(ls "${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}" 2>/dev/null | grep -E '^wayland-[0-9]+$' | head -1)
+    WAYLAND_DISPLAY=${disp:-wayland-1}
+    export WAYLAND_DISPLAY
+    return 0
+}
+
+# wait_while_sway_gone LABEL BAIL_CHECK_FN: blocks, with exponential backoff
+# (1s, 2s, 4s, ... capped at 30s) and NO fixed timeout (unlike the one-time
+# boot wait below, this can legitimately run for as long as a Steam session
+# does), until resolve_sway_env finds a socket again. BAIL_CHECK_FN is called
+# with no arguments each iteration; if it returns 0 (true) - the supervisor's
+# STOP/GSTOP flag was set, or a kill-switch file appeared - this returns 1
+# immediately without waiting further. Logs once when it starts waiting and
+# once when sway comes back, not on every poll. Spends no restart-budget: it
+# never calls rp5deck_backoff_decide and never touches $rapid.
+wait_while_sway_gone() {
+    local label=$1 bailfn=$2 w=1 logged=0
+    while :; do
+        if "$bailfn"; then
+            return 1
+        fi
+        if resolve_sway_env; then
+            [ "$logged" -eq 1 ] && log "$label: sway is back ($SWAYSOCK) - resuming"
+            return 0
+        fi
+        if [ "$logged" -eq 0 ]; then
+            log "$label: sway is gone (no IPC socket found - likely a Steam session, see ST1) -" \
+                "pausing until it returns; not spending any restart-budget while it is gone"
+            logged=1
+        fi
+        nap "$w"
+        w=$((w * 2))
+        [ "$w" -gt 30 ] && w=30
+    done
+}
+
+# --- SW2: the hang detector (main loop stopped iterating, process did not
+#     exit) -------------------------------------------------------------------
+# heartbeat_monitor PID HBFILE LABEL: runs in the BACKGROUND, in step with
+# one running child (started right after it, killed/reaped right after it
+# exits - see the app/overlay loops below). While PID stays alive: every
+# HB_CHECK_INTERVAL, once HB_GRACE_SECS has passed since THIS start (so a
+# normal slow startup - before the first heartbeat write - is never a false
+# positive), read HBFILE's content as a plain unix-time float (written by
+# main.App._touch_heartbeat - NOT the file's mtime: toybox/busybox `date`/
+# `stat` flags for reading an mtime are not reliably portable across this
+# project's targets, but `date +%s` already is, and is used elsewhere in
+# this file). A heartbeat older than HB_STALE_SECS while the pid is still
+# alive means the main loop itself is hung (frozen), not just busy: log,
+# SIGTERM, then SIGKILL after HB_KILL_GRACE if it has not gone. Either way
+# this returns once PID is gone (exited on its own, or killed here) - the
+# existing restart/backoff path in the caller's own loop takes over exactly
+# as for any other exit.
+heartbeat_monitor() {
+    local pid=$1 hbfile=$2 label=$3 started now hb hbint age k
+    started=$(date +%s)
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep "$HB_CHECK_INTERVAL" &
+        wait $! 2>/dev/null
+        kill -0 "$pid" 2>/dev/null || return 0
+        now=$(date +%s)
+        [ $((now - started)) -lt "$HB_GRACE_SECS" ] && continue
+        hb=$(cat "$hbfile" 2>/dev/null)
+        hbint=${hb%%.*}
+        case $hbint in
+            ''|*[!0-9]*) hbint=$started ;;
+        esac
+        age=$((now - hbint))
+        if [ "$age" -gt "$HB_STALE_SECS" ]; then
+            log "$label hung (heartbeat ${age}s) - restarting"
+            kill -TERM "$pid" 2>/dev/null
+            k=0
+            while [ "$k" -lt "$HB_KILL_GRACE" ] && kill -0 "$pid" 2>/dev/null; do
+                sleep 1 &
+                wait $! 2>/dev/null
+                k=$((k + 1))
+            done
+            kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+            return 0
+        fi
+    done
+}
+
+# stop_heartbeat_monitor PID: kills and reaps a monitor started above (called
+# right after its watched child has already exited/been killed, so the
+# monitor's own `kill -0 "$pid"` on the CHILD will already say gone and it
+# will be about to return on its own either way - this just avoids leaving
+# it running an extra HB_CHECK_INTERVAL and makes shutdown prompt).
+stop_heartbeat_monitor() {
+    local mpid=$1
+    [ -n "$mpid" ] || return 0
+    kill -TERM "$mpid" 2>/dev/null
+    wait "$mpid" 2>/dev/null
+}
+
+# --- internal: the focus guard's own restart/backoff loop, as its own
+#     process (so the parent can signal it with a plain `kill`, and its own
+#     `wait` on focus_guard.py is unaffected by anything happening in the
+#     main app's loop). Spawned by the running supervisor only - never by
+#     autostart directly. Inherits the supervisor's already-redirected
+#     stdout/stderr (the same log file) and its exported environment
+#     (SWAYSOCK, ...). A GIVEUP here only logs a warning and exits 0: the
+#     app itself keeps running without the guard. ------------------------
+if [ "${1:-}" = "--guard-loop" ]; then
+    GUARD_CHILD=""
+    GSTOP=0
+    on_guard_signal() {
+        GSTOP=1
+        [ -n "$GUARD_CHILD" ] && kill -TERM "$GUARD_CHILD" 2>/dev/null
+    }
+    trap on_guard_signal TERM INT HUP
+    guard_should_bail() {
+        [ "$GSTOP" -eq 1 ] && return 0
+        [ -e "$DISABLE" ] && return 0
+        [ -e "$GUARD_DISABLE" ] && return 0
+        return 1
+    }
+    rapid=0
+    while [ "$GSTOP" -eq 0 ]; do
+        [ -e "$DISABLE" ] && { log "focus guard: kill switch present (rp5deck)"; exit 0; }
+        [ -e "$GUARD_DISABLE" ] && { log "focus guard: kill switch present (guard only)"; exit 0; }
+        [ -f "$GUARD" ] || { log "focus guard: $GUARD not found - not running"; exit 0; }
+        if ! resolve_sway_env; then
+            wait_while_sway_gone "focus guard" guard_should_bail || exit 0
+        fi
+        [ "$GSTOP" -eq 1 ] && exit 0
+        start=$(date +%s)
+        # shellcheck disable=SC2086  (GUARD_ARGS is a deliberate word-split flag list)
+        python3 "$GUARD" $GUARD_ARGS &
+        GUARD_CHILD=$!
+        log "focus guard started (pid $GUARD_CHILD) [sway=$SWAYSOCK wayland=$WAYLAND_DISPLAY]"
+        wait "$GUARD_CHILD"
+        rc=$?
+        while kill -0 "$GUARD_CHILD" 2>/dev/null; do
+            wait "$GUARD_CHILD"
+            rc=$?
+        done
+        GUARD_CHILD=""
+        ran=$(( $(date +%s) - start ))
+        log "focus guard exited rc=$rc after ${ran}s"
+        [ "$GSTOP" -eq 1 ] && exit 0
+        if ! resolve_sway_env; then
+            log "focus guard: sway is gone after exit (rc=$rc, ran=${ran}s) - treating this as" \
+                "a pause (ST1: a Steam session), not counting it against the guard's restart budget"
+            continue
+        fi
+        result=$(rp5deck_backoff_decide "$rapid" "$ran" "$GUARD_RAPID_SECS" "$GUARD_RAPID_MAX" "$GUARD_BACKOFF_MAX")
+        rapid=${result%% *}
+        action=${result#* }
+        if [ "$action" = "GIVEUP" ]; then
+            log "WARNING: giving up on the focus guard after $rapid exits in a row that" \
+                "each lasted < ${GUARD_RAPID_SECS}s (FOC1 fix inactive; rp5deck itself" \
+                "keeps running); see $LOG_DIR/rp5deck.log"
+            exit 0
+        fi
+        log "restarting focus guard in ${action}s (rapid exits in a row: $rapid)"
+        nap "$action"
+    done
+    exit 0
+fi
+
+# --- internal: the game-screen Command Center's own restart loop (SW1) -----
+#     Same shape as --guard-loop above, for cc_overlay.py. A GIVEUP only logs
+#     a warning: the main panel (and its Command Center) keep running.
+if [ "${1:-}" = "--overlay-loop" ]; then
+    OVERLAY_CHILD=""
+    OVERLAY_HB_PID=""
+    OSTOP=0
+    on_overlay_signal() {
+        OSTOP=1
+        [ -n "$OVERLAY_CHILD" ] && kill -TERM "$OVERLAY_CHILD" 2>/dev/null
+        stop_heartbeat_monitor "$OVERLAY_HB_PID"
+    }
+    trap on_overlay_signal TERM INT HUP
+    overlay_should_bail() {
+        [ "$OSTOP" -eq 1 ] && return 0
+        [ -e "$DISABLE" ] && return 0
+        [ -e "$OVERLAY_DISABLE" ] && return 0
+        return 1
+    }
+    rapid=0
+    while [ "$OSTOP" -eq 0 ]; do
+        [ -e "$DISABLE" ] && { log "overlay: kill switch present (rp5deck)"; exit 0; }
+        [ -e "$OVERLAY_DISABLE" ] && { log "overlay: kill switch present (overlay only)"; exit 0; }
+        [ -f "$OVERLAY" ] || { log "overlay: $OVERLAY not found - not running"; exit 0; }
+        # ST1/ST2: a Steam session restarts sway - pause, spend no budget
+        if ! resolve_sway_env; then
+            wait_while_sway_gone "overlay" overlay_should_bail || exit 0
+        fi
+        [ "$OSTOP" -eq 1 ] && exit 0
+        start=$(date +%s)
+        python3 "$OVERLAY" &
+        OVERLAY_CHILD=$!
+        log "overlay started (pid $OVERLAY_CHILD) [sway=$SWAYSOCK wayland=$WAYLAND_DISPLAY]"
+        heartbeat_monitor "$OVERLAY_CHILD" "$HEARTBEAT_OVERLAY" "overlay" &
+        OVERLAY_HB_PID=$!
+        wait "$OVERLAY_CHILD"
+        rc=$?
+        while kill -0 "$OVERLAY_CHILD" 2>/dev/null; do
+            wait "$OVERLAY_CHILD"
+            rc=$?
+        done
+        stop_heartbeat_monitor "$OVERLAY_HB_PID"
+        OVERLAY_HB_PID=""
+        OVERLAY_CHILD=""
+        ran=$(( $(date +%s) - start ))
+        log "overlay exited rc=$rc after ${ran}s"
+        [ "$OSTOP" -eq 1 ] && exit 0
+        if ! resolve_sway_env; then
+            log "overlay: sway is gone after exit (rc=$rc, ran=${ran}s) - a pause, not" \
+                "counted against the overlay's restart budget"
+            continue
+        fi
+        result=$(rp5deck_backoff_decide "$rapid" "$ran" "$OVERLAY_RAPID_SECS" "$OVERLAY_RAPID_MAX" "$OVERLAY_BACKOFF_MAX")
+        rapid=${result%% *}
+        action=${result#* }
+        if [ "$action" = "GIVEUP" ]; then
+            log "WARNING: giving up on the game-screen Command Center after $rapid exits in a" \
+                "row that each lasted < ${OVERLAY_RAPID_SECS}s (the main panel keeps running);" \
+                "see $LOG_DIR/rp5deck-overlay.log"
+            exit 0
+        fi
+        log "restarting overlay in ${action}s (rapid exits in a row: $rapid)"
+        nap "$action"
+    done
+    exit 0
+fi
+
+# --- run in the background so autostart is not blocked ----------------------
+if [ "${1:-}" != "--fg" ]; then
+    nohup "$0" --fg >/dev/null 2>&1 &
+    exit 0
+fi
+
+[ -e "$DISABLE" ] && exit 0
+
+# --- single instance --------------------------------------------------------
+if [ -f "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null)
+    if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+        exit 0
+    fi
+fi
+echo $$ > "$LOCK"
+
+mkdir -p "$LOG_DIR"
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') 094-rp5deck starting (pid $$) ==="
+
+rotate_log() {
+    local sz
+    sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+    if [ "$sz" -gt "$MAX_LOG" ]; then
+        tail -c 65536 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+GUARD_LOOP_PID=""
+OVERLAY_LOOP_PID=""
+finish() {
+    [ -n "$GUARD_LOOP_PID" ] && kill -TERM "$GUARD_LOOP_PID" 2>/dev/null
+    [ -n "$OVERLAY_LOOP_PID" ] && kill -TERM "$OVERLAY_LOOP_PID" 2>/dev/null
+    rm -f "$LOCK"
+    log "supervisor exit${1:+: $1}"
+    exit "${2:-0}"
+}
+
+CHILD=""
+APP_HB_PID=""
+STOP=0
+on_signal() {
+    STOP=1
+    log "supervisor: signal received - stopping"
+    [ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null
+    stop_heartbeat_monitor "$APP_HB_PID"
+    [ -n "$GUARD_LOOP_PID" ] && kill -TERM "$GUARD_LOOP_PID" 2>/dev/null
+    [ -n "$OVERLAY_LOOP_PID" ] && kill -TERM "$OVERLAY_LOOP_PID" 2>/dev/null
+}
+trap on_signal TERM INT HUP
+
+[ -f "$APP" ] || finish "FATAL: $APP not found" 1
+
+# --- pin ROCKNIX's dual-screen flag OFF (owner decision, 24 Sep 2026) --------
+# /usr/lib/autostart/common/080-dual_screen_mode writes the flag at boot from a
+# screen count taken before 092 has woken the add-on, so it flips between boots.
+# When true, runemu.sh disables the built-in touchscreen after every game
+# ("to prevent focus loss"), which breaks rp5deck and emulator touch, and
+# lowerdeck/ra_proxy and an ES bottom-screen menu come along. rp5deck's own path
+# (the 092 window rules + per-emulator settings, DS2) needs none of it. Game
+# launches re-source /etc/profile, so this file takes effect on the next game.
+# To stop pinning: create /storage/.rp5deck-keep-dual-flag.
+FLAG_FILE=${RP5DECK_FLAG_FILE:-/storage/.config/profile.d/080-dual_screen_mode}
+if [ ! -e /storage/.rp5deck-keep-dual-flag ] && [ -f "$FLAG_FILE" ] &&
+   grep -q '^DEVICE_HAS_DUAL_SCREEN=true' "$FLAG_FILE" 2>/dev/null; then
+    printf 'DEVICE_HAS_DUAL_SCREEN=false\n' > "$FLAG_FILE.tmp" && mv "$FLAG_FILE.tmp" "$FLAG_FILE" &&
+        log "pinned DEVICE_HAS_DUAL_SCREEN=false (080 had written true)"
+fi
+
+# --- environment for the app and the guard (independent of sway) ------------
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}
+export SDL_VIDEODRIVER=wayland
+export RP5DECK_LOG_DIR="$LOG_DIR"
+export PYTHONDONTWRITEBYTECODE=1
+if [ -f "$RP5DECK_HOME/env" ]; then
+    set -a; . "$RP5DECK_HOME/env"; set +a
+    log "sourced $RP5DECK_HOME/env"
+fi
+
+# --- wait for sway IPC (bounded - this runs ONCE, at boot; if sway never
+#     starts at all this run that is a real fault, unlike a Steam session
+#     later stopping an already-running sway, which the respawn loops below
+#     handle as an unbounded pause via wait_while_sway_gone) -----------------
+for i in $(seq 1 60); do
+    [ "$STOP" -eq 1 ] && finish "stopped while waiting for sway"
+    resolve_sway_env && break
+    nap 1
+done
+[ -n "$SWAYSOCK" ] || finish "FATAL: no sway IPC socket after 60s - doing nothing" 1
+log "sway socket: $SWAYSOCK"
+
+# --- wait for the add-on ------------------------------------------------------
+# A failed query (empty output while sway is busy) means "ask again", never
+# "absent" - the lesson 092 learned the hard way.
+waited=0
+until swaymsg -t get_outputs 2>/dev/null | grep -q "\"name\": *\"$EXTERNAL\""; do
+    [ "$STOP" -eq 1 ] && finish "stopped while waiting for $EXTERNAL"
+    [ -e "$DISABLE" ] && finish "kill switch present"
+    [ $((waited % 60)) -eq 0 ] && log "waiting for $EXTERNAL (the add-on) to appear"
+    nap 5
+    waited=$((waited + 5))
+done
+log "$EXTERNAL present"
+log "env: XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY dryrun=${RP5DECK_AUDIO_DRYRUN:-0}"
+
+# --- start the focus guard's own restart loop as a separate process --------
+if [ -f "$GUARD" ]; then
+    "$0" --guard-loop &
+    GUARD_LOOP_PID=$!
+    log "focus guard supervisor started (pid $GUARD_LOOP_PID)"
+else
+    log "WARNING: $GUARD not found - focus guard (FOC1 fix) will not run"
+fi
+
+# --- SW1: the game-screen Command Center, its own restart loop --------------
+if [ -f "$OVERLAY" ]; then
+    "$0" --overlay-loop &
+    OVERLAY_LOOP_PID=$!
+    log "overlay supervisor started (pid $OVERLAY_LOOP_PID)"
+else
+    log "$OVERLAY not found - no Command Center on the game screen"
+fi
+
+# --- run the app, with restarts ----------------------------------------------
+app_should_bail() { [ "$STOP" -eq 1 ] && return 0; [ -e "$DISABLE" ] && return 0; return 1; }
+
+# Touch config (test day, 24 Sep): both panels run with sway transform 270,
+# and the add-on's USB touchscreen reports in its panel's native orientation -
+# a corner test on DP-1 landed TL->(1807,19) TR->(1795,1080) BR->(25,1064)
+# BL->(32,23), i.e. rotated 90 deg. libinput's 270 deg matrix fixed it (all four
+# corners exact). The built-in ft5x06 needs no matrix, only its output. sway
+# keeps input config by identifier, so a touchscreen that re-enumerates later
+# (the add-on's does, after every wake) gets it too. Re-applied before every
+# app start: boot, a crash, a sway restart after Steam. Idempotent.
+TOUCH_ADDON="${RP5DECK_TOUCH_ADDON:-8746:1:RetroidPocket_RDS_Touchscreen}"
+TOUCH_BUILTIN="${RP5DECK_TOUCH_BUILTIN:-0:0:generic_ft5x06_(a0)}"
+TOUCH_ADDON_MATRIX="${RP5DECK_TOUCH_ADDON_MATRIX:-0 1 0 -1 0 1}"
+apply_touch_config() {
+    swaymsg "input \"$TOUCH_ADDON\" calibration_matrix $TOUCH_ADDON_MATRIX" >/dev/null 2>&1 &&
+    swaymsg "input \"$TOUCH_ADDON\" map_to_output $EXTERNAL" >/dev/null 2>&1 &&
+    swaymsg "input \"$TOUCH_BUILTIN\" map_to_output DSI-1" >/dev/null 2>&1 &&
+        log "touch config applied (add-on matrix $TOUCH_ADDON_MATRIX -> $EXTERNAL, built-in -> DSI-1)" ||
+        log "WARNING: touch config not applied (swaymsg failed)"
+}
+rapid=0
+while [ "$STOP" -eq 0 ]; do
+    [ -e "$DISABLE" ] && finish "kill switch present"
+    if ! resolve_sway_env; then
+        if ! wait_while_sway_gone "app" app_should_bail; then
+            [ "$STOP" -eq 1 ] && break
+            finish "kill switch present"
+        fi
+    fi
+    [ "$STOP" -eq 1 ] && break
+    apply_touch_config
+    start=$(date +%s)
+    python3 "$APP" &
+    CHILD=$!
+    log "app started (pid $CHILD) [sway=$SWAYSOCK wayland=$WAYLAND_DISPLAY]"
+    heartbeat_monitor "$CHILD" "$HEARTBEAT" "app" &
+    APP_HB_PID=$!
+    wait "$CHILD"
+    rc=$?
+    # `wait` returns early (status > 128) when a trapped signal arrives; keep
+    # waiting until the child has really gone.
+    while kill -0 "$CHILD" 2>/dev/null; do
+        wait "$CHILD"
+        rc=$?
+    done
+    stop_heartbeat_monitor "$APP_HB_PID"
+    APP_HB_PID=""
+    CHILD=""
+    ran=$(( $(date +%s) - start ))
+    log "app exited rc=$rc after ${ran}s"
+    [ "$STOP" -eq 1 ] && break
+
+    if ! resolve_sway_env; then
+        log "app: sway is gone after exit (rc=$rc, ran=${ran}s) - treating this as a pause" \
+            "(ST1: a Steam session), not counting it against the restart budget"
+        rotate_log
+        continue
+    fi
+
+    result=$(rp5deck_backoff_decide "$rapid" "$ran" "$RAPID_SECS" "$RAPID_MAX" "$BACKOFF_MAX")
+    rapid=${result%% *}
+    action=${result#* }
+    if [ "$action" = "GIVEUP" ]; then
+        finish "giving up after $rapid exits in a row that each lasted < ${RAPID_SECS}s; see $LOG_DIR/rp5deck.log" 1
+    fi
+    log "restarting in ${action}s (rapid exits in a row: $rapid)"
+    nap "$action"
+    rotate_log
+done
+[ -n "$GUARD_LOOP_PID" ] && wait "$GUARD_LOOP_PID" 2>/dev/null
+[ -n "$OVERLAY_LOOP_PID" ] && wait "$OVERLAY_LOOP_PID" 2>/dev/null
+finish "stopped"

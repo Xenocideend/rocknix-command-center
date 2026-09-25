@@ -1,0 +1,9 @@
+# Local device connection details - never commit real credentials.
+rk_local.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime logs
+log/

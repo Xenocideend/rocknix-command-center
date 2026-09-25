@@ -1,0 +1,14 @@
+{
+  "policies": {
+    "Permissions": {
+      "Notifications": {
+        "Allow": ["https://discord.com"],
+        "Block": [],
+        "BlockNewRequests": false,
+        "Locked": false
+      }
+    },
+    "DisableAppUpdate": true,
+    "DisableTelemetry": true
+  }
+}
