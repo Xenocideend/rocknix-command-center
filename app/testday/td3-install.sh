@@ -22,10 +22,10 @@
 ACTION=${1:-status}
 
 stop_094() {
-    if [ -f /run/094-rp5deck.pid ]; then
-        kill "$(cat /run/094-rp5deck.pid)" 2>/dev/null && echo "sent SIGTERM to 094 ($(cat /run/094-rp5deck.pid))"
+    if [ -f /run/command-center-app.pid ]; then
+        kill "$(cat /run/command-center-app.pid)" 2>/dev/null && echo "sent SIGTERM to 094 ($(cat /run/command-center-app.pid))"
         i=0
-        while [ -f /run/094-rp5deck.pid ] && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+        while [ -f /run/command-center-app.pid ] && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
     fi
     left=$(td_pids "$HOME_DIR/main.py"; td_pids "$HOME_DIR/focus_guard.py"; td_pids "$HOME_DIR/cc_overlay.py")
     [ -n "$left" ] && echo "WARNING: still running after 10 s: $left"
@@ -44,7 +44,7 @@ install)
         for p in $(td_pids "$d/main.py"); do kill "$p" && echo "stopped old test instance $p ($d)"; done
     done
     stop_094
-    [ -e "$AUTOSTART/094-rp5deck" ] && cp -p "$AUTOSTART/094-rp5deck" "$BK/094-rp5deck.old"
+    [ -e "$AUTOSTART/command-center-app" ] && cp -p "$AUTOSTART/command-center-app" "$BK/command-center-app.old"
     [ -f "$FLAG_FILE" ] && cp -p "$FLAG_FILE" "$BK/080-dual_screen_mode"
     if [ -d "$HOME_DIR" ]; then
         mv "$HOME_DIR" "$BK/rp5deck.old" || exit 1
@@ -57,22 +57,44 @@ install)
           [ -d "$BK/rp5deck.old" ] && mv "$BK/rp5deck.old" "$HOME_DIR"; exit 3; }
     [ -f "$BK/rp5deck.old/config.json" ] && cp -p "$BK/rp5deck.old/config.json" "$HOME_DIR/config.json" &&
         echo "carried over the old config.json"
+    # 26 Sep (the owner's Notes were lost at an update): carry over everything the device
+    # created in the old app folder - files not in the old build's MANIFEST.md5 (notes/,
+    # logs, ...) - unless the new build ships a file of that name. env is rewritten below.
+    [ -f "$BK/rp5deck.old/MANIFEST.md5" ] && python3 - "$BK/rp5deck.old" "$HOME_DIR" <<'CARRY'
+import os, shutil, sys
+old, new = sys.argv[1], sys.argv[2]
+built = set(l.split("  ./", 1)[1].strip() for l in open(os.path.join(old, "MANIFEST.md5")) if "  ./" in l)
+n = 0
+for root, dirs, files in os.walk(old):
+    dirs[:] = [d for d in dirs if d != "__pycache__"]
+    for f in files:
+        rel = os.path.relpath(os.path.join(root, f), old).replace(os.sep, "/")
+        if rel in built or rel == "MANIFEST.md5" or rel.endswith(".pyc") or rel == "env" or rel.startswith("env.bak"):
+            continue
+        dst = os.path.join(new, rel)
+        if os.path.exists(dst):
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(os.path.join(root, f), dst)
+        n += 1
+print("carried over %d file(s) the device created (notes, logs, ...)" % n)
+CARRY
     # env: the focus guard logs what it WOULD do until step 8 (FX-E's first pass)
     printf 'RP5DECK_GUARD_ARGS=--dry-run\n' > "$HOME_DIR/env"
-    cp -p "$HOME_DIR/094-rp5deck" "$AUTOSTART/094-rp5deck" && chmod +x "$AUTOSTART/094-rp5deck"
-    echo "installed $AUTOSTART/094-rp5deck ($(md5sum "$AUTOSTART/094-rp5deck" | cut -c1-32))"
-    "$AUTOSTART/094-rp5deck"            # self-backgrounds
+    cp -p "$HOME_DIR/command-center-app" "$AUTOSTART/command-center-app" && chmod +x "$AUTOSTART/command-center-app"
+    echo "installed $AUTOSTART/command-center-app ($(md5sum "$AUTOSTART/command-center-app" | cut -c1-32))"
+    "$AUTOSTART/command-center-app"            # self-backgrounds
     sleep 8
     echo "BACKUP=$BK   (rollback: sh $0 rollback $BK)"
     sh "$0" status
     ;;
 status)
-    echo "094 pid file: $(cat /run/094-rp5deck.pid 2>/dev/null || echo none)"
+    echo "094 pid file: $(cat /run/command-center-app.pid 2>/dev/null || echo none)"
     echo "main.py: $(td_pids "$HOME_DIR/main.py" | tr '\n' ' ')  focus_guard: $(td_pids "$HOME_DIR/focus_guard.py" | tr '\n' ' ')  cc_overlay: $(td_pids "$HOME_DIR/cc_overlay.py" | tr '\n' ' ')"
     echo "080 flag: $(cat "$FLAG_FILE" 2>/dev/null)"
     echo "env: $(cat "$HOME_DIR/env" 2>/dev/null)"
     echo "--- 094 log (last 25) ---"
-    tail -25 "$HOME_DIR/log/094-rp5deck.log" 2>/dev/null
+    tail -25 "$HOME_DIR/log/command-center-app.log" 2>/dev/null
     echo "--- rp5deck.log (last 10) ---"
     tail -10 "$HOME_DIR/log/rp5deck.log" 2>/dev/null
     ;;
@@ -83,24 +105,24 @@ guard-live)
     # the guard loop evaluated RP5DECK_GUARD_ARGS when 094 started, so killing
     # only the guard would bring it back in --dry-run: restart the whole 094
     stop_094
-    "$AUTOSTART/094-rp5deck"
+    "$AUTOSTART/command-center-app"
     sleep 8
     sh "$0" status
     ;;
 guard-dry)
     printf 'RP5DECK_GUARD_ARGS=--dry-run\n' > "$HOME_DIR/env"
     stop_094
-    "$AUTOSTART/094-rp5deck"
+    "$AUTOSTART/command-center-app"
     sleep 8
     sh "$0" status
     ;;
 guard-log)
-    grep -n 'focus_guard\|focus guard' "$HOME_DIR/log/094-rp5deck.log" 2>/dev/null | tail -60
-    echo "dry-run decisions so far: $(grep -c 'dry-run] would focus' "$HOME_DIR/log/094-rp5deck.log" 2>/dev/null)"
+    grep -n 'focus_guard\|focus guard' "$HOME_DIR/log/command-center-app.log" 2>/dev/null | tail -60
+    echo "dry-run decisions so far: $(grep -c 'dry-run] would focus' "$HOME_DIR/log/command-center-app.log" 2>/dev/null)"
     ;;
 restart)
     stop_094
-    "$AUTOSTART/094-rp5deck"
+    "$AUTOSTART/command-center-app"
     sleep 8
     sh "$0" status
     ;;
@@ -114,15 +136,15 @@ rollback)
     BK=${2:?usage: rollback BACKUP_DIR}
     [ -d "$BK" ] || { echo "no such backup: $BK"; exit 2; }
     stop_094
-    if [ -f "$BK/094-rp5deck.old" ]; then cp -p "$BK/094-rp5deck.old" "$AUTOSTART/094-rp5deck"
-    else mv "$AUTOSTART/094-rp5deck" "$BK/094-rp5deck.i2-installed" 2>/dev/null; fi
+    if [ -f "$BK/command-center-app.old" ]; then cp -p "$BK/command-center-app.old" "$AUTOSTART/command-center-app"
+    else mv "$AUTOSTART/command-center-app" "$BK/command-center-app.i2-installed" 2>/dev/null; fi
     if [ -d "$BK/rp5deck.old" ]; then
         mv "$HOME_DIR" "$HOME_DIR.i2-removed-$TS" 2>/dev/null
         mv "$BK/rp5deck.old" "$HOME_DIR" && echo "restored the old $HOME_DIR"
     else
         mv "$HOME_DIR" "$HOME_DIR.i2-removed-$TS" 2>/dev/null && echo "moved the I2 install aside ($HOME_DIR.i2-removed-$TS)"
     fi
-    echo "094 autostart now: $(ls "$AUTOSTART"/094-rp5deck 2>/dev/null || echo absent)"
+    echo "094 autostart now: $(ls "$AUTOSTART"/command-center-app 2>/dev/null || echo absent)"
     echo "(the 080 flag was left as it is; its backup is $BK/080-dual_screen_mode)"
     ;;
 *)

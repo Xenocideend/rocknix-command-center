@@ -67,7 +67,7 @@ class TestPaging(unittest.TestCase):
         sheet.page = idx
         sheet._apply()
         self.assertIn("dsperate", sheet.title.text.lower() + sheet.title.text)
-        self.assertIn("(1/", sheet.title.text)
+        self.assertIn("(page 1 of", sheet.title.text)
 
     def test_turn_advances_and_clamps_at_both_ends(self):
         sheet, h, root = make_sheet()
@@ -102,8 +102,9 @@ class TestRowContent(unittest.TestCase):
         ctx, combos, i, n = sheet.pages[0]
         combo_lbl, action_lbl = sheet.rows[0]
         self.assertEqual(combo_lbl.text, hotkeys.format_combo(combos[0]))
-        tag = "device" if combos[0].verified_on_device else "source"
-        self.assertIn(tag, action_lbl.text)
+        # only an untried combo says so; a device-verified one carries no tag
+        self.assertEqual("not yet tried on this device" in action_lbl.text,
+                         not combos[0].verified_on_device)
 
     def test_a_note_is_appended_to_the_action_text(self):
         sheet, h, root = make_sheet()

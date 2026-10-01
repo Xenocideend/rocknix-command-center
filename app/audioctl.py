@@ -1,14 +1,12 @@
-"""audioctl - the UI's view of audio.py: a dry-run switch and a throttle.
+"""audioctl: the UI's view of audio.py, a dry run switch and a throttle.
 
-audio.py is used unchanged. This wrapper exists so that
-RP5DECK_AUDIO_DRYRUN=1 makes every SETTER log exactly what it would have run
-(same clamping, same argument formatting as audio.py) instead of calling
-wpctl or /usr/bin/volume. Readers (get_master, list_streams, Subscriber)
-always run for real.
+audio.py is used as is. With RP5DECK_AUDIO_DRYRUN=1 every setter logs exactly what it would
+have run (same clamping and argument formatting as audio.py) instead of calling wpctl or
+/usr/bin/volume. Readers (get_master, list_streams, Subscriber) always run for real.
 
-Throttle turns a slider's stream of drag values into at most one send per
-interval (latest value wins), and drops whatever is still pending when the
-drag ends - the release is committed separately, exactly once.
+Throttle turns a slider's stream of drag values into at most one send per interval (the latest
+value wins) and drops whatever's pending when the drag ends, since the release is committed
+separately, exactly once.
 """
 import collections
 import logging
@@ -88,12 +86,12 @@ class Backend:
 
 
 class Throttle:
-    """Rate-limit a stream of values to one send per `interval` seconds.
+    """Rate limits a stream of values to one send per `interval` seconds.
 
-    push(v, now) sends immediately if the interval has elapsed, otherwise
-    stores v as pending and returns the time at which due(now) should be
-    called. finish() discards any pending value (the caller commits the
-    final value itself). The clock is passed in, so tests need no sleeping."""
+    push(v, now) sends right away if the interval has passed, otherwise keeps v pending and returns
+    when due(now) should be called. finish() drops any pending value (the caller commits the final
+    one itself). The clock gets passed in so tests dont sleep.
+    """
 
     def __init__(self, interval, send):
         self.interval = interval
@@ -110,12 +108,13 @@ class Throttle:
         return self.last_sent + self.interval
 
     def due(self, now):
-        """Send the pending value if its time has come. Returns the next due
-        time if something is still waiting, else None."""
+        """Sends the pending value if it's due. Returns the next due time if something's still waiting,
+        else None.
+        """
         if self.pending is None:
             return None
-        # Same expression as the due time handed out, so a timer that fires
-        # exactly on time is never judged early (float rounding) and re-armed.
+        # the same expression as the due time handed out, so a timer that fires right on time is never
+        # judged early by float rounding and rearmed
         if now >= self.last_sent + self.interval - 1e-9:
             v, self.pending = self.pending, None
             self._do(v, now)

@@ -1,59 +1,35 @@
 #!/usr/bin/env python3
-"""
-Audio backend module for rp5deck (Retroid Pocket 5 / ROCKNIX / PipeWire +
-WirePlumber + pipewire-pulse).
+"""Audio for rp5deck (ROCKNIX on the RP5: PipeWire, WirePlumber and pipewire-pulse).
 
-Volume is the top-priority feature, so this module is deliberately narrow and
-paranoid about failure: every external call has a timeout, and a failure is
-reported as state "error" (or None fields) - never as a value that looks like
-a real, quiet volume. See AUDIO-NOTES.md for how each fact below was verified
-on the device.
+Volume matters most, so this is narrow and careful: every external call has a timeout, and a
+failure comes back as state "error" (or None), never as a value that looks like a real quiet
+volume. AUDIO-NOTES.md has how each of these was checked on the device.
 
-Key facts this module encodes (verified on a real RP5, ROCKNIX 20260923):
+What this module relies on:
 
-- Hardware volume keys run /usr/bin/input_sense -> /usr/bin/volume, which sets
-  the sink volume with `pactl -- set-sink-volume @DEFAULT_SINK@ N%` and saves N
-  to system.cfg as `audio.volume` (0-100 integer). If the app changes volume
-  through wpctl only, the *next* hardware key press recomputes from the stale
-  saved value and jumps. So live dragging may use wpctl, but any value the user
-  "lands on" must be committed through /usr/bin/volume.
-- /usr/bin/volume's argument is NOT a delta except for the literal strings
-  "+"/"up", "-"/"down" and "restore" (a no-op resync). Any other argument is
-  used as-is as the new absolute percentage (0-100, clamped by the script; a
-  non-numeric value or empty string falls back to 50 inside the script). This
-  module always calls it with a plain integer string in [0, 100].
-- /usr/bin/volume has no concept of mute. Mute is wpctl-only
-  (`wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle`) and is not persisted anywhere;
-  a volume-key press does not touch mute.
-- The card's HiFi profile provides the Speaker and Headphones sinks. Something
-  else (ROCKNIX's 092 dual-screen daemon, or the HDMI switch path) can remove
-  the sink entirely, e.g. while switching to an HDMI audio profile; 092 then
-  restores HiFi. When @DEFAULT_AUDIO_SINK@ does not resolve to anything, this
-  module reports state "restoring", not a fake/zero volume.
-- `pactl list cards` (and `pactl list short cards`) reliably timed out
-  ("Connection failure: Timeout") against this device's pipewire-pulse, twice
-  in a row, while `wpctl status`, `wpctl get-volume` and `wpctl inspect` all
-  worked immediately. So profile/card state is deliberately never queried
-  with `pactl list cards` here - see AUDIO-NOTES.md.
-- `pactl subscribe` and `pactl info` are not used anywhere in this module.
-  Measured on the device (23 Sep): `pactl subscribe` delivered zero events
-  across a hardware key press, two `/usr/bin/volume` calls and idle time,
-  through both a pipe and a pty, and `pactl info` hung for the full 5 s
-  timeout. The PulseAudio compatibility shim answers *writes*
-  (`set-sink-volume`) but not *reads or subscriptions* on this build.
-  `Subscriber` instead watches inotify on `system.cfg` (catches
-  `/usr/bin/volume`, i.e. the hardware keys) and `pw-mon` (catches
-  `wpctl set-volume` and anything else that bypasses `/usr/bin/volume`).
-  See AUDIO-NOTES.md for the device evidence and the pw-mon block format.
-- `wpctl get-volume <id>` can return exit code 0 with NOTHING on stdout and an
-  error on stderr (e.g. "Node '999999' not found"). Exit code is therefore not
-  trusted anywhere in this module; every parse requires the expected pattern
-  to actually be present in stdout.
-- Playback stream node ids from `pw-dump` (media.class Stream/Output/Audio)
-  are ephemeral: a node seen in one pw-dump can be gone by the next call, a
-  handful of seconds later (observed with EmulationStation's own UI-sound
-  stream). list_streams() and the per-stream setters treat a vanished id as a
-  normal, non-fatal outcome, not an error.
+- The volume keys run /usr/bin/input_sense -> /usr/bin/volume, which sets the sink with
+  `pactl -- set-sink-volume @DEFAULT_SINK@ N%` and saves N to system.cfg as audio.volume.
+  Change it through wpctl only and the next key press starts from the stale saved value and
+  jumps. So a live drag can use wpctl, but the value you land on is committed through
+  /usr/bin/volume.
+- /usr/bin/volume only treats "+"/"up", "-"/"down" and "restore" as special, anything else is
+  the new absolute percent (a bad value falls back to 50 inside the script). This always
+  passes a plain integer 0-100.
+- /usr/bin/volume knows nothing about mute. Mute is wpctl only, never saved, and a volume key
+  doesnt touch it.
+- The card's HiFi profile gives the Speaker and Headphones sinks. The dual-screen daemon or the
+  HDMI switch can remove the sink for a moment (switching to an HDMI profile) and put HiFi
+  back. When @DEFAULT_AUDIO_SINK@ resolves to nothing this reports "restoring", not zero.
+- `pactl list cards` times out against this pipewire-pulse while wpctl works right away, so
+  card and profile state are never read with pactl here.
+- `pactl subscribe` and `pactl info` arent used: subscribe delivered no events at all and info
+  hung for the full timeout. The shim answers writes but not reads or subscriptions on this
+  build. Subscriber watches inotify on system.cfg (the volume keys) and pw-mon (wpctl and
+  anything else) instead.
+- `wpctl get-volume <id>` can exit 0 with nothing on stdout and an error on stderr, so the
+  exit code is never trusted, every parse needs the expected pattern in stdout.
+- Playback stream ids from pw-dump come and go (ES's own UI sound stream vanishes within
+  seconds), so a vanished id is a normal result, not an error.
 """
 
 from __future__ import annotations
@@ -76,13 +52,12 @@ from typing import Callable, Optional
 # Tunables
 # --------------------------------------------------------------------------
 
-# Timeout for a single external call. Chosen so a wedged pactl/wpctl/pw-dump
-# can never hang the UI thread that (indirectly) waits on these functions.
+# timeout for one external call, so a stuck pactl/wpctl/pw-dump can never hang the UI thread
 DEFAULT_TIMEOUT = 3.0
 PW_DUMP_TIMEOUT = 5.0
 
-# Subscriber tunables. /usr/bin/volume rewrites system.cfg via a temp file
-# (system.cfgXXXXXX) then an atomic rename onto system.cfg - see AUDIO-NOTES.md.
+# Subscriber settings. /usr/bin/volume writes system.cfg through a temp file (system.cfgXXXXXX)
+# and renames it into place.
 CONFIG_DIR = "/storage/.config/system/configs"
 CONFIG_FILE_NAME = "system.cfg"
 IN_CLOSE_WRITE = 0x00000008
@@ -91,18 +66,16 @@ _INOTIFY_WATCH_MASK = IN_CLOSE_WRITE | IN_MOVED_TO
 _INOTIFY_HEADER = struct.Struct("iIII")  # wd, mask, cookie, name-length
 
 PW_MON_CMD = ["pw-mon", "--no-colors"]
-# "At most one callback per 50-100ms, with a trailing callback" (task spec):
-# fire as soon as a marker line is seen (bounded latency), and let the
-# pending-set + single-shot timer below fold a burst into one flush.
+# at most one callback per 50-100 ms with a trailing one: fire as soon as a marker line shows
+# up, and the pending set plus a one-shot timer fold a burst into one flush
 PW_MON_COALESCE = 0.075
 PW_MON_RESTART_BACKOFF = 1.0
 
 VOLUME_SCRIPT = "/usr/bin/volume"
 DEFAULT_SINK_ALIAS = "@DEFAULT_AUDIO_SINK@"
 
-# wpctl accepts values above 1.0 (a "boost" beyond 100%). Dragging live is
-# allowed a bit of headroom; commit_master() clamps harder because
-# /usr/bin/volume only understands 0-100 (i.e. 0.0-1.0).
+# wpctl takes values above 1.0 (boost past 100%). A live drag gets a bit of headroom,
+# commit_master() clamps harder since /usr/bin/volume only knows 0-100.
 MAX_LIVE_VOLUME = 1.5
 MAX_COMMIT_VOLUME = 1.0
 
@@ -113,15 +86,15 @@ _PROP_LINE_RE = re.compile(r"^\*?\s*([A-Za-z0-9_.]+)\s*=\s*\"?([^\"\n]*)\"?\s*$"
 
 log = logging.getLogger("rp5deck.audio")
 
-# How long pw-mon gets to exit after SIGTERM before it is SIGKILLed.
+# how long pw-mon gets to exit after SIGTERM before SIGKILL
 PW_MON_TERM_TIMEOUT = 1.0
 
 
 class _LogLimiter:
-    """Log a failure (with its traceback when called inside an except block)
-    the first time a key fails, then at most once per `interval` seconds
-    with a count of the repeats in between: the Subscriber thread loops, and
-    a failure that recurs per event must not flood the app's 512 KB log."""
+    """Logs a failure (with its traceback inside an except block) the first time a key fails, then
+    at most once per `interval` with a count, so a failure on every event cant flood the 512 KB
+    log.
+    """
 
     def __init__(self, interval: float = 60.0, clock=time.monotonic):
         self.interval = interval
@@ -160,16 +133,15 @@ class _LogLimiter:
 
 
 # --------------------------------------------------------------------------
-# Low-level process helpers - the only place that touches subprocess.
+# Process helpers, the only place that touches subprocess.
 # --------------------------------------------------------------------------
 
 def _run(cmd: list[str], timeout: float = DEFAULT_TIMEOUT):
-    """Run a command and capture output. Never raises, never hangs.
+    """Runs a command and captures output. Never raises, never hangs.
 
-    Returns (returncode, stdout, stderr). returncode is None if the process
-    never produced a result at all (binary missing, timed out, or any other
-    OS-level failure) - callers must treat that as a hard failure regardless
-    of what is in stdout/stderr.
+    Returns (returncode, stdout, stderr). returncode is None if the process never gave a result
+    (missing binary, timeout, any OS failure), and callers must treat that as a failure whatever
+    stdout says.
     """
     if shutil.which(cmd[0]) is None:
         return None, "", "binary not found: %s" % cmd[0]
@@ -183,8 +155,9 @@ def _run(cmd: list[str], timeout: float = DEFAULT_TIMEOUT):
 
 
 def _wpctl_volume_line(out: str):
-    """Parse a `wpctl get-volume` stdout line. Returns (volume, muted) or
-    (None, None) if the expected pattern is not present."""
+    """Parses a `wpctl get-volume` line. (volume, muted), or (None, None) without the expected
+    pattern.
+    """
     m = _VOLUME_LINE_RE.search(out)
     if not m:
         return None, None
@@ -197,8 +170,8 @@ def _wpctl_volume_line(out: str):
 
 
 def _inspect_props(out: str) -> dict:
-    """Parse `wpctl inspect` plain-text property dump into a dict of str->str.
-    Lines look like `* node.name = "foo"` or `  node.pause-on-idle = "false"`.
+    """Parses `wpctl inspect`'s property dump into a str->str dict. Lines look like
+    `* node.name = "foo"` or `  node.pause-on-idle = "false"`.
     """
     props = {}
     for line in out.splitlines():
@@ -210,17 +183,14 @@ def _inspect_props(out: str) -> dict:
 
 
 def _sink_label(props: dict) -> Optional[str]:
-    """Derive a short, human sink label from a `wpctl inspect` property dump.
+    """A short sink label from a `wpctl inspect` dump.
 
-    Prefers `node.description` (e.g. "Built-in Audio Speaker Playback"),
-    stripping the common "Built-in Audio " prefix. That key was present in
-    some captures on this device but appeared to be omitted in at least one
-    earlier capture (field set/order was not perfectly stable), so this
-    falls back to a substring match on `node.name` - verified against the
-    two sinks actually seen on this device:
+    Uses node.description (like "Built-in Audio Speaker Playback", minus "Built-in Audio "). That
+    key went missing in at least one capture, so it falls back to matching node.name against the
+    two sinks this device has:
       alsa_output ..._HiFi__Speaker__sink     -> "Speaker Playback"
       alsa_output ..._HiFi__Headphones__sink  -> "Headphones Playback"
-    If neither is usable, returns the raw node name rather than guessing.
+    Otherwise the raw node name, no guessing.
     """
     description = props.get("node.description")
     if description:
@@ -249,35 +219,26 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 # --------------------------------------------------------------------------
 
 def get_master() -> dict:
-    """Read the master (default sink) volume/mute/description.
-
-    Returns a dict:
-        volume:           float, 1.0 == 100%, may exceed 1.0 (boost); None if
-                           unavailable.
-        muted:             bool, or None if unavailable.
-        sink_description: short label ("Speaker Playback" / "Headphones
-                           Playback" / raw node name), or None.
-        state:            "ok"        - volume/muted are real, current values.
-                           "restoring" - no default sink resolves right now
-                                         (profile switch in flight, e.g. to/
-                                         from HDMI); 092 is expected to fix
-                                         this without our help. volume/muted
-                                         are None; do not show a stale or
-                                         fake value.
-                           "error"     - something unexpected failed (wpctl
-                                         missing, pw internals down, etc).
-                                         volume/muted are None.
+    """The master (default sink) volume, mute and label, as a dict:
+        volume:           float, 1.0 == 100%, can go past 1.0 (boost), None if unknown
+        muted:            bool or None
+        sink_description: short label or None
+        state:            "ok"        volume/muted are real current values
+                          "restoring" no default sink right now (a profile switch, like to or
+                                      from HDMI, which the dual-screen daemon fixes). volume and
+                                      muted are None, never show a stale or fake value.
+                          "error"     something failed (wpctl missing, PipeWire down).
+                                      volume and muted are None.
     """
     result = {"volume": None, "muted": None, "sink_description": None, "state": "error"}
 
     rc, out, _err = _run(["wpctl", "inspect", DEFAULT_SINK_ALIAS])
     if rc is None:
-        return result  # wpctl missing or hung: "error"
+        return result  # wpctl missing or hung
 
     header = out.strip().splitlines()[0] if out.strip() else ""
     if rc != 0 or not _INSPECT_HEADER_RE.match(header):
-        # The alias did not resolve to any node - most likely the speaker
-        # sink is gone mid-profile-switch (see module docstring).
+        # the alias resolved to nothing, most likely the speaker sink is gone mid profile switch
         result["state"] = "restoring"
         return result
 
@@ -286,11 +247,10 @@ def get_master() -> dict:
 
     rc2, out2, _err2 = _run(["wpctl", "get-volume", DEFAULT_SINK_ALIAS])
     if rc2 is None:
-        return result  # still "error", but we keep sink_description
+        return result  # still "error", but keep the label
     volume, muted = _wpctl_volume_line(out2)
     if volume is None:
-        # Inconsistent: inspect resolved a node but get-volume produced
-        # nothing parseable. Do not invent a number.
+        # inspect found a node but get-volume gave nothing parseable, dont invent a number
         return result
 
     result["volume"] = volume
@@ -300,12 +260,10 @@ def get_master() -> dict:
 
 
 def set_master(v: float) -> bool:
-    """Live volume change while dragging. No persistence (see commit_master).
+    """Live volume change while dragging, not saved (see commit_master).
 
-    Clamped to [0, MAX_LIVE_VOLUME]. Returns True if wpctl accepted the call
-    (i.e. produced no error), False otherwise. The UI should not treat a
-    False return as fatal for a single dragged frame, but should not assume
-    the change happened either.
+    Clamped to [0, MAX_LIVE_VOLUME]. True if wpctl took it. A False for one dragged frame isnt
+    fatal, but dont assume the change happened.
     """
     v = _clamp(float(v), 0.0, MAX_LIVE_VOLUME)
     rc, out, _err = _run(["wpctl", "set-volume", DEFAULT_SINK_ALIAS, "%.4f" % v])
@@ -315,14 +273,11 @@ def set_master(v: float) -> bool:
 
 
 def commit_master(v: float) -> bool:
-    """Persist a volume level the way the hardware keys would: through
-    /usr/bin/volume, which sets the sink volume with pactl AND saves
-    audio.volume to system.cfg. This is what keeps the next hardware key
-    press from jumping off a stale saved value.
+    """Saves a volume the way the hardware keys do, through /usr/bin/volume (sets the sink with pactl
+    and saves audio.volume), so the next key press doesnt jump off a stale value.
 
-    v is in the same units as everywhere else in this module (1.0 == 100%),
-    clamped to [0, MAX_COMMIT_VOLUME] because the script only understands an
-    integer 0-100 percentage. Returns True on apparent success.
+    v uses the same units as the rest of this module (1.0 == 100%), clamped to
+    [0, MAX_COMMIT_VOLUME] since the script only takes an integer 0-100. True on apparent success.
     """
     v = _clamp(float(v), 0.0, MAX_COMMIT_VOLUME)
     percent = int(round(v * 100))
@@ -333,9 +288,9 @@ def commit_master(v: float) -> bool:
 
 
 def toggle_master_mute() -> bool:
-    """Toggle mute on the default sink. Not persisted by ROCKNIX (mute state
-    lives only in PipeWire); the UI should show mute clearly since a volume
-    key press does not clear it."""
+    """Toggles mute on the default sink. ROCKNIX doesnt save it (it only lives in PipeWire), and a
+    volume key doesnt clear it, so the UI should show it clearly.
+    """
     rc, _out, _err = _run(["wpctl", "set-mute", DEFAULT_SINK_ALIAS, "toggle"])
     return rc == 0
 
@@ -345,19 +300,15 @@ def toggle_master_mute() -> bool:
 # --------------------------------------------------------------------------
 
 def list_streams() -> Optional[list]:
-    """List current playback streams (pw-dump nodes with media.class
-    "Stream/Output/Audio"), each as:
-        {id, app_name, media_name, node_name, volume, muted, display_name}
+    """The current playback streams (pw-dump nodes with media.class "Stream/Output/Audio"), each as
+    {id, app_name, media_name, node_name, volume, muted, display_name}.
 
-    volume is derived from the node's raw `channelVolumes` (cube root of the
-    loudest channel), which matches wpctl's displayed/accepted scale for the
-    two reference values seen on this device (0.000125 <-> wpctl 0.05, and
-    1.0 <-> wpctl 1.00 - see AUDIO-NOTES.md). If a stream has no readable
-    Props, volume/muted are None for that entry rather than 0/False.
+    volume is the cube root of the loudest raw channelVolumes value, which matches wpctl's scale
+    for both values seen here (0.000125 <-> 0.05 and 1.0 <-> 1.00). A stream without readable
+    Props gets None, not 0/False.
 
-    Returns None (not []) if pw-dump itself could not be read at all - the
-    UI must tell those two cases apart, since [] legitimately means "no app
-    is playing anything right now", which is the common case on this device.
+    None (not []) if pw-dump couldnt be read at all. [] means nothing is playing, which is the
+    common case, so the UI has to tell the two apart.
     """
     rc, out, _err = _run(["pw-dump"], timeout=PW_DUMP_TIMEOUT)
     if rc is None or rc != 0 or not out.strip():
@@ -411,9 +362,9 @@ def list_streams() -> Optional[list]:
 
 
 def set_stream_volume(stream_id: int, v: float) -> bool:
-    """Set a single stream's volume. Clamped to [0, MAX_LIVE_VOLUME]. Returns
-    False (not a raised exception) if the stream id has already vanished -
-    these ids are ephemeral, see module docstring."""
+    """Sets one stream's volume, clamped to [0, MAX_LIVE_VOLUME]. False (not an exception) if the id
+    is already gone.
+    """
     v = _clamp(float(v), 0.0, MAX_LIVE_VOLUME)
     rc, out, _err = _run(["wpctl", "set-volume", str(stream_id), "%.4f" % v])
     if rc is None or rc != 0:
@@ -422,8 +373,7 @@ def set_stream_volume(stream_id: int, v: float) -> bool:
 
 
 def toggle_stream_mute(stream_id: int) -> bool:
-    """Toggle mute on a single stream. False if the id is gone or wpctl
-    failed for any other reason."""
+    """Toggles mute on one stream. False if the id is gone or wpctl failed."""
     rc, _out, _err = _run(["wpctl", "set-mute", str(stream_id), "toggle"])
     return rc == 0
 
@@ -431,36 +381,27 @@ def toggle_stream_mute(stream_id: int) -> bool:
 # --------------------------------------------------------------------------
 # Event subscriber
 #
-# `pactl subscribe` is gone (see the module docstring for the measured
-# reason). Two independent sources feed the same callback instead:
+# Two sources feed the same callback (pactl subscribe doesnt work here, see the module
+# docstring):
 #
-#  1. inotify on CONFIG_DIR, filtered to CONFIG_FILE_NAME. /usr/bin/volume
-#     (which the hardware volume keys call through input_sense) writes a
-#     temp file `system.cfgXXXXXX` and renames it onto `system.cfg`, so the
-#     event we want is IN_MOVED_TO/IN_CLOSE_WRITE whose *name* is exactly
-#     `system.cfg` - the temp name must never fire.
-#  2. `pw-mon --no-colors`, for changes that bypass /usr/bin/volume (our own
-#     live `wpctl set-volume` drag, or another app). On this device the
-#     sink's volume is a *hardware* ALSA mixer route (`route.hw-volume =
-#     "true"` in `wpctl inspect`'s dump), so the live channelVolumes/mute
-#     values are only ever emitted by pw-mon on the owning ALSA **Device**
-#     object's Route param - the sink **Node** itself only ever reports
-#     PropInfo (parameter metadata, not values) in its own "changed:"
-#     blocks. Both ids are resolved once (`wpctl inspect`, which already
-#     exposes the node's own id and its `device.id` property) and watched;
-#     either firing is safe because the callback only means "go re-read
-#     get_master()", never a value pw-mon parsed itself.
+# 1. inotify on CONFIG_DIR for CONFIG_FILE_NAME. /usr/bin/volume (the hardware keys) writes a
+#    temp system.cfgXXXXXX and renames it onto system.cfg, so the event we want is
+#    IN_MOVED_TO/IN_CLOSE_WRITE named exactly system.cfg, the temp name must never fire.
+# 2. `pw-mon --no-colors` for changes that skip /usr/bin/volume (our own live wpctl drag, or
+#    another app). The sink's volume here is a hardware ALSA mixer route
+#    (route.hw-volume = "true"), so pw-mon only reports the live volume and mute on the ALSA
+#    Device's Route param, the sink Node only ever reports PropInfo. Both ids come from
+#    `wpctl inspect` and both are watched, either one firing is fine since the callback only
+#    means "read get_master() again".
 #
-# Real captures backing this: AUDIO-NOTES.md "pw-mon / inotify: real device
-# capture" section, and tests/fixtures/pw-mon-*.
+# Real captures: AUDIO-NOTES.md and tests/fixtures/pw-mon-*.
 # --------------------------------------------------------------------------
 
 
 def _parse_inotify_events(buf: bytes) -> list:
-    """Parse a raw `read()` of an inotify fd into a list of (wd, mask,
-    cookie, name) tuples. name is "" for events with no name (len 0).
-    Never raises on a truncated trailing event - it is simply dropped,
-    since the next read() will include it in full."""
+    """Parses a raw read() of an inotify fd into (wd, mask, cookie, name) tuples (name "" when there
+    isnt one). A truncated trailing event is dropped, the next read() has it whole.
+    """
     events = []
     header_size = _INOTIFY_HEADER.size
     i = 0
@@ -477,9 +418,9 @@ def _parse_inotify_events(buf: bytes) -> list:
 
 
 def _config_rewrite_event(mask: int, name: str) -> bool:
-    """True if this is the atomic rewrite of system.cfg itself (the rename
-    target), not one of /usr/bin/volume's `system.cfgXXXXXX` temp files -
-    those never match this because the name must be exactly CONFIG_FILE_NAME."""
+    """True for the rename onto system.cfg itself, never one of /usr/bin/volume's system.cfgXXXXXX
+    temp files (the name has to be exactly CONFIG_FILE_NAME).
+    """
     return name == CONFIG_FILE_NAME and bool(mask & _INOTIFY_WATCH_MASK)
 
 
@@ -487,9 +428,9 @@ _LIBC = None
 
 
 def _inotify_libc():
-    """libc with the two inotify calls' signatures pinned (RV3): without
-    argtypes/restype ctypes guesses from the Python values, which happens to
-    work for these int/char* calls but is not guaranteed."""
+    """libc with the two inotify calls' signatures pinned, so ctypes doesnt have to guess from the
+    Python values.
+    """
     global _LIBC
     if _LIBC is None:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -502,11 +443,10 @@ def _inotify_libc():
 
 
 class _InotifyWatch:
-    """ctypes wrapper around inotify_init1/inotify_add_watch. `create()`
-    never raises: it returns None if inotify is unavailable (not Linux, or
-    the syscalls themselves fail), so Subscriber can fall back to
-    pw-mon-only rather than crash the background thread. The fd is
-    O_CLOEXEC (RV3), like esevents.py's, so no child ever inherits it."""
+    """ctypes wrapper around inotify_init1/inotify_add_watch. create() never raises, it returns None
+    if inotify isnt there (not Linux, or the calls fail) so Subscriber can run on pw-mon alone.
+    The fd is O_CLOEXEC so no child inherits it.
+    """
 
     _faillog = _LogLimiter()
 
@@ -539,7 +479,7 @@ class _InotifyWatch:
             return None
 
     def read_events(self) -> list:
-        """Non-blocking: call only once select() reports fd readable."""
+        """non-blocking, only call once select() says the fd is readable"""
         try:
             buf = os.read(self.fd, 4096)
         except BlockingIOError:
@@ -559,10 +499,10 @@ class _InotifyWatch:
 
 
 def _resolve_master_ids(timeout: float = DEFAULT_TIMEOUT):
-    """Resolve the default sink's own node id and its owning ALSA Device id
-    (`device.id` in the same `wpctl inspect` property dump `get_master()`
-    already parses). Returns (node_id, device_id); either is None if
-    unresolved (e.g. mid HDMI-profile switch, or wpctl missing)."""
+    """The default sink's own node id and its ALSA Device id (device.id from the same
+    `wpctl inspect` dump). Returns (node_id, device_id), either can be None (mid HDMI switch, or no
+    wpctl).
+    """
     rc, out, _err = _run(["wpctl", "inspect", DEFAULT_SINK_ALIAS], timeout=timeout)
     if rc is None or rc != 0:
         return None, None
@@ -582,23 +522,18 @@ def _resolve_master_ids(timeout: float = DEFAULT_TIMEOUT):
 
 
 _ID_LINE_RE = re.compile(r"^id:\s*(\d+)\s*$")
-# Props:volume / Props:mute / Props:channelVolumes, but NOT volumeBase /
-# volumeStep (the \b after the alternation stops at a word boundary, and
-# both of those continue with a word character).
+# Props:volume / Props:mute / Props:channelVolumes but not volumeBase / volumeStep (the \b stops
+# at a word boundary and those two keep going with a word character)
 _VALUE_MARKER_RE = re.compile(r"Props:(?:volume|mute|channelVolumes)\b")
 
 
 class _PwMonClassifier:
-    """Incremental, line-based classifier for `pw-mon --no-colors` output.
-    Feed it raw text as it arrives (feed() handles partial lines); it
-    returns the list of "master" kinds to fire for that chunk, in order.
+    """Line-based classifier for `pw-mon --no-colors` output. feed() takes raw text as it comes
+    (partial lines are fine) and returns the "master" kinds to fire for that chunk.
 
-    Only a "changed:" block whose object id is the watched node/device id
-    AND that contains a real Props value marker line fires. This also
-    "skips the initial dump" for free, with no timer or byte-count
-    heuristic: pw-mon's startup dump of every existing object is entirely
-    "added:" blocks (confirmed against a real capture - AUDIO-NOTES.md);
-    only a genuine live change is ever reported as "changed:".
+    Only a "changed:" block for the watched node or device id that has a real Props value line
+    fires. That skips pw-mon's startup dump for free, since the dump is all "added:" blocks and
+    only a live change is ever "changed:".
     """
 
     def __init__(self, node_id: Optional[int], device_id: Optional[int]):
@@ -644,19 +579,15 @@ class _PwMonClassifier:
 
 
 class Subscriber:
-    """Background thread: inotify on system.cfg (primary - catches the
-    hardware volume keys via /usr/bin/volume) plus `pw-mon` (secondary -
-    catches a live `wpctl set-volume`, e.g. our own slider drag, or any
-    other app). Calls `callback("master")` at most once per ~75ms burst,
-    with the final value never missed - the callback only means "go
-    re-read get_master()"; neither source's own parsed content is ever
-    handed to the caller.
+    """Background thread: inotify on system.cfg (the hardware keys through /usr/bin/volume) plus
+    pw-mon (a live wpctl set-volume, like our own slider, or another app). Calls
+    callback("master") at most once per ~75 ms burst without missing the last value. The callback
+    only means "read get_master() again", neither source's parsed content is passed on.
 
-    One daemon thread, select()-based: never blocks the caller. stop()
-    wakes the select loop via a self-pipe, joins within ~1s, and kills any
-    running pw-mon (no zombies). If pw-mon is absent or dies, it is
-    restarted with backoff; inotify keeps working regardless, since it is
-    a plain fd this thread owns directly, not tied to pw-mon's lifecycle.
+    One select() based daemon thread, it never blocks the caller. stop() wakes it with a
+    self-pipe, joins within about 1 s and kills pw-mon (no zombies). A missing or dead pw-mon is
+    restarted with backoff, inotify keeps working either way since its a plain fd this thread
+    owns.
     """
 
     def __init__(
@@ -687,7 +618,7 @@ class Subscriber:
             target=self._run, name="rp5deck-audio-subscriber", daemon=True
         )
 
-    # -- overridable in tests --
+    # -- tests can swap these --
     def _spawn_pwmon(self):
         return subprocess.Popen(
             PW_MON_CMD, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
@@ -731,7 +662,7 @@ class Subscriber:
                 try:
                     proc.wait(timeout=PW_MON_TERM_TIMEOUT)
                 except subprocess.TimeoutExpired:
-                    # it ignored SIGTERM: do not leave it running (RV1 minor)
+                    # it ignored SIGTERM, dont leave it running
                     log.warning("pw-mon ignored SIGTERM for %.1fs; sending SIGKILL",
                                 PW_MON_TERM_TIMEOUT)
                     proc.kill()
@@ -748,8 +679,8 @@ class Subscriber:
 
     # -- the one background thread --
     def _run(self) -> None:
-        # A thread that dies must say so in rp5deck.log (not only on stderr)
-        # and must not leave pw-mon running until stop() (RV2-m5).
+        # A thread that dies has to say so in rp5deck.log (not only stderr) and must not leave pw-mon
+        # running until stop().
         try:
             self._loop()
         except Exception:
@@ -768,8 +699,7 @@ class Subscriber:
             if self._pwmon_proc is None and now >= self._pwmon_next_attempt:
                 try:
                     self._pwmon_proc = self._spawn_pwmon()
-                    # A restart may follow a sink swap (HDMI <-> HiFi); the
-                    # ids are cheap to re-resolve and rarely change.
+                    # a restart can follow a sink swap (HDMI <-> HiFi), the ids are cheap to look up again
                     node_id, device_id = self._resolve_ids()
                     self._classifier.node_id = node_id
                     self._classifier.device_id = device_id
@@ -789,19 +719,16 @@ class Subscriber:
                 pwmon_fd = self._pwmon_proc.stdout.fileno()
                 rlist.append(pwmon_fd)
 
-            # Wake promptly for a pending pw-mon retry rather than sleeping
-            # a full second past it - otherwise restart_backoff would only
-            # be honoured up to the 1.0s safety-net granularity below.
+            # wake up for a pending pw-mon retry instead of sleeping a full second past it, otherwise
+            # restart_backoff would only be honoured to the 1 s safety net below
             select_timeout = 1.0
             if self._pwmon_proc is None:
                 select_timeout = max(0.0, min(select_timeout, self._pwmon_next_attempt - now))
             try:
                 ready, _, _ = select.select(rlist, [], [], select_timeout)
             except (OSError, ValueError):
-                # A genuinely bad fd should not spin this thread at 100%
-                # CPU forever - back off briefly and let the top-of-loop
-                # stop_event check (not just the stop_r-in-ready branch
-                # below) get a chance to end the thread.
+                # a bad fd shouldnt spin this thread at 100% CPU forever, back off briefly so the stop check at
+                # the top of the loop gets a chance to end it
                 self._faillog.exception("select", "select() failed in the audio Subscriber")
                 self._stop_event.wait(0.05)
                 ready = []
@@ -821,7 +748,7 @@ class Subscriber:
                     self._faillog.exception("pwmon-read", "reading pw-mon failed")
                     chunk = b""
                 if not chunk:
-                    # pw-mon exited on its own - reap it, back off, retry.
+                    # pw-mon exited by itself, reap it, back off and retry
                     self._faillog.warning("pwmon-exit", "pw-mon exited; restarting in %.1fs",
                                           self._restart_backoff)
                     self._kill_pwmon()
@@ -849,7 +776,6 @@ class Subscriber:
             try:
                 self._callback(kind)
             except Exception:
-                # RV5b: this used to vanish without a trace. Rate-limited, so a
-                # handler that fails on every change logs once, not per event.
+                # rate limited, so a handler that fails on every change logs once, not every event
                 self._faillog.exception("callback", "audio change callback failed for %r",
                                         kind)

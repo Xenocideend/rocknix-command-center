@@ -1,5 +1,5 @@
 """Azahar's game window must be placed on the game screen by
-rocknix-config/092-dual-screen-persist.
+rocknix-config/dual-screen-layout-and-power.
 
 Device, 25 Sep: Azahar restored a Qt geometry saved on the built-in panel, so
 its game window mapped on DSI-1 on top of the Secondary Window; with no frame
@@ -21,7 +21,8 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(APP))
-PATH_092 = os.environ.get("SW1_092_PATH") or os.path.join(os.path.dirname(APP), "scripts", "092-dual-screen-persist")
+PATH_092 = os.environ.get("SW1_092_PATH") or os.path.join(
+    os.path.dirname(APP), "scripts", "dual-screen-layout-and-power")
 
 # [title=\"...\" app_id=\"...\"] inside a double-quoted swaymsg argument
 CRIT_RE = re.compile(r'\[title=\\"(\^Azahar .+?)\\" app_id=\\"(.+?)\\"\]')

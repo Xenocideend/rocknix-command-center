@@ -16,7 +16,8 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.dirname(HERE)
-TESTS = ["tests.test_charge_stuck", "tests.test_charge_stuck_view", "tests.test_charge_stuck_app"]
+TESTS = ["tests.test_charge_stuck", "tests.test_charge_stuck_view", "tests.test_charge_stuck_app",
+         "tests.test_charge_warning"]
 
 # (what, file, old anchor, new text) - each anchor must appear exactly once
 # in the unbroken file.
@@ -31,11 +32,16 @@ BREAKS = [
      "            f.seek(reg * REG_LINE_LEN)\n            line = f.read(REG_LINE_LEN)\n",
      "            data = f.read()\n"
      "            line = data[reg * REG_LINE_LEN:reg * REG_LINE_LEN + REG_LINE_LEN]\n"),
-    ("dismiss never re-arms on unplug", "charge_stuck_view.py",
-     '        if not sample["plugged"]:\n'
-     "            self.dismissed = False       # re-arm: the owner's own \"next plug-in\" rule\n",
-     '        if not sample["plugged"]:\n'
-     "            pass       # BROKEN: never re-arms\n"),
+    ("the warning never closes on unplug", "charge_stuck_view.py",
+     '        elif self.warning and not sample["plugged"]:\n'
+     "            self.warning = False\n",
+     "        elif False:\n"
+     "            self.warning = False\n"),
+    ("the warning closes as soon as charging recovers, before the unplug", "charge_stuck_view.py",
+     "        if self.stuck and not self.warning:\n",
+     "        if self.warning and not self.stuck:\n"
+     "            self.warning = False\n"
+     "        elif self.stuck and not self.warning:\n"),
 ]
 
 

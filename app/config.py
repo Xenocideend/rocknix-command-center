@@ -1,93 +1,59 @@
-"""config - rp5deck settings, from ONE JSON file read at start.
+"""rp5deck's settings, one JSON file read at start.
 
-    /storage/rp5deck/config.json   (override the path with RP5DECK_CONFIG)
+    /storage/rp5deck/config.json   (RP5DECK_CONFIG overrides the path)
 
-Schema v1 (see research/R6-settings.md): settings are grouped under
-companion / manuals / command_center / screens / audio - SCHEMA below is the
-single source of truth for every key (type, allowed values/range, default,
-whether it needs an rp5deck restart, a group and a label) and is what
-settings_view.py walks to build one control per key.
+SCHEMA below is the one source of truth for every key (type, allowed values, default,
+whether it needs a restart, group and label), and settings_view.py builds one control per
+key from it.
 
-Backward compatibility (mandatory - main.py is unchanged): main.py reads
-cfg["output"] (the wl_output the Command Center's layer surface binds to)
-and cfg["es_output"] (the screen EmulationStation / games live on) exactly
-as before. Both keys are still always present in the dict `load()` returns,
-derived from screens.command_center_screen / screens.es_screen
-("builtin_bottom" -> "DSI-1", "addon_top" -> "DP-1"). They are read-only
-conveniences: save() never persists them, they are recomputed every load.
+main.py still reads cfg["output"] and cfg["es_output"]. Theyre always in what load()
+returns, worked out from screens.command_center_screen / screens.es_screen
+("builtin_bottom" -> DSI-1, "addon_top" -> DP-1), and save() never writes them.
 
-Migration: a file in today's shape ({"output": ..., "es_output": ...}, no
-"schema_version") is turned into screens.* the first time it is loaded.
-Only the two known connector names round-trip through the new two-screen
-enum; anything else (a hand-edited third output) cannot be represented and
-is dropped back to the default, with a note - never a crash.
+An old flat file ({"output": ..., "es_output": ...}, no schema_version) gets turned into
+screens.* the first time its loaded. Anything that isnt one of the two known outputs falls
+back to the default with a note, never a crash.
 
-Validation, key by key: wrong type, out of range, or an unlisted enum value
-falls back to that key's own default alone, with a note recorded - a typo
-in a settings file must not take the panel away. Unknown keys (a field this
-version of rp5deck does not know about yet, or one it used to but no longer
-carries meaning for) are preserved as-is and written back unchanged.
+Every key is checked on its own. A wrong type, out of range or unknown enum value falls
+back to that key's default with a note, so a typo cant take the panel away. Keys we dont
+know are kept and written back as they were.
 
-screens.es_screen and screens.command_center_screen must name opposite
-outputs (there are only two screens); if a file ever has them equal, the
-Command Center screen is reset to the other one, both at load and at save.
+The two screens.* keys always name opposite outputs. es_screen is the swap setting and
+dual-screen-layout-and-power reads it too, so both have to agree on what a file means:
+es_screen_from_raw() is that shared rule.
 
-SW1 (screen swap, = B13): screens.es_screen is THE swap setting, and it has
-two readers that must agree byte-for-byte on what a file means - this
-module and 092-dual-screen-persist, which moves ES. The shared contract is
-es_screen_from_raw(): "builtin_bottom" only if the file is a JSON object
-whose screens.es_screen is literally "builtin_bottom"; anything else (no
-file, bad JSON, a legacy flat file, a typo) is "addon_top", the unswapped
-default. load() applies exactly that to es_screen and derives
-command_center_screen as its opposite, so a legacy file's migrated screens
-(which 092 cannot see) never disagree with where 092 actually puts ES. The
-old RV1-M4 guard (_lock_screens_to_default, "ignore any non-default
-combination") is gone: rp5deck now binds its layer surface to whichever
-output ES is really on the other side of (screen_swap.py), so no stored
-value can hide the Command Center. WIRED (below) lists every schema key
-that has a real consumer; settings_view.py only shows a control for a WIRED
-key; command_center_screen stays out of it (it is derived, never chosen).
-
-Save is atomic: a temp file is written in the same directory, flushed and
-fsync'd, then renamed over the target - a crash mid-write leaves the old
-file intact, never a half-written one.
-
-Environment variables (RP5DECK_AUDIO_DRYRUN, RP5DECK_LOG_DIR, RP5DECK_RUN_DIR,
-RP5DECK_DEBUG) are process plumbing set by the supervisor or a test harness,
-not user settings, and stay in the environment.
+Saving writes a temp file, fsyncs it and renames it over the old one, so a crash mid-write
+leaves the old file whole.
 """
 import json
 import os
 import tempfile
 
+import screen_map
+
 SCHEMA_VERSION = 1
 DEFAULT_PATH = "/storage/rp5deck/config.json"
 
-# The only two screens rp5deck knows about, and the wl_output each is wired
-# to on this device (DESIGN.md "Screen terms").
+# The only two screens rp5deck knows, and the output each one is on this device.
 SCREEN_VALUES = ("addon_top", "builtin_bottom")
-SCREEN_TO_OUTPUT = {"builtin_bottom": "DSI-1", "addon_top": "DP-1"}
+SCREEN_TO_OUTPUT = {"builtin_bottom": screen_map.CURRENT.bottom, "addon_top": screen_map.CURRENT.top}
 OUTPUT_TO_SCREEN = {v: k for k, v in SCREEN_TO_OUTPUT.items()}
 
 MEDIA_VALUES = ("video", "titleshot", "mix", "image", "marquee", "fanart",
                 "cartridge", "boxback")
 
-# Tile customisation: screens.Home's tile names, in its construction order -
-# the canonical set both screens.py and config.py agree on (add a tile in
-# Home.__init__, add its name here in the same pass; tests/test_config.py
-# and the cc*_merged suites both assert the two stay in sync). "home.settings"
-# is deliberately excluded from HIDEABLE_TILE_KEYS: it is the one screen that
-# can undo everything else here, so the owner must never be able to hide it
-# and lock themselves out - enforced here (an attempt to store it in
-# hidden_tiles fails _validate() outright, since it is not a legal member of
-# the "tile_set" field's own "values"), not just in the UI.
-HOME_TILE_KEYS = ("home.mixer", "home.hud", "home.browser",
-                  "home.discord", "home.ytapp", "home.hotkeys", "home.clean", "home.settings",
-                  "home.swap", "home.lights", "home.keyboard", "home.sleep")
+# Home's tile names in the order Home builds them (add a tile in Home.__init__ and here
+# together, the tests check they match). "home.settings" can never be hidden since its the
+# one screen that can undo everything else, and _validate() refuses it, not just the UI.
+# HUD, Browser, Discord and YouTube App are tabs above Home now, so they arent grid tiles
+# (HUD still shows in the over-a-game overlay, which has no tabs).
+HOME_TILE_KEYS = ("home.mixer", "home.hotkeys", "home.clean", "home.settings",
+                  "home.swap", "home.lights", "home.keyboard", "home.power",
+                  "home.topscreen", "home.perf")  # top screen off, performance
 HIDEABLE_TILE_KEYS = tuple(k for k in HOME_TILE_KEYS if k != "home.settings")
 
 GROUPS = ("companion", "manuals", "command_center", "screens", "audio", "lights", "youtube",
-          "battery", "appearance", "dualscreen")
+          "steam", "battery", "appearance", "dualscreen")
 GROUP_LABELS = {
     "companion": "Companion view",
     "manuals": "Manuals",
@@ -96,14 +62,14 @@ GROUP_LABELS = {
     "audio": "Audio",
     "lights": "Stick lights",
     "youtube": "YouTube",
+    "steam": "Steam",
     "battery": "Battery",
     "appearance": "Appearance",
     "dualscreen": "Dual-screen keys",
 }
 
-# Kept in sync with palettes.PRESET_ORDER + ("custom",) by
-# tests/test_palettes.py (config.py itself stays import-free of
-# palettes.py/ui.py - see the "appearance" schema block below).
+# kept equal to palettes.PRESET_ORDER + ("custom",) by the tests, config.py doesnt import
+# palettes.py
 THEME_PRESET_VALUES = (
     "default", "high_contrast",
     "rp5_black", "rp5_white", "rp5_16bit", "rp5_gc", "rp5_yellow", "rp5_turquoise",
@@ -111,22 +77,26 @@ THEME_PRESET_VALUES = (
     "custom",
 )
 
+# the panel size the Command Center lays out for, kept equal to screen_presets.VALUES by the
+# tests
+UI_RESOLUTION_VALUES = ("auto", "1920x1080", "1280x720", "1024x768", "720x720", "640x480")
+
+# ES's A/B/X/Y prompt colours, separate from the screen theme, kept equal to
+# button_colours.VALUES by the tests
+BUTTON_COLOUR_VALUES = (
+    "follow_theme", "use_theme", "rp5_16bit", "rp5_black", "rp5_white", "rp5_gc", "rp5_yellow",
+    "rp5_turquoise", "super_famicom", "snes_us", "xbox", "playstation", "dreamcast",
+    "gamecube", "steam_deck", "modern_grey",
+)
+
 # ---------------------------------------------------------------------------
-# Schema: one entry per leaf setting (research/R6-settings.md §3), with
-# owner-approved changes over R6's draft: manuals.viewer gains a "native"
-# option (R7 confirmed poppler/pdftoppm is on-device) and defaults to it, and
-# command_center.hardware_button defaults to "btn_back_f1" - device-verified
-# 23 Sep: the summon reader saw a debounced SUMMON from Back (KEY_F1 on
-# "InputPlumber Keyboard"), while BOTH paddle codes produced 0 events in
-# 120 s, and the owner confirmed the RP5 has no rear paddles at all (L2/R2
-# are analog axes, not the digital paddle buttons this setting binds to).
-# The paddle enum values stay in the schema (some other device might have
-# them) - see WIRED's hardware_button comment and _note_paddle_button()
-# below for how a stored paddle value is still honoured, just flagged.
+# Schema, one entry per setting. manuals.viewer defaults to "native" (poppler is on the
+# device). command_center.hardware_button defaults to "btn_back_f1" because the RP5 has no
+# rear paddles (L2/R2 are analog). The paddle values stay for other devices, see
+# _note_paddle_button().
 #
-# key_path is a tuple addressing the nested config dict. Add a key here and
-# it must gain a control in settings_view.py too - tests/test_settings_view.py
-# asserts one-to-one coverage.
+# key_path addresses the nested dict. A new key needs a control in settings_view.py too, the
+# tests check every key has one.
 # ---------------------------------------------------------------------------
 SCHEMA = [
     # -- Companion view ------------------------------------------------
@@ -179,12 +149,9 @@ SCHEMA = [
     {"key_path": ("companion", "idle_slideshow_interval_s"), "type": "int",
      "range": (5, 60), "default": 10, "restart": False,
      "group": "companion", "label": "Idle slideshow interval"},
-    # CC2: what the bottom screen shows during a single-screen game (any
-    # game that does NOT put its own window on DSI-1 - the DS/3DS/Wii U
-    # second-screen cases go HIDDEN before companion.py is even consulted,
-    # see DESIGN.md "Three display modes"). CC3 maps this directly onto the
-    # ES-DE Companion app's "Game Playing Screen Behavior" (On/Dim/Off/
-    # Manual/Guide) - see research/CC3-esde-companion.md.
+    # what the bottom screen shows during a single-screen game (DS/3DS/Wii U games put their own
+    # window here and go HIDDEN before this is asked). It matches the ES-DE Companion app's
+    # "Game Playing Screen Behavior" (On/Dim/Off/Manual/Guide).
     {"key_path": ("companion", "in_game_display"), "type": "enum",
      "values": ("art", "dim", "off", "manual", "hud", "clock", "slideshow"),
      "default": "art", "restart": False, "group": "companion",
@@ -192,22 +159,10 @@ SCHEMA = [
     {"key_path": ("companion", "brightness_pct"), "type": "int",
      "range": (5, 100), "step": 5, "default": 80, "restart": False,
      "group": "companion", "label": "Bottom-screen brightness"},
-    # CC4: the system-carousel background colour (companion.py
-    # CompanionView.draw() - the fill behind the system logo, hard-coded
-    # BLACK until now). "theme" reads the installed ES theme's own colours
-    # (free, instant, but only the theme's *declared* colour - real-
-    # capture research on the device's es-theme-PiStation-X in
-    # theme_colour.py found no per-system override, just one theme-wide
-    # backgroundColor). "sample" takes a read-only `grim` screenshot of
-    # DP-1 (the ES/top screen) instead - exact for whatever ES is really
-    # drawing, including a per-system background IMAGE the theme parser
-    # cannot see, but costs one screenshot per system change (debounced
-    # ~400ms of no further scrolling, and never while a game is running -
-    # theme_colour.SettleGate/should_sample). "off" keeps the old BLACK.
-    # Default "sample" since test day (24 Sep): on the device PiStation-X's
-    # default colorset (gray) has backgroundColor ffffff - a tint over a
-    # dark background image - so "theme" painted the panel WHITE while ES
-    # showed navy; the DP-1 sample measured (0, 2, 31), what ES shows.
+    # The colour behind the system logo on the carousel. "theme" uses the ES theme's declared
+    # colour (free but can be wrong), "sample" takes a small read-only grim shot of the top
+    # screen (exact, one shot per system change, never during a game), "off" is black.
+    # "sample" is the default because PiStation-X declares white while it actually draws navy.
     {"key_path": ("companion", "system_bg_source"), "type": "enum",
      "values": ("theme", "sample", "off"), "default": "sample",
      "restart": False, "group": "companion", "label": "System background colour"},
@@ -234,18 +189,14 @@ SCHEMA = [
     {"key_path": ("command_center", "auto_close_timeout_s"), "type": "int",
      "range": (0, 120), "default": 0, "restart": False,
      "group": "command_center", "label": "Auto-close timeout"},
-    # SW1: the small pull tab in the corner of the game/ES screen that opens
-    # the Command Center over the game (cc_overlay.py). Off = no tab; the
-    # Back button still opens it there when the other screen cannot show it.
+    # the small pull tab in the corner of the game screen that opens the Command Center over the
+    # game. Off means no tab, the Back button still opens it there.
     {"key_path": ("command_center", "game_screen_tab"), "type": "bool",
      "default": True, "restart": False, "group": "command_center",
      "label": "Pull tab on game screen"},
-    # CC5 (hidden_overlay.py): the Command Center over an emulator's second
-    # screen. overlay_on_hidden: the hardware button opens it while a DS /
-    # 3DS / Wii U window owns the panel's screen (off = cc_overlay.py's
-    # game-screen Command Center takes that press, SW1's behaviour).
-    # corner_handle: a small tap target in one corner of that screen while
-    # such a window is there (costs its pixels of the game's touch area).
+    # The Command Center over an emulator's second screen. overlay_on_hidden lets the hardware
+    # button open it while a DS/3DS/Wii U window owns this screen. corner_handle is a small tap
+    # spot in one corner while that window is up (it takes those pixels from the game's touch area).
     {"key_path": ("command_center", "overlay_on_hidden"), "type": "bool",
      "default": True, "restart": False, "group": "command_center",
      "label": "Open over DS/3DS screen"},
@@ -253,16 +204,8 @@ SCHEMA = [
      "values": ("off", "top-left", "top-right", "bottom-left", "bottom-right"),
      "default": "off", "restart": False, "group": "command_center",
      "label": "Corner handle"},
-    # Tile customisation (owner: "add a customisation mode with drag and
-    # drop tiles"): screens.Home's own "Edit tiles" mode is the one real
-    # control for both of these - like lights.*, neither is in WIRED
-    # (settings_view.py's generic array_enum reorder page assumes
-    # MEDIA_VALUES-style labels and would need its own "tile_set" renderer
-    # for hidden_tiles; the dedicated in-place drag-and-drop UI is a better
-    # fit for a spatial grid than a generic list page either way).
-    # tile_order must be a full permutation of HOME_TILE_KEYS (array_enum's
-    # existing "nothing dropped" rule) - a hidden tile still holds its slot
-    # in the order for when it is shown again.
+    # Home's own Edit tiles mode is the real control for these two, so neither is in WIRED.
+    # tile_order has to hold every tile, a hidden one keeps its slot for when its shown again.
     {"key_path": ("command_center", "tile_order"), "type": "array_enum",
      "values": HOME_TILE_KEYS, "default": list(HOME_TILE_KEYS), "restart": False,
      "group": "command_center", "label": "Tile order"},
@@ -271,17 +214,34 @@ SCHEMA = [
      "group": "command_center", "label": "Hidden tiles"},
 
     # -- Screens -----------------------------------------------------------
-    # SW1: es_screen is shown as ONE toggle, "Swap screens" (on =
-    # builtin_bottom: ES and games on the built-in panel, the Command Center
-    # on the add-on). command_center_screen is always its opposite and has
-    # no control of its own. Live, not restart: 092 re-reads the file every
-    # poll and rp5deck follows ES (screen_swap.py).
+    # es_screen shows as one toggle, "Swap screens" (on = ES and games on the built-in panel,
+    # the Command Center on the add-on). command_center_screen is always the opposite and has no
+    # control. Its live: dual-screen-layout-and-power re-reads the file every poll and rp5deck
+    # follows ES.
     {"key_path": ("screens", "es_screen"), "type": "enum",
      "values": SCREEN_VALUES, "default": "addon_top", "restart": False,
      "group": "screens", "label": "Swap screens"},
     {"key_path": ("screens", "command_center_screen"), "type": "enum",
      "values": SCREEN_VALUES, "default": "builtin_bottom", "restart": True,
      "group": "screens", "label": "Command Center screen"},
+    # bottom is the live backlight (read every time Settings opens, never applied at start so
+    # ROCKNIX's own brightness stays in charge until you move it). top dims the add-on in
+    # software, applied at start. match keeps top = bottom x match_ratio.
+    {"key_path": ("screens", "bottom_brightness"), "type": "int",
+     "range": (5, 100), "default": 50, "restart": False,
+     "group": "screens", "label": "Bottom screen brightness"},
+    {"key_path": ("screens", "top_brightness"), "type": "int",
+     "range": (20, 100), "default": 100, "restart": False,
+     "group": "screens", "label": "Top screen brightness"},
+    {"key_path": ("screens", "match_brightness"), "type": "bool",
+     "default": False, "restart": False,
+     "group": "screens", "label": "Match brightness"},
+    {"key_path": ("screens", "match_ratio"), "type": "float",
+     "range": (0.2, 20.0), "default": 1.0, "restart": False,
+     "group": "screens", "label": "Match ratio"},
+    {"key_path": ("screens", "ui_resolution"), "type": "enum",
+     "values": UI_RESOLUTION_VALUES, "default": "auto", "restart": False,
+     "group": "screens", "label": "Screen size preset"},
 
     # -- Audio -------------------------------------------------------------
     {"key_path": ("audio", "volume_step_pct"), "type": "int",
@@ -291,14 +251,9 @@ SCHEMA = [
      "default": True, "restart": False, "group": "audio",
      "label": "Show volume overlay"},
 
-    # -- Stick lights (RG) ---------------------------------------------
-    # rgb_leds.py/rgb_view.py own these; config.py only stores + validates
-    # them (never touches system.cfg - see rgb_leds.py's module docstring).
-    # None of the four are in WIRED: their one real control is the
-    # dedicated "Stick lights" sheet (rgb_view.RGBSheet, opened from its
-    # own home tile), the same pattern hotkeys_view.py/cleanstate_view.py
-    # use for their own dedicated sheets - see WIRED's comment below for
-    # why a generic Settings row for these would be redundant.
+    # -- Stick lights -------------------------------------------------------
+    # rgb_leds.py and rgb_view.py own these, config.py only stores and checks them (never
+    # touches system.cfg). None are in WIRED, their control is the Stick lights sheet.
     {"key_path": ("lights", "mode"), "type": "enum",
      "values": ("rocknix", "off", "colour"), "default": "rocknix",
      "restart": False, "group": "lights", "label": "Stick lights"},
@@ -313,82 +268,58 @@ SCHEMA = [
      "default": 200, "restart": False, "group": "lights",
      "label": "Brightness"},
 
-    # -- YouTube (YT2) ---------------------------------------------------
-    # yt_feeds.py owns everything cookie-gated (subscriptions/history/watch
-    # later feeds, the Firefox-cookie sign-in path) and reads this exactly
-    # one key as its kill switch: off means never pass
-    # --cookies-from-browser to yt-dlp, i.e. a hard opt-out back to
-    # search-only behaviour, independent of whether the owner is actually
-    # signed in to Firefox. Default True: the feature never sees or stores
-    # a password (it only reads Firefox's own already-trusted cookie
-    # database, read-only, the same profile already used for Discord/
-    # browsing), degrades to today's plain search on any failure, and is
-    # exactly what the owner asked for ("full-featured... sign in") - see
-    # patches/YT2-NOTES.md for the full justification.
+    # -- YouTube ----------------------------------------------------------------
+    # yt_feeds.py reads this as its kill switch. Off means never hand yt-dlp
+    # --cookies-from-browser, back to search only, whether youre signed in or not. On by
+    # default since it never sees a password (it reads the sealed profile's cookies) and falls
+    # back to plain search on any failure.
     {"key_path": ("youtube", "sign_in_enabled"), "type": "bool",
      "default": True, "restart": False, "group": "youtube",
      "label": "Use Firefox sign-in for YouTube"},
-    # AH: the YouTube TV app's control strip auto-hides after this many
-    # seconds of no touch, so leanback's 16:9 UI fills the whole 1080 px
-    # panel instead of the fixed 140 px every other BAR app reserves
-    # (bar_autohide.py, main.py's geometry()). 0 disables it - same "0 = off"
-    # convention as command_center.auto_close_timeout_s - and the strip
-    # keeps the fixed reserved zone forever, like Browser/Discord/mpv.
+    # the YouTube TV strip hides after this many seconds without a touch so leanback fills the
+    # whole panel. 0 turns it off and the strip keeps its fixed spot like the other BAR apps.
     {"key_path": ("youtube", "tv_bar_hide_s"), "type": "int",
      "range": (0, 30), "default": 4, "restart": False,
      "group": "youtube", "label": "Auto-hide TV controls"},
-    # YT4 (owner: "can we make youtube swipeable"): swipe direction ->
-    # WEBDRIVER key. True ("natural"/content-follows-finger, phone-scroll
-    # convention - a swipe left drags the NEXT item into view from the
-    # right, i.e. sends "right"): the default, matching how the owner
-    # already scrolls every other touchscreen. False sends the swipe's own
-    # raw compass direction instead (a swipe left sends "left") - offered
-    # since this is a judgement call, unverified with a real finger on the
-    # actual leanback UI (patches/YT4-NOTES.md).
+    # Swipe direction for YouTube. True is phone-style (content follows the finger, a swipe left
+    # sends "right"), False sends the swipe's own direction. Not tried with a real finger on
+    # leanback yet.
     {"key_path": ("youtube", "tv_swipe_natural"), "type": "bool",
      "default": True, "restart": False, "group": "youtube",
      "label": "Natural swipe direction"},
 
-    # -- Battery (YT4: Safe charge) ---------------------------------------
-    # rocknix-config/095-charge-limit (Main's file, not edited here) is what
-    # actually enforces this at boot and applies a live change; charge_limit.py
-    # mirrors its exact file/sysfs contract. Range/step/default are a short
-    # literature + OEM review (patches/YT4-NOTES.md, cited sources): 85 keeps
-    # 095's own already-shipped DEFAULT unchanged for an owner who never
-    # touches this UI at all - only reachable by moving the slider or the
-    # toggle. 50-95 in steps of 5 mirrors 095's own accepted minimum (50) and
-    # leaves 100 (uncapped) exclusively to the OFF state of the toggle, never
-    # a slider value, so "no limit" is one unambiguous state, not two.
+    # -- Steam ------------------------------------------------------------------
+    # What the bottom screen shows while a Steam game runs. "same" follows companion.in_game_display like
+    # every other game, the rest are that setting's own choices (no "manual", Steam games have none).
+    {"key_path": ("steam", "in_game_display"), "type": "enum",
+     "values": ("same", "art", "dim", "off", "hud", "clock", "slideshow"),
+     "default": "same", "restart": False, "group": "steam",
+     "label": "During a Steam game, show"},
+
+    # -- Battery (Safe charge) --------------------------------------------------
+    # rocknix-config/battery-charge-limit is what actually applies this at boot and live,
+    # charge_limit.py follows its file and sysfs rules. 85 is its default. 50-95 in steps of 5,
+    # and 100 (no limit) is only ever the toggle's off state so "no limit" means one thing.
     {"key_path": ("battery", "safe_charge_enabled"), "type": "bool",
      "default": True, "restart": False, "group": "battery",
      "label": "Safe charge"},
-    # range/step/default must stay in step with charge_limit.py's own
-    # MIN_END/MAX_END/STEP/DEFAULT_END constants (not imported here - config.py
-    # stays dependency-free, same as lights.*/rgb_leds.py's own constants
-    # just below); tests/test_config.py checks the two agree.
+    # has to match charge_limit.py's MIN_END/MAX_END/STEP/DEFAULT_END (not imported, config.py
+    # stays dependency free), the tests check it
     {"key_path": ("battery", "safe_charge_end_pct"), "type": "int",
      "range": (50, 95), "step": 5, "default": 85, "restart": False,
      "group": "battery", "label": "Stop charging at"},
 
-    # -- Appearance (colour themes) ---------------------------------------
-    # palettes.py owns the actual colour data (PRESET_ORDER, PRESETS,
-    # derive_custom()) and stays dependency-free of config.py, the same
-    # direction every other module here already goes; THEME_PRESET_VALUES
-    # below is the one place that DOES need to know palettes.py's preset
-    # names, so it is spelled out by hand rather than imported (config.py
-    # stays import-free of ui.py/palettes.py, same reasoning as lights.*
-    # just above) - tests/test_palettes.py asserts this tuple, minus
-    # "custom", equals palettes.PRESET_ORDER exactly, so the two cannot
-    # silently drift apart.
+    # -- Appearance (colour themes) -----------------------------------------------
+    # palettes.py owns the colours and doesnt import config.py. The preset names are spelled out
+    # here by hand and the tests check they match palettes.PRESET_ORDER.
     {"key_path": ("appearance", "theme_preset"), "type": "enum",
      "values": THEME_PRESET_VALUES, "default": "default",
      "restart": False, "group": "appearance", "label": "Colour theme"},
-    # custom_accent/custom_bg/custom_text are deliberately NOT in WIRED,
-    # same reasoning as lights.left/lights.right just above: their one
-    # real control is the dedicated "Custom colours" sheet
-    # (appearance_view.AppearanceSheet, opened from the Appearance page's
-    # own "Edit custom colours..." button, not a generic settings row) -
-    # a hex_color has no FieldRow renderer and should not get one.
+    {"key_path": ("appearance", "button_colours"), "type": "enum",
+     "values": BUTTON_COLOUR_VALUES, "default": "follow_theme",
+     "restart": False, "group": "appearance", "label": "Button colours"},
+    # the custom colours arent in WIRED, their control is the Custom colours sheet (a hex colour
+    # has no Settings row and shouldnt)
     {"key_path": ("appearance", "custom_accent"), "type": "hex_color",
      "default": "#3d8bfd", "restart": False, "group": "appearance",
      "label": "Custom accent colour"},
@@ -399,23 +330,13 @@ SCHEMA = [
      "default": "#f4f5f7", "restart": False, "group": "appearance",
      "label": "Custom text colour"},
 
-    # -- Dual-screen per-game keys (dualscreen_keys.py) ---------------------
-    # dualscreen_keys.py always checks/restores two generic system.cfg keys
-    # (3ds.screen_layout, wiiu.gamepad_enabled - its own BASE_KEYS, not
-    # schema-driven). A DS title can need its own per-game override (e.g.
-    # nds["<rom filename>"].screen_layout=<value>), but which title and what
-    # value is specific to one owner's own ROM collection, so it is never
-    # hard-coded in the app - it lives here instead, with an EMPTY public
-    # default: a fresh install checks/restores only the two generic keys.
-    # Each entry: {"key": the exact system.cfg key name, "line": the exact
-    # "key=value" text dualscreen_keys.restore() appends verbatim (never
-    # built any other way), "rom": optional, a path relative to
-    # dualscreen_keys.ROMS_DIR (/storage/roms) - when given, the key only
-    # counts as "expected" while that file actually exists, so an owner
-    # without the game never sees it listed as missing. Not in WIRED: like
-    # lights.*/hidden_tiles just above, this is hand-edited config.json, not
-    # a generic Settings row (a per-key form has no FieldRow renderer and
-    # would need its own dedicated editor to be worth adding).
+    # -- Dual-screen per-game keys ---------------------------------------------------
+    # dualscreen_keys.py always checks two generic system.cfg keys (3ds.screen_layout,
+    # wiiu.gamepad_enabled). A DS game can need its own override, but which game and what value
+    # depends on someone's own collection, so it lives here, empty by default.
+    # Each entry: {"key": the exact system.cfg key, "line": the exact "key=value" text restore()
+    # appends, "rom": optional path under /storage/roms, the key only counts while that file
+    # exists}. Hand-edited, not in WIRED.
     {"key_path": ("dualscreen", "extra_keys"), "type": "key_line_list",
      "default": [], "restart": False, "group": "dualscreen",
      "label": "Extra per-game keys"},
@@ -425,77 +346,59 @@ FIELD_BY_PATH = {f["key_path"]: f for f in SCHEMA}
 
 
 # ---------------------------------------------------------------------------
-# WIRED: the subset of SCHEMA keys that actually change something at
-# runtime, verified by grepping every non-test .py file outside config.py/
-# settings_view.py for a reader (RV4-M2, RV5b check 12: 4 of 27 leaves had a
-# working Settings-screen control and precisely zero effect).
-# settings_view.py builds a control ONLY for a key in this set, so a schema
-# entry can be added ahead of its consumer without silently presenting a
-# fake working control - tests/test_settings_view.py asserts the two sets
-# (WIRED, and "has a control") are identical in both directions.
+# WIRED: the SCHEMA keys that actually change something, each with a real reader somewhere
+# outside config.py and settings_view.py. settings_view.py only builds a control for these,
+# so a key can be added before its reader without showing a fake control. The tests check
+# WIRED and "has a control" match both ways.
 #
-# screens.es_screen is WIRED since SW1: its consumers are 092 (reads
-# config.json itself and moves ES - rocknix-config/092-dual-screen-persist,
-# rp5_es_screen()) and screen_swap.py (read_setting() -> the fallback when
-# ES cannot be seen in the tree). screens.command_center_screen stays out:
-# it is derived (always the opposite), so a control for it would be the old
-# RV1-M4 "dangerous combo" all over again.
+# command_center_screen stays out since its derived, a control for it could put both
+# screens on the same output.
 # ---------------------------------------------------------------------------
 WIRED = frozenset([
-    ("companion", "media_priority"),               # companion.py CompanionController.refresh(): prio = self._c("media_priority")
-    ("companion", "play_video"),                    # companion.py CompanionController.video_allowed()/refresh(): self._c("play_video")
-    ("companion", "video_audio"),                   # companion.py CompanionController._start_video(): video_muted(self._c("video_audio"), ...)
-    ("companion", "video_start_delay_ms"),          # companion.py CompanionController._update_video(): delay = ... self._c("video_start_delay_ms")
-    ("companion", "video_loop"),                    # companion.py CompanionController._start_video(): self.video.play(..., loop=bool(self._c("video_loop")))
-    ("companion", "image_fit"),                     # companion.py CompanionController.video_frame_ready()/refresh()/_resolve_job(): self._c("image_fit")
-    ("companion", "background_dim"),                # companion.py CompanionController._resolved(): self.view.show_info(..., float(self._c("background_dim")))
-    ("companion", "show_metadata", "title"),         # companion.py metadata_lines(info, show): show.get("title", True)
-    ("companion", "show_metadata", "year"),          # companion.py metadata_lines(): show.get("year", True)
-    ("companion", "show_metadata", "developer"),     # companion.py metadata_lines(): show.get("developer", True)
-    ("companion", "show_metadata", "players"),       # companion.py metadata_lines(): show.get("players", True)
-    ("companion", "show_metadata", "rating"),        # companion.py metadata_lines(): show.get("rating", False)
-    ("companion", "show_metadata", "description"),   # companion.py metadata_lines(): show.get("description", False)
-    ("companion", "idle_mode"),                      # companion.py CompanionController._show_idle()/_arm_slides(): self._c("idle_mode")
-    ("companion", "idle_slideshow_interval_s"),      # companion.py CompanionController._arm_slides()/_ingame_slide_tick(): self._c("idle_slideshow_interval_s")
-    ("companion", "show_metadata", "playtime"),      # companion.py metadata_lines(): show.get("playtime", False)
-    ("companion", "in_game_display"),                # companion.py CompanionController._in_game_mode()/_apply_in_game_mode() (CC2)
-    ("manuals", "open_mode"),                        # companion.py CompanionController (auto-open check): config.get_value(..., ("manuals", "open_mode"))
-    ("command_center", "swipe_down_enabled"),        # summon.py PullDownStateMachine.swipe_down_enabled; main.py App (wires on_change + reads cfg at startup)
-    ("command_center", "swipe_sensitivity"),         # summon.py swipe_kwargs_for(); main.py App: config.get_value(..., ("command_center", "swipe_sensitivity"))
-    ("command_center", "hardware_button"),           # summon.py SummonButtonReader binding; main.py App: config.get_value(..., ("command_center", "hardware_button"))
-    ("command_center", "auto_close_timeout_s"),      # summon.py PullDownStateMachine._deadline; main.py App (ticks it down, wires on_change)
-    ("command_center", "game_screen_tab"),           # cc_overlay.py OverlayApp._tab_enabled(): config.get_value(..., ("command_center", "game_screen_tab"))
-    ("command_center", "overlay_on_hidden"),         # hidden_overlay.py OverlayController.enabled()/takes_summon(): setting_overlay_on_hidden(cfg) (CC5)
-    ("command_center", "corner_handle"),             # hidden_overlay.py OverlayController.corner()/_apply_handle(); main.py App.on_setting -> cc5.config_changed() (CC5)
-    ("audio", "show_volume_overlay"),                # main.py App: config.get_value(..., ("audio", "show_volume_overlay")) gates the volume HUD
-    ("screens", "es_screen"),                        # 092-dual-screen-persist rp5_es_screen() moves ES; screen_swap.read_setting() (SW1)
-    ("companion", "system_bg_source"),               # companion.py CompanionController (CC4): self._c("system_bg_source") - theme_colour.theme_background_color()/SampleCache
-    ("youtube", "sign_in_enabled"),                   # yt_feeds.py sign_in_enabled()/_cookies_args(): config.get_value(cfg, ("youtube","sign_in_enabled")) - the Firefox-cookie kill switch (YT2)
-    ("youtube", "tv_bar_hide_s"),                     # bar_autohide.BarAutoHide.timeout_s; main.py App (reads at startup, wires on_setting) (AH)
-    ("youtube", "tv_swipe_natural"),                  # web_tiles.YtAppSession.swipe_natural; main.py App.on_setting (YT4)
-    ("battery", "safe_charge_enabled"),               # main.py App.on_setting -> charge_limit.apply() (YT4)
-    ("battery", "safe_charge_end_pct"),               # main.py App.on_setting -> charge_limit.apply() (YT4)
-    ("appearance", "theme_preset"),                   # main.py App.on_setting -> palettes.apply_theme() (Appearance); cc_overlay.py re-reads it on its own poll
-    # appearance.custom_accent/custom_bg/custom_text are deliberately NOT
-    # here, same reasoning as lights.* just below: their one real control
-    # is the dedicated "Custom colours" sheet (appearance_view.py), not a
-    # generic hex_color settings row.
-    #
-    # lights.* (RG) are deliberately NOT here: settings_view.py has no
-    # renderer for "hex_color" (nor should it - a generic Settings row for
-    # a colour would duplicate the dedicated sheet), and mode/linked/
-    # brightness are edited from that same sheet, not the generic one.
-    # rgb_leds.py/rgb_view.py still read/write them for real through
-    # config.get_value()/set_value()/save_changes() - "wired" to a real
-    # consumer, just not to settings_view's generic UI. Compare
-    # hotkeys_view.py/cleanstate_view.py, whose dedicated-sheet settings
-    # never entered config.SCHEMA/WIRED at all.
-    #
-    # command_center.tile_order / hidden_tiles: same reasoning again - the
-    # real control is screens.Home's own "Edit tiles" mode (long-press,
-    # drag to reorder, tap a badge to hide/show), read/written directly
-    # through get_value()/set_value()/save_changes() from main.py, not a
-    # generic settings_view.py row.
+    ("companion", "media_priority"),  # companion CompanionController.refresh()
+    ("companion", "play_video"),  # companion video_allowed() / refresh()
+    ("companion", "video_audio"),  # companion _start_video()
+    ("companion", "video_start_delay_ms"),  # companion _update_video()
+    ("companion", "video_loop"),  # companion _start_video()
+    ("companion", "image_fit"),  # companion video_frame_ready() / refresh()
+    ("companion", "background_dim"),  # companion _resolved()
+    ("companion", "show_metadata", "title"),  # companion metadata_lines()
+    ("companion", "show_metadata", "year"),  # companion metadata_lines()
+    ("companion", "show_metadata", "developer"),  # companion metadata_lines()
+    ("companion", "show_metadata", "players"),  # companion metadata_lines()
+    ("companion", "show_metadata", "rating"),  # companion metadata_lines()
+    ("companion", "show_metadata", "description"),  # companion metadata_lines()
+    ("companion", "idle_mode"),  # companion _show_idle() / _arm_slides()
+    ("companion", "idle_slideshow_interval_s"),  # companion _arm_slides() / _ingame_slide_tick()
+    ("companion", "show_metadata", "playtime"),  # companion metadata_lines()
+    ("companion", "in_game_display"),  # companion _in_game_mode()
+    ("manuals", "open_mode"),  # companion's auto-open check
+    ("command_center", "swipe_down_enabled"),  # summon PullDownStateMachine.swipe_down_enabled
+    ("command_center", "swipe_sensitivity"),  # summon swipe_kwargs_for()
+    ("command_center", "hardware_button"),  # summon SummonButtonReader
+    ("command_center", "auto_close_timeout_s"),  # summon PullDownStateMachine timeout
+    ("command_center", "game_screen_tab"),  # cc_overlay OverlayApp._tab_enabled()
+    ("command_center", "overlay_on_hidden"),  # hidden_overlay enabled() / takes_summon()
+    ("command_center", "corner_handle"),  # hidden_overlay corner(), live via main.App.on_setting
+    ("audio", "show_volume_overlay"),  # main.App's volume overlay
+    ("screens", "bottom_brightness"),  # brightness.BottomBacklight
+    ("screens", "top_brightness"),  # brightness.TopDim
+    ("screens", "match_brightness"),  # main.App match_ratio
+    ("screens", "ui_resolution"),  # screen_presets.layout_size via main.App._resize
+    ("screens", "es_screen"),  # dual-screen-layout-and-power moves ES, screen_swap.read_setting()
+    ("companion", "system_bg_source"),  # companion's system background (theme_colour)
+    ("youtube", "sign_in_enabled"),  # yt_feeds sign_in_enabled(), the cookie kill switch
+    ("youtube", "tv_bar_hide_s"),  # bar_autohide.BarAutoHide.timeout_s
+    ("youtube", "tv_swipe_natural"),  # web_tiles.YtAppSession.swipe_natural
+    ("steam", "in_game_display"),  # companion _in_game_raw() for a Steam game
+    ("battery", "safe_charge_enabled"),  # charge_limit.apply()
+    ("battery", "safe_charge_end_pct"),  # charge_limit.apply()
+    ("appearance", "theme_preset"),  # palettes.apply_theme(), the game-screen overlay re-reads it on its own poll
+    ("appearance", "button_colours"),  # button_colours.apply()
+    # Not in WIRED on purpose, each has its own dedicated sheet instead of a generic row:
+    # the custom colours (Custom colours sheet), lights.* (Stick lights sheet) and
+    # tile_order / hidden_tiles (Home's Edit tiles). They still read and write through
+    # get_value()/set_value()/save_changes().
 ])
 
 
@@ -548,9 +451,9 @@ def _set(d, path, value):
 
 
 def _schema_tree():
-    """Nested dict mirroring SCHEMA's key paths: True at every leaf, a
-    dict at every branch. Used to tell "a key this schema knows about"
-    from "an unknown key to preserve verbatim"."""
+    """Nested dict mirroring SCHEMA's key paths (True at every leaf), to tell a key we know from
+    an unknown one to keep as is.
+    """
     tree = {}
     for f in SCHEMA:
         node = tree
@@ -565,9 +468,9 @@ _TREE = _schema_tree()
 
 
 def defaults():
-    """A fresh nested dict of every schema default, plus schema_version and
-    the derived legacy output/es_output keys - what load() returns for a
-    missing file."""
+    """A fresh dict of every default plus schema_version and the derived output/es_output, what
+    load() returns with no file.
+    """
     cfg = {"schema_version": SCHEMA_VERSION}
     for f in SCHEMA:
         _set(cfg, f["key_path"], _copy_default(f["default"]))
@@ -622,11 +525,9 @@ def _validate(field, value):
             return (False, value)
         return (True, out)
     if t == "tile_set":
-        # Like array_enum's membership check, but a SUBSET (order does not
-        # matter, dropping members is the whole point) - hidden_tiles: any
-        # key not in field["values"] is refused outright, which is how
-        # "home.settings" (never in HIDEABLE_TILE_KEYS) can never be stored
-        # here even by a hand-edited config.json.
+        # Like array_enum's check but a subset (dropping members is the point). Anything not in
+        # field["values"] is refused, which is how "home.settings" can never end up hidden even from
+        # a hand-edited file.
         if not isinstance(value, list):
             return (False, value)
         vals = set(field["values"])
@@ -639,13 +540,9 @@ def _validate(field, value):
             out.append(v)
         return (True, out)
     if t == "key_line_list":
-        # dualscreen.extra_keys: a list of {"key", "line", "rom" (optional)}
-        # - "key"/"line" must be non-empty strings, "key" must be unique in
-        # the list (a duplicate would make restore()'s key->line map
-        # ambiguous), and "rom" (when present) must be a non-empty relative
-        # path - no leading "/" and no ".." component, so a hand-edited
-        # config.json can never point dualscreen_keys.check() outside
-        # ROMS_DIR.
+        # dualscreen.extra_keys: a list of {"key", "line", "rom" (optional)}. key and line are
+        # non-empty strings, key is unique (restore() maps key to line), and rom is a relative path
+        # with no leading "/" or "..", so a hand-edited file cant point the check outside ROMS_DIR.
         if not isinstance(value, list):
             return (False, value)
         out = []
@@ -668,13 +565,13 @@ def _validate(field, value):
                 entry["rom"] = rom
             out.append(entry)
         return (True, out)
-    return (False, value)               # an unknown type in SCHEMA itself: refuse, don't guess
+    return (False, value)  # an unknown type in SCHEMA itself, refuse it dont guess
 
 
 def _merge_unknown(data, cfg, tree):
-    """Copy any key in `data` that SCHEMA does not know about into `cfg`
-    verbatim (recursing into branches SCHEMA does partially cover), so a
-    future or foreign key round-trips through load()/save() unharmed."""
+    """Copies any key SCHEMA doesnt know into cfg as is (recursing into partly known branches),
+    so a future or foreign key survives load()/save().
+    """
     if not isinstance(data, dict):
         return
     for k, v in data.items():
@@ -714,14 +611,12 @@ def _fixup_screens(cfg, notes):
 
 
 def es_screen_from_raw(raw):
-    """THE shared contract for what a config file means for the swap (SW1).
-    092-dual-screen-persist's rp5_es_screen() implements exactly this in its
-    own python3 snippet (tests/test_sw1_092.py runs both over the same files
-    and requires identical answers): "builtin_bottom" only when `raw` (the
-    parsed JSON, before any migration) is an object whose "screens" is an
-    object whose "es_screen" is literally "builtin_bottom". Everything else
-    - None (no file / unreadable / bad JSON), a list, a legacy flat file, a
-    typo, a wrong type - is "addon_top", the unswapped default."""
+    """The shared rule for what a file means for the swap. dual-screen-layout-and-power's
+    rp5_es_screen() does exactly this too (test_sw1_092.py runs both on the same files).
+    "builtin_bottom" only when raw is an object whose "screens" is an object whose
+    "es_screen" is literally "builtin_bottom". Anything else (no file, bad JSON, a legacy flat
+    file, a typo) is "addon_top", the unswapped default.
+    """
     if isinstance(raw, dict):
         screens = raw.get("screens")
         if isinstance(screens, dict) and screens.get("es_screen") == "builtin_bottom":
@@ -730,13 +625,11 @@ def es_screen_from_raw(raw):
 
 
 def _screens_follow_contract(cfg, raw, notes):
-    """es_screen := es_screen_from_raw(raw); command_center_screen := its
-    opposite. Runs after migration/validation/_fixup_screens, so it has the
-    last word: whatever those derived, what 092 will do with this file is
-    what load() reports. The one case where they differ is a legacy flat
-    file whose output/es_output migrate to the swapped combo - 092 reads
-    only screens.es_screen, so it will keep ES on the add-on, and so must
-    we (note recorded)."""
+    """es_screen comes from es_screen_from_raw(raw) and command_center_screen is its opposite.
+    Runs last so load() always reports what dual-screen-layout-and-power will actually do with
+    the file. The one case that differs is an old flat file that migrates to the swapped combo,
+    the daemon only reads screens.es_screen so ES stays on the add-on and so do we (with a note).
+    """
     want_es = es_screen_from_raw(raw)
     es = _get(cfg, ("screens", "es_screen"))
     cc = _get(cfg, ("screens", "command_center_screen"))
@@ -751,11 +644,9 @@ PADDLE_HARDWARE_BUTTONS = ("btn_c_paddle", "btn_z_paddle")
 
 
 def _note_paddle_button(cfg, notes):
-    """Device-verified 23 Sep: this RP5 has no rear paddles (0 evdev events
-    in 120 s for either paddle code, while BTN_BACK/F1 fired reliably), so
-    the default moved to "btn_back_f1". The paddle enum values stay valid
-    (a stored file might be for a different device with real paddles) -
-    load() honours a stored paddle value as-is, it just leaves a note."""
+    """The RP5 has no rear paddles, so the default is "btn_back_f1". A stored paddle value is
+    still honoured as is (another device might have them), it just leaves a note.
+    """
     v = _get(cfg, ("command_center", "hardware_button"))
     if v in PADDLE_HARDWARE_BUTTONS:
         notes.append("command_center.hardware_button=%r: this device (RP5) has no rear "
@@ -768,9 +659,10 @@ def _add_legacy(cfg):
 
 
 def _migrate(data, notes):
-    """Turn today's flat {"output": ..., "es_output": ...} shape into
-    screens.* the first time a pre-schema file is loaded. Returns a new
-    dict; never mutates `data`. A no-op once "schema_version" is present."""
+    """Turns the old flat {"output": ..., "es_output": ...} shape into screens.* the first time an
+    old file is loaded. Returns a new dict and never changes `data`. Does nothing once
+    schema_version is there.
+    """
     if not isinstance(data, dict) or "schema_version" in data:
         return data
     out = dict(data)
@@ -796,6 +688,63 @@ def _migrate(data, notes):
     return out
 
 
+# renamed tiles keep their place and hidden state in a saved layout
+RENAMED_TILES = {"home.sleep": "home.power"}  # Sleep moved into the Power sheet
+
+
+def _rename_tiles(names):
+    return [RENAMED_TILES.get(n, n) for n in names] if isinstance(names, list) else names
+
+
+def _prune_hidden_tiles(data, notes):
+    """A saved hidden_tiles naming a tile that no longer exists keeps the rest of the hidden set
+    instead of failing as a whole. Anything malformed is left for _validate. Never mutates.
+    """
+    try:
+        hidden = _rename_tiles(data["command_center"]["hidden_tiles"])
+    except (KeyError, TypeError):
+        return data
+    if not isinstance(hidden, list) or not all(isinstance(v, str) for v in hidden):
+        return data
+    kept = [v for v in hidden if v in HIDEABLE_TILE_KEYS]
+    if len(kept) == len(hidden) and hidden == data["command_center"]["hidden_tiles"]:
+        return data
+    out = dict(data)
+    cc = dict(out["command_center"])
+    cc["hidden_tiles"] = kept
+    out["command_center"] = cc
+    notes.append("hidden_tiles: dropped tiles that no longer exist: %s"
+                 % ", ".join(v for v in hidden if v not in HIDEABLE_TILE_KEYS))
+    return out
+
+
+def _extend_tile_order(data, notes):
+    """A saved tile_order from before a new tile existed gets the new tiles added at the end
+    instead of failing the every-tile check (which would reset your layout). Unknown names are
+    dropped, anything malformed is left for _validate. Never changes `data`.
+    """
+    try:
+        order = _rename_tiles(data["command_center"]["tile_order"])
+    except (KeyError, TypeError):
+        return data
+    if not isinstance(order, list) or not all(isinstance(v, str) for v in order):
+        return data
+    known = [v for v in order if v in HOME_TILE_KEYS]
+    if len(set(known)) != len(known):
+        return data
+    missing = [k for k in HOME_TILE_KEYS if k not in known]
+    if not missing and len(known) == len(order) and \
+            order == data["command_center"]["tile_order"]:
+        return data
+    out = dict(data)
+    cc = dict(out["command_center"])
+    cc["tile_order"] = known + missing
+    out["command_center"] = cc
+    if missing:
+        notes.append("tile_order: new tiles added at the end: %s" % ", ".join(missing))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -811,10 +760,9 @@ def get_value(cfg, key_path):
 
 
 def set_value(cfg, key_path, value):
-    """Set one schema value in place. Invalid values are refused (cfg is
-    left unchanged, returns False). Setting one of the two screens.* keys
-    flips the other to keep them opposite, and refreshes the legacy
-    output/es_output keys to match - "picking one flips the other"."""
+    """Sets one schema value in place. Invalid values are refused (cfg unchanged, returns False).
+    Setting one screens.* key flips the other and refreshes output/es_output to match.
+    """
     key_path = tuple(key_path)
     f = field_for(key_path)
     if f is None:
@@ -833,10 +781,10 @@ def set_value(cfg, key_path, value):
 
 
 def load(path=None, env=None):
-    """Return (config dict, note). note says where the values came from, or
-    what was wrong with the file. The dict always has every schema key
-    (defaults for anything missing/invalid) plus the legacy "output" /
-    "es_output" keys main.py reads."""
+    """Returns (config dict, note). The note says where the values came from or what was wrong
+    with the file. The dict always has every key (defaults for anything missing or bad) plus
+    output / es_output for main.py.
+    """
     path = path or config_path(env)
     try:
         with open(path, encoding="utf-8") as f:
@@ -849,6 +797,8 @@ def load(path=None, env=None):
         return defaults(), "IGNORED %s (top level is not an object): defaults" % path
     notes = []
     data = _migrate(raw, notes)
+    data = _extend_tile_order(data, notes)
+    data = _prune_hidden_tiles(data, notes)
     cfg = _validate_tree(data, notes)
     _fixup_screens(cfg, notes)
     _screens_follow_contract(cfg, raw, notes)
@@ -879,11 +829,9 @@ def _atomic_write(path, text):
 
 
 def save(cfg, path=None, env=None):
-    """Validate and atomically write cfg. Returns (written dict, notes).
-    Never persists the derived output/es_output keys - they are recomputed
-    by load() every time. Raises on a write failure (caller decides what to
-    do; the OLD file on disk is untouched either way, because the write
-    lands in a temp file that is only renamed over the target on success)."""
+    """Checks cfg and writes it atomically, returns (written dict, notes). Never writes the
+    derived output/es_output. Raises if the write fails, the old file is untouched either way.
+    """
     path = path or config_path(env)
     notes = []
     data = dict(cfg)
@@ -898,18 +846,14 @@ def save(cfg, path=None, env=None):
 
 
 def save_changes(changes, path=None, env=None):
-    """Read-modify-write of ONLY the given keys: {key_path: value}. Loads
-    the file as it is on disk right now, applies each change through
-    set_value() (an invalid value is skipped with a note, never written),
-    and saves atomically. Returns (written dict, notes).
+    """Read-modify-write of only the given keys, {key_path: value}. Loads the file as it is right
+    now, applies each change through set_value() (a bad value is skipped with a note) and saves
+    atomically. Returns (written dict, notes).
 
-    Why (SW1): two rp5deck processes can now write this file - the main
-    panel and the Command Center overlay on the game screen (cc_overlay.py,
-    whose "Swap screens" tile writes screens.es_screen). save(cfg) writes a
-    whole in-memory snapshot, so a process holding a stale copy would put
-    the OTHER process's change back the next time it saved anything at all
-    - including undoing a screen swap. Writing only what changed, on top of
-    the current file, keeps both processes' changes."""
+    Two processes write this file (the panel and the game-screen overlay, whose "Swap screens"
+    writes es_screen), so saving a whole older copy would put the other one's change back.
+    Writing only what changed keeps both.
+    """
     path = path or config_path(env)
     cfg, _note = load(path)
     notes = []

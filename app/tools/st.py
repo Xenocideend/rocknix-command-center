@@ -64,7 +64,28 @@ def state():
 
 def origin(s):
     # The surface is anchored to DSI-1's bottom edge in both FULL and BAR.
-    return get_dsi_y() + DSI_H - s["surface"]["size"][1]
+    # surface_size is the real (configured) surface. size is the layout canvas
+    # (e.g. [9874,720] in BAR) and is wrong for click mapping.
+    surf = s["surface"]
+    size = surf.get("surface_size") or surf.get("size")
+    return get_dsi_y() + DSI_H - size[1]
+
+
+def resolve(v, path):
+    """Resolve a dotted path against nested dicts, longest-match-first at each
+    level, so flat keys like 'home.mixer' work alongside genuinely nested
+    paths like 'volume.master.volume'."""
+    if not path:
+        return v
+    if "." not in path:
+        return v.get(path) if isinstance(v, dict) else None
+    parts = path.split(".")
+    for i in range(len(parts), 0, -1):
+        key = ".".join(parts[:i])
+        if isinstance(v, dict) and key in v:
+            rest = ".".join(parts[i:])
+            return v[key] if not rest else resolve(v[key], rest)
+    return None
 
 
 def walk(n, out=None):
@@ -108,10 +129,7 @@ def count(path, rgb, y0=None, y1=None):
 def main(a):
     cmd = a[0]
     if cmd == "get":
-        v = state()
-        for k in a[1].split("."):
-            v = v.get(k) if isinstance(v, dict) else None
-        print(json.dumps(v))
+        print(json.dumps(resolve(state(), a[1])))
     elif cmd == "target":
         s = state()
         x, y, w, h = s["targets"][a[1]]

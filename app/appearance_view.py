@@ -1,36 +1,29 @@
-"""appearance_view - the "Custom colours" Command Center sheet + controller
-for the Appearance settings page's colour theme (palettes.py).
+"""appearance_view: the Custom colours sheet and its controller, for Appearance's colour theme
+(palettes.py).
 
-Reuses rgb_view.py's colour-picker widgets (Swatch, PreviewCircle) instead
-of writing a new picker: the owner's brief specifically asked for this.
-What's genuinely new here, and could not just be RGBSheet pointed at a
-different config key:
-  - THREE colours to edit (accent/background/text), not one - a row of
-    LitButtons (SLOT_LABELS) picks which one the sliders/swatches below
-    are currently editing, the same "which one am I editing" shape
-    rgb_view.RGBSheet already uses for its own left/right stick buttons.
-  - rgb_leds.hue_to_rgb()/rgb_to_hue() are fixed at full value (correct
-    for an LED, which is always at full brightness some colour or other)
-    and so can never reach a near-black or near-white pick - most of what
-    a background or text colour actually needs. palettes.hsl_to_rgb()/
-    rgb_to_hsl() add the missing lightness (and saturation) axis; this
-    file is the only caller.
-  - an inline low-contrast warning (palettes.custom_contrast_warning()) -
-    item 3 of the brief: shown, never blocking.
+It reuses rgb_view.py's picker widgets (Swatch, PreviewCircle) instead of a new picker. What's
+new here and couldnt just be RGBSheet on another config key:
 
-AppearanceController's shape mirrors rgb_view.RGBController closely (same
-split: Sheet is widgets only, Controller drives it + persistence via
-save_fn, defaulting to config.save_changes so tests can inject a fake) -
-see that class's own docstring for the reasoning this borrows wholesale.
+There are three colours to edit (accent, background, text), not one. A row of LitButtons
+(SLOT_LABELS) picks which one the sliders and swatches edit, the same way RGBSheet picks the
+left or right stick.
 
-Live apply: every slider drag and swatch tap calls palettes.apply_theme()
-immediately (mutates ui.THEME in place - see that function's docstring for
-why not a plain reassignment), same "always live, no restart" contract as
-the rest of Appearance; only *persistence* (config.save_changes) is
-deferred to slider release / a completed tap, matching RGBController's
-own drag()/drag_flush() split (there is no device I/O here to rate-limit,
-so unlike RGBController this file does not need a keeper/rate limiter at
-all - a plain dict update is cheap enough to do on every drag tick)."""
+rgb_leds.hue_to_rgb()/rgb_to_hue() are fixed at full value, right for an LED but they can never
+reach the near black or near white a background or text colour needs.
+palettes.hsl_to_rgb()/rgb_to_hsl() add the lightness and saturation axes, and this file is the
+only caller.
+
+A low contrast warning shows inline (palettes.custom_contrast_warning()) and never blocks.
+
+AppearanceController is shaped like rgb_view.RGBController: the Sheet is widgets only, the
+Controller drives it and saves through save_fn (config.save_changes by default, tests pass a
+fake).
+
+Every slider drag and swatch tap calls palettes.apply_theme() right away (it changes ui.THEME
+in place, see its docstring), so it's always live with no restart. Only saving waits for the
+slider release or a finished tap, like RGBController's drag()/drag_flush(). There's no device
+I/O here, so no keeper or rate limiter, a dict update is cheap enough on every drag tick.
+"""
 import ui
 from ui import THEME, Label, LitButton, Sheet, Slider
 
@@ -56,8 +49,8 @@ SLOT_KEY_PATHS = {
 # Sheet
 # ---------------------------------------------------------------------------
 class AppearanceSheet(Sheet):
-    """Widgets only; AppearanceController fills/reads them and receives
-    every on_action(name, payload):
+    """Widgets only. AppearanceController fills and reads them and gets every on_action(name,
+    payload):
       "appearance.slot"                  payload: "accent" | "bg" | "text"
       "appearance.preset"                payload: an (r, g, b) quick pick
       "appearance.hue" / ".commit"       payload: int hue 0-359 (drag / release)
@@ -78,11 +71,9 @@ class AppearanceSheet(Sheet):
                 label, name="appearance.slot.%s" % value, size=40,
                 on_click=lambda v=value: on_action("appearance.slot", v)))
 
-        # Quick picks: the same named palette the stick-light sheet offers
-        # (rgb_leds.PRESETS) - full-saturation hues are a reasonable start
-        # for an accent colour, less so for background/text, but a tap
-        # here is just a starting point; the sliders below reach anywhere
-        # the swatches don't.
+        # Quick picks: the same named palette as the stick lights (rgb_leds.PRESETS). Full saturation
+        # hues suit an accent better than a background or text, but a tap is just a start and the
+        # sliders below reach anywhere the swatches dont.
         self.swatches = []
         for pname, rgb_val in rgb_leds.PRESETS:
             sw = self.body.add(rgb_view.Swatch(
@@ -158,12 +149,11 @@ class AppearanceSheet(Sheet):
 # Controller
 # ---------------------------------------------------------------------------
 class AppearanceController:
-    """host: main.App-like object (`close_appearance`, `state_dirty`,
-    `ui.open`/`ui.settings`). cfg: the SAME dict main.App holds as
-    self.cfg (mutated in place by config.set_value(), exactly like
-    RGBController's `lights` argument does for the "lights" group).
-    save_fn(changes) defaults to config.save_changes; tests inject a fake
-    so no real file is touched."""
+    """host is main.App-like (`close_appearance`, `state_dirty`, `ui.open`/`ui.settings`). cfg is the
+    same dict main.App holds as self.cfg (changed in place by config.set_value(), like
+    RGBController's `lights`). save_fn(changes) defaults to config.save_changes, tests pass a fake
+    so no real file gets touched.
+    """
 
     def __init__(self, host, cfg, save_fn=None):
         self.host = host
@@ -184,10 +174,9 @@ class AppearanceController:
 
     # -- host-facing ---------------------------------------------------------
     def open(self):
-        """Opening the editor always switches appearance.theme_preset to
-        "custom" - there is deliberately no separate "turn on Custom mode"
-        step, so the sheet is never open while some OTHER preset is what's
-        actually on screen."""
+        """Opening the editor always switches appearance.theme_preset to "custom". There's no separate
+        turn-on-Custom step, so the sheet is never open while a different preset is on screen.
+        """
         if config.get_value(self.cfg, ("appearance", "theme_preset")) != palettes.CUSTOM_PRESET:
             config.set_value(self.cfg, ("appearance", "theme_preset"), palettes.CUSTOM_PRESET)
             self.save_fn({("appearance", "theme_preset"): palettes.CUSTOM_PRESET})
@@ -217,14 +206,9 @@ class AppearanceController:
 
     def _apply_live(self):
         palettes.apply_theme(self.cfg)
-        # Mutating ui.THEME alone is not enough - see main.App.on_setting()'s
-        # comment on the "appearance" branch for the full story (device
-        # field test 25 Sep): only a widget that is itself marked damaged
-        # gets repainted, so the WHOLE surface must be marked damaged here
-        # too, every drag tick and every commit, or the sheet's own
-        # background/swatches/previews (everything except whatever widget
-        # happened to invalidate itself) go stale exactly like the Settings
-        # page did.
+        # Changing ui.THEME alone isnt enough (see main.App.on_setting()'s "appearance" branch). Only a
+        # widget that's marked damaged gets repainted, so the whole surface gets marked on every drag
+        # tick and commit, or the sheet's background, swatches and previews go stale.
         ui_obj = getattr(self.host, "ui", None)
         root = getattr(ui_obj, "root", None)
         if root is not None:

@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
-"""manuals - find, render, and cache a game's PDF manual for the bottom
-screen (1920x1080 landscape), natively - no Firefox / pdf.js involved.
+"""manuals: finds, renders and caches a game's PDF manual for the bottom screen (1920x1080
+landscape), natively, no Firefox or pdf.js.
 
-Verified on-device facts this module relies on (R7-input-media.md,
-E9a-es-integration.md):
-  - `libpoppler` + `pdftoppm` are installed; there is no separate `pdftocairo`
-    dependency assumed here.
-  - Gamelists live at `/storage/games-internal/roms/<system>/gamelist.xml`
-    and/or `/storage/roms/<system>/gamelist.xml` - both may exist for the
-    same system; either can carry the manual. Both roots are tried.
-  - A `<game>` entry's `<manual>` field is a path relative to the gamelist's
-    OWN directory (e.g. `./manuals/Foo-manual.pdf`), not necessarily the
-    directory the caller's `rom_path` happens to sit under.
-  - The batocera-lineage ES writer used here (E9a) escapes only `&` in text
-    content (`&amp;`); apostrophes are written literally, which is valid
-    XML - text content never requires escaping `'`. A consumer that
-    additionally escapes `'` (e.g. .NET's `SecurityElement.Escape`) before
-    comparing would silently fail to match those titles. This module never
-    does its own escaping: `<game>` blocks are parsed with `xml.etree`,
-    which un-escapes `&amp;` correctly, and the resulting plain text is
-    compared directly against filesystem paths (also plain text) - so
-    apostrophes just work, and the escaping trap never applies here.
-  - `<game>` blocks are extracted with a regex BEFORE feeding each block to
-    the XML parser, one block at a time, rather than parsing the whole
-    gamelist as one document. This survives a gamelist that has a second
-    root-level sibling element (some ES forks add `<alternativeEmulator>`
-    beside `<gameList>`, which makes whole-document parsing throw) and
-    survives one malformed `<game>` block without losing every other game
-    in the file.
+What it relies on, checked on the device:
+
+libpoppler and pdftoppm are installed. No pdftocairo is assumed.
+
+Gamelists are at /storage/games-internal/roms/<system>/gamelist.xml and/or
+/storage/roms/<system>/gamelist.xml. Both can exist for one system and either can have the
+manual, so both get tried.
+
+A <game>'s <manual> is relative to that gamelist's own folder (like
+./manuals/Foo-manual.pdf), not the folder rom_path is under.
+
+ES here escapes only & in text (&amp;) and writes apostrophes as is, which is valid XML.
+Nothing here does its own escaping. Each <game> block goes through xml.etree, which
+unescapes &amp;, and the plain text gets compared to plain filesystem paths, so apostrophes
+just work.
+
+<game> blocks are pulled out with a regex first and parsed one at a time instead of parsing
+the whole gamelist, so a second root element (<alternativeEmulator> beside <gameList>) or one
+broken <game> doesnt lose every other game.
 
 Pipeline:
   find_manual(rom_path, system)              -> Path | None
@@ -36,30 +29,24 @@ Pipeline:
   render_spread(pdf_path, left_page, ...)    -> (Path|None, Path|None)
   spread_layout(left_size, right_size, ...)  -> dict           (pure math)
   prerender(pdf_path, pages, ...)            -> ticket          (latest wins)
-  prerender_next_async(pdf_path, page, ...)  -> ticket          (fire+forget)
+  prerender_next_async(pdf_path, page, ...)  -> ticket          (fire and forget)
   png_size(png_path)                         -> (w, h) | None
 
-Cache publication is atomic (RV2-M4): pdftoppm writes a private temp name in
-the cache directory (`<key>.<pid>.<thread>.tmp.png`) and a complete PNG is
-renamed onto the cache key, so a cache hit can never return a half-written
-file, and a failure only ever deletes its own temp file. Renders of the same
-page are de-duplicated in-process: a second caller waits for the first
-instead of running pdftoppm on the same output. Prerendering (RV2-M5) runs on
-ONE bounded background worker: prerender() replaces whatever is still
-pending, so fast page turns never pile up pdftoppm processes.
+The cache only ever shows complete files. pdftoppm writes a private temp name in the cache
+folder (`<key>.<pid>.<thread>.tmp.png`) and a finished PNG gets renamed onto the key, so a hit
+never returns a half written file and a failure only deletes its own temp. Two renders of the
+same page in this process share one pdftoppm, the second waits for the first. Prerendering
+runs on one bounded background worker and prerender() replaces whatever's still pending, so
+fast page turns never pile up pdftoppm processes.
 
-Manuals are portrait pages on a landscape screen: a single page fit to
-screen height leaves wide empty margins either side. render_spread renders
-page N and N+1 independently (each already scaled to the target height by
-pdftoppm) and spread_layout() does the pure placement math so the caller
-(cairo-based UI) blits both side by side, centered, with a gap. Nothing here
-composites the two PNGs into one image - there is no PIL on-device (see
-research/R7 and B10b), and compositing at draw time is what the UI already
-does for every other view.
+Manual pages are portrait on a landscape screen, so one page fit to height leaves wide empty
+sides. render_spread renders page N and N+1 separately (each scaled to the height by
+pdftoppm) and spread_layout() works out the placement so the UI draws both side by side,
+centred with a gap. Nothing composites the two PNGs, there's no PIL on the device and the UI
+composites at draw time anyway.
 
-Never raises into the UI: a missing manual, an unreadable/corrupt PDF, a
-missing `pdftoppm`/`pdfinfo` binary, or a `pdftoppm` failure all return None
-(or (None, None) for a spread) and log the reason at WARNING.
+Never raises into the UI. A missing manual, a corrupt PDF, a missing pdftoppm/pdfinfo or a
+pdftoppm failure all return None ((None, None) for a spread) and log why at WARNING.
 """
 from __future__ import annotations
 
@@ -86,12 +73,11 @@ log = logging.getLogger("rp5deck.manuals")
 SCREEN_W = 1920
 SCREEN_H = 1080
 
-# Both are checked, in this order, for every system (E9a: either or both may
-# exist on a given ROCKNIX build; a manual can live under either).
+# both are checked in this order for every system, a manual can be under either
 DEFAULT_ROM_ROOTS = ("/storage/games-internal/roms", "/storage/roms")
 
 DEFAULT_CACHE_DIR = "/storage/rp5deck/cache/manuals"
-DEFAULT_CACHE_MAX_BYTES = 200 * 1024 * 1024  # 200 MB, size-capped LRU
+DEFAULT_CACHE_MAX_BYTES = 200 * 1024 * 1024  # 200 MB, LRU capped by size
 DEFAULT_RENDER_TIMEOUT = 20.0
 NICE_LEVEL = 10
 
@@ -102,16 +88,15 @@ _SAFE_STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 # --------------------------------------------------------------------------
-# Low-level process helper - the only place that touches subprocess.
+# Process helper, the only place that touches subprocess
 # --------------------------------------------------------------------------
 
 def _run(cmd: list[str], timeout: float):
-    """Run a command and capture output. Never raises, never hangs forever.
+    """Runs a command and captures output. Never raises, never hangs.
 
-    Returns (returncode, stdout, stderr). returncode is None if the process
-    never produced a result at all (binary missing, timed out, or any other
-    OS-level failure) - callers must treat that as a hard failure regardless
-    of stdout/stderr content.
+    Returns (returncode, stdout, stderr). returncode is None if the process never gave a result
+    (missing binary, timeout, any OS failure), and callers must treat that as a failure whatever
+    stdout says.
     """
     if shutil.which(cmd[0]) is None:
         return None, "", "binary not found: %s" % cmd[0]
@@ -133,10 +118,9 @@ def _niced(cmd: list[str]) -> list[str]:
 # --------------------------------------------------------------------------
 
 def _iter_games(xml_text: str):
-    """Yield one parsed <game> Element per block found in the raw gamelist
-    text. Each block is parsed independently, so a sibling root element
-    elsewhere in the document, or one malformed <game>, cannot take out the
-    rest of the file."""
+    """Yields one parsed <game> Element per block in the raw gamelist text. Each block is parsed on
+    its own, so another root element or one broken <game> cant take out the rest.
+    """
     for m in _GAME_BLOCK_RE.finditer(xml_text):
         block = m.group(0)
         try:
@@ -155,30 +139,27 @@ def _field(elem: ET.Element, tag: str) -> Optional[str]:
 
 
 def gamelist_paths(system: str, roots=DEFAULT_ROM_ROOTS) -> list[str]:
-    """Candidate gamelist.xml paths for `system`, in root-priority order,
-    filtered to those that actually exist. Exposed so a survey script can
-    report which convention a given device/system actually uses."""
+    """Candidate gamelist.xml paths for `system` in root order, only the ones that exist. Public so
+    a survey script can report which layout a device uses.
+    """
     return [p for p in (os.path.join(root, system, "gamelist.xml") for root in roots)
             if os.path.isfile(p)]
 
 
 def find_manual(rom_path, system: str, roots=DEFAULT_ROM_ROOTS) -> Optional[Path]:
-    """Find the PDF manual for one game.
+    """Finds the PDF manual for one game.
 
-    rom_path: the game's ROM file path (as ES/the caller knows it - it does
-              not need to sit under the same root as the gamelist actually
-              matched).
-    system:   the ES system name (e.g. "snes").
+    rom_path: the game's ROM path as ES knows it, it doesnt have to be under the same root as
+              the gamelist that matched
+    system:   the ES system name (like "snes")
 
     Tries, in order:
-      1. Each existing gamelist.xml for `system` (both DEFAULT_ROM_ROOTS by
-         default): find the <game> whose <path> has the same basename as
-         rom_path, and if it has a <manual> field resolving to a real file
-         (relative to THAT gamelist's own directory), return it.
-      2. A conventional `manuals/` folder next to the ROM's own directory:
-         `<stem>-manual.pdf` (E9a's observed on-device naming) then
-         `<stem>.pdf`.
-      3. None - logged at INFO, never raised.
+      1. Each existing gamelist.xml for `system`: find the <game> whose <path> has the same
+         basename as rom_path, and if its <manual> points at a real file (relative to that
+         gamelist's folder) return it.
+      2. A manuals/ folder next to the ROM's folder: `<stem>-manual.pdf` (how the device names
+         them) then `<stem>.pdf`.
+      3. None, logged at INFO.
     """
     rom_path = os.fspath(rom_path)
     rom_base = os.path.basename(rom_path)
@@ -202,7 +183,7 @@ def find_manual(rom_path, system: str, roots=DEFAULT_ROM_ROOTS) -> Optional[Path
                 if os.path.isfile(candidate):
                     return Path(candidate)
                 log.info("%s: <manual> %s does not exist on disk", gamelist, candidate)
-            break  # matched the game in this gamelist; try the next root
+            break  # matched the game in this gamelist, try the next root
 
     rom_dir = os.path.dirname(rom_path)
     for name in (stem + "-manual.pdf", stem + ".pdf"):
@@ -219,13 +200,11 @@ def find_manual(rom_path, system: str, roots=DEFAULT_ROM_ROOTS) -> Optional[Path
 # --------------------------------------------------------------------------
 
 def _count_page_objects(pdf_path: str) -> Optional[int]:
-    """Best-effort page count without pdfinfo: count `/Type /Page` object
-    markers in the raw PDF bytes (excluding `/Type /Pages`, the page-TREE
-    node, via the negative lookahead). Not authoritative for an exotic page
-    tree (e.g. a page object referenced twice, or one split across an
-    object stream in a heavily-compressed PDF), but correct for the
-    straightforward manuals this pipeline actually encounters, and it never
-    needs poppler to be installed."""
+    """Page count without pdfinfo: counts `/Type /Page` markers in the raw bytes (not
+    `/Type /Pages`, the page tree node, thanks to the negative lookahead). Can be wrong for an
+    odd page tree (a page referenced twice, or split into an object stream), but right for the
+    plain manuals we actually get, and it doesnt need poppler.
+    """
     try:
         with open(pdf_path, "rb") as f:
             data = f.read()
@@ -237,9 +216,9 @@ def _count_page_objects(pdf_path: str) -> Optional[int]:
 
 
 def page_count(pdf_path, timeout: float = DEFAULT_RENDER_TIMEOUT) -> Optional[int]:
-    """Number of pages in a PDF. Prefers `pdfinfo`; falls back to a raw byte
-    scan (`_count_page_objects`) if pdfinfo is absent or fails. Returns None
-    (never raises) if neither route works, e.g. a corrupt file."""
+    """Number of pages in a PDF. Uses pdfinfo, falls back to a raw byte scan if pdfinfo is missing
+    or fails. None if neither works, like a corrupt file.
+    """
     pdf_path = os.fspath(pdf_path)
     if shutil.which("pdfinfo") is not None:
         rc, out, err = _run(["pdfinfo", pdf_path], timeout=timeout)
@@ -259,9 +238,9 @@ def page_count(pdf_path, timeout: float = DEFAULT_RENDER_TIMEOUT) -> Optional[in
 # --------------------------------------------------------------------------
 
 def _cache_key(pdf_path: str, page: int, height: int) -> str:
-    """Filename encoding pdf path + mtime + size + page + height, so a
-    changed manual (edited/rescraped) or a different page/size never
-    collides with a stale cache entry."""
+    """A filename built from the pdf path + mtime + size + page + height, so an edited or rescraped
+    manual or a different page or size never hits a stale entry.
+    """
     try:
         st = os.stat(pdf_path)
         mtime_ns, size = st.st_mtime_ns, st.st_size
@@ -286,11 +265,11 @@ TMP_MAX_AGE = 3600.0
 
 
 def _evict(cache_dir: str, max_bytes: int = DEFAULT_CACHE_MAX_BYTES) -> None:
-    """Size-capped LRU eviction: delete the least-recently-touched PNGs
-    until the cache directory is back under `max_bytes`. Recency is mtime
-    (a cache hit calls _touch() to bump it), so this is a plain LRU, not
-    FIFO. Another render's temp file is never touched (it is still being
-    written); one older than TMP_MAX_AGE is a leftover and is removed."""
+    """LRU eviction by size: deletes the least recently touched PNGs until the cache is under
+    `max_bytes`. Recency is mtime (a hit calls _touch()), so it's real LRU, not FIFO. Another
+    render's temp file is never touched since it's still being written, but one older than
+    TMP_MAX_AGE is a leftover and goes.
+    """
     try:
         entries = []
         total = 0
@@ -314,7 +293,7 @@ def _evict(cache_dir: str, max_bytes: int = DEFAULT_CACHE_MAX_BYTES) -> None:
         return
     if total <= max_bytes:
         return
-    entries.sort(key=lambda t: t[0])  # oldest (least-recently-touched) first
+    entries.sort(key=lambda t: t[0])  # oldest (least recently touched) first
     for _mtime, size, path in entries:
         if total <= max_bytes:
             break
@@ -332,13 +311,12 @@ def _evict(cache_dir: str, max_bytes: int = DEFAULT_CACHE_MAX_BYTES) -> None:
 def render_page(pdf_path, page: int, cache_dir=DEFAULT_CACHE_DIR,
                  height: int = SCREEN_H, timeout: float = DEFAULT_RENDER_TIMEOUT,
                  max_cache_bytes: int = DEFAULT_CACHE_MAX_BYTES) -> Optional[Path]:
-    """Render one PDF page to a cached PNG, fit-to-height (`-scale-to-y H
-    -scale-to-x -1`, i.e. width follows the page's own aspect ratio). Runs
-    `pdftoppm` niced, with a timeout, via `-singlefile` so the output name is
-    exactly `<prefix>.png` (no page-number suffix to guess). A cache hit
-    never spawns a process. Returns None - and logs why - on any failure:
-    missing file, bad page number, missing pdftoppm, timeout, non-zero exit,
-    or a corrupt PDF that pdftoppm rejects."""
+    """Renders one PDF page to a cached PNG, fit to height (`-scale-to-y H -scale-to-x -1`, so the
+    width follows the page's aspect). Runs pdftoppm niced with a timeout and `-singlefile` so the
+    output is exactly `<prefix>.png`. A cache hit never starts a process. Returns None and logs
+    why on any failure: missing file, bad page number, missing pdftoppm, timeout, bad exit, or a
+    PDF pdftoppm rejects.
+    """
     pdf_path = os.fspath(pdf_path)
     if page < 1:
         log.warning("render_page: page must be >= 1, got %d", page)
@@ -355,7 +333,7 @@ def render_page(pdf_path, page: int, cache_dir=DEFAULT_CACHE_DIR,
     key = _cache_key(pdf_path, page, height)
     out_path = os.path.join(cache_dir, key)
     for _attempt in range(2):
-        if os.path.isfile(out_path):        # only ever appears complete (by rename)
+        if os.path.isfile(out_path):  # only ever shows up complete, by rename
             _touch(out_path)
             return Path(out_path)
         with _inflight_lock:
@@ -363,8 +341,8 @@ def render_page(pdf_path, page: int, cache_dir=DEFAULT_CACHE_DIR,
             if busy is None:
                 mine = _inflight[out_path] = threading.Event()
         if busy is not None:
-            # the same page is being rendered right now (prerender vs. a tap):
-            # wait for that render instead of racing it on the same file
+            # the same page is rendering right now (prerender vs a tap), wait for it instead of racing it
+            # on the same file
             busy.wait(timeout + 5.0)
             continue
         try:
@@ -384,7 +362,7 @@ _inflight = {}          # cache path -> Event set when that render finishes
 
 
 def _render_into_cache(pdf_path, page, out_path, height, timeout, cache_dir, max_cache_bytes):
-    """pdftoppm into a private temp name, then an atomic rename onto the key."""
+    """pdftoppm into a private temp name, then an atomic rename onto the key"""
     prefix = "%s.%d.%d.tmp" % (out_path[:-len(".png")], os.getpid(), threading.get_ident())
     tmp_png = prefix + ".png"
     cmd = _niced(["pdftoppm", "-png", "-f", str(page), "-l", str(page),
@@ -394,7 +372,7 @@ def _render_into_cache(pdf_path, page, out_path, height, timeout, cache_dir, max
     if rc != 0 or not os.path.isfile(tmp_png):
         log.warning("pdftoppm failed for %s page %d (rc=%s): %s",
                     pdf_path, page, rc, (err or "").strip())
-        _remove_quietly(tmp_png)             # only ever our own temp file
+        _remove_quietly(tmp_png)  # only ever our own temp file
         return None
     try:
         os.replace(tmp_png, out_path)
@@ -416,12 +394,11 @@ def _remove_quietly(path):
 def render_spread(pdf_path, left_page: int, cache_dir=DEFAULT_CACHE_DIR,
                    height: int = SCREEN_H, timeout: float = DEFAULT_RENDER_TIMEOUT,
                    total_pages: Optional[int] = None):
-    """Render `left_page` and `left_page + 1` at the same height so the UI
-    can place them side by side. Returns (left_path, right_path); right is
-    None when left_page is the last page (per `total_pages`, if given) or
-    when its own render fails - the caller then shows a single centered
-    page instead of a spread. left is None only if left_page itself fails
-    to render (missing/corrupt PDF, bad page number, etc)."""
+    """Renders `left_page` and `left_page + 1` at the same height so the UI can put them side by
+    side. Returns (left_path, right_path). right is None when left_page is the last page (per
+    `total_pages` if given) or its render fails, and the caller shows one centred page instead.
+    left is None only if left_page itself fails.
+    """
     left = render_page(pdf_path, left_page, cache_dir, height, timeout)
     if left is None:
         return None, None
@@ -433,9 +410,9 @@ def render_spread(pdf_path, left_page: int, cache_dir=DEFAULT_CACHE_DIR,
 
 
 class PrerenderTicket:
-    """What prerender() returns: join(timeout) waits until every page it
-    asked for was rendered, failed, or was superseded; is_alive() is True
-    until then (the old Thread-returning API's two methods)."""
+    """What prerender() returns. join(timeout) waits until every page it asked for was rendered,
+    failed or replaced, and is_alive() is True until then.
+    """
 
     def __init__(self, n):
         self._left = n
@@ -458,9 +435,10 @@ class PrerenderTicket:
 
 
 class _Prerenderer:
-    """ONE daemon thread renders queued pages, one at a time, niced like
-    every render. The queue is bounded (MAX_PENDING); prerender() replaces
-    what is still pending (only the newest spread's neighbours matter)."""
+    """One daemon thread renders queued pages one at a time, niced like every render. The queue is
+    bounded (MAX_PENDING) and prerender() replaces what's pending, only the newest spread's
+    neighbours matter.
+    """
     MAX_PENDING = 4
 
     def __init__(self):
@@ -512,8 +490,9 @@ _PRERENDER = _Prerenderer()
 
 def prerender(pdf_path, pages, cache_dir=DEFAULT_CACHE_DIR, height: int = SCREEN_H,
               timeout: float = DEFAULT_RENDER_TIMEOUT) -> PrerenderTicket:
-    """Warm the cache for `pages` on the single background worker, dropping
-    whatever earlier request is still pending. Never raises or blocks."""
+    """Warms the cache for `pages` on the background worker, dropping any earlier request still
+    pending. Never raises or blocks.
+    """
     try:
         return _PRERENDER.request(os.fspath(pdf_path), pages, cache_dir, height, timeout,
                                   replace=True)
@@ -525,11 +504,11 @@ def prerender(pdf_path, pages, cache_dir=DEFAULT_CACHE_DIR, height: int = SCREEN
 def prerender_next_async(pdf_path, page: int, cache_dir=DEFAULT_CACHE_DIR,
                           height: int = SCREEN_H, timeout: float = DEFAULT_RENDER_TIMEOUT
                           ) -> PrerenderTicket:
-    """Fire-and-forget: render page `page + 1` on the background worker so
-    the next tap/swipe is usually a cache hit (queued behind, not replacing,
-    earlier requests; the queue stays bounded). Never raises and never
-    blocks the caller; a failure is only logged. Returns a ticket with
-    .join()/.is_alive() for a caller - or a test - that wants to wait."""
+    """Fire and forget: renders page + 1 on the background worker so the next tap or swipe is
+    usually a cache hit (queued behind earlier requests, not replacing them, the queue stays
+    bounded). Never raises or blocks, a failure is only logged. Returns a ticket with
+    .join()/.is_alive() for anything that wants to wait.
+    """
     try:
         return _PRERENDER.request(os.fspath(pdf_path), [page + 1], cache_dir, height, timeout,
                                   replace=False)
@@ -539,35 +518,45 @@ def prerender_next_async(pdf_path, page: int, cache_dir=DEFAULT_CACHE_DIR,
 
 
 # --------------------------------------------------------------------------
-# 5. Spread geometry (pure math - no file or subprocess access)
+# 5. Spread geometry (pure math, no files or subprocess)
 # --------------------------------------------------------------------------
 
 def spread_layout(left_size, right_size=None, screen=(SCREEN_W, SCREEN_H), gap: int = 8):
-    """Given rendered PNG pixel sizes (w, h) for one or two spread pages
-    (both already scaled to the same height by render_page), return the
-    on-screen placement as {"left": (x, y, w, h), "right": (x, y, w, h) |
-    None}, centered as a unit with `gap` px between the two pages. Pure
-    geometry - no file or subprocess access, so it is testable without a
-    real PDF or pdftoppm."""
+    """Given the rendered PNG sizes (w, h) for one or two pages (both already the same height),
+    returns the placement as {"left": (x, y, w, h), "right": (x, y, w, h) | None}, centred as a
+    unit with `gap` px between. Pure geometry so it tests without a real PDF.
+    """
+    # Pages come in fit to height, so anything wider than a portrait page (a landscape scan, a
+    # spread scanned as one page, two wide pages side by side) would run off both edges.
+    # Everything gets shrunk by one common factor until it fits both ways, portrait pairs that
+    # already fit stay as they are.
     screen_w, screen_h = screen
     lw, lh = left_size
+    rw, rh = right_size if right_size is not None else (0, 0)
+    g = gap if right_size is not None else 0
+    pages_w = lw + rw                    # the gap stays fixed, only the pages shrink
+    tall = max(lh, rh)
+    k = min(1.0, (screen_w - g) / float(pages_w) if pages_w else 1.0,
+            screen_h / float(tall) if tall else 1.0)
+    sc = lambda v: int(v * k)
+    lw, lh = sc(lw), sc(lh)
     if right_size is None:
         x = (screen_w - lw) // 2
         y = (screen_h - lh) // 2
         return {"left": (x, y, lw, lh), "right": None}
-    rw, rh = right_size
-    total_w = lw + gap + rw
+    rw, rh = sc(rw), sc(rh)
+    total_w = lw + g + rw
     x_left = (screen_w - total_w) // 2
-    x_right = x_left + lw + gap
+    x_right = x_left + lw + g
     y_left = (screen_h - lh) // 2
     y_right = (screen_h - rh) // 2
     return {"left": (x_left, y_left, lw, lh), "right": (x_right, y_right, rw, rh)}
 
 
 def png_size(png_path) -> Optional[tuple[int, int]]:
-    """(width, height) read straight from a PNG's IHDR chunk. There is no
-    PIL on-device (R7/B10b); the file header is all spread_layout() needs,
-    so this avoids a full image-decode dependency entirely."""
+    """(width, height) straight from a PNG's IHDR chunk. There's no PIL on the device and the
+    header is all spread_layout() needs.
+    """
     try:
         with open(png_path, "rb") as f:
             if f.read(8) != b"\x89PNG\r\n\x1a\n":

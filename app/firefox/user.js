@@ -109,3 +109,16 @@ user_pref("browser.tabs.warnOnClose", false);
 user_pref("browser.warnOnQuit", false);
 user_pref("extensions.pocket.enabled", false);
 user_pref("extensions.autoDisableScopes", 0);        // irrelevant here: we never add extensions
+
+// --- The gamepad stays a game control (owner rule; batch 1, 25 Sep) ----------
+// YouTube's TV app navigates on the Gamepad API, so every controller press also
+// moved YouTube while a game ran. No page in this profile may read the pad.
+user_pref("dom.gamepad.enabled", false);
+
+// --- Sign-ins stay private (owner, 26 Sep) ------------------------------------
+// Never save a password or form data: a sign-in lives only as the site's session
+// cookie in this profile, which rp5deck keeps owner-only (browser.lock_profile).
+user_pref("signon.rememberSignons", false);
+user_pref("signon.autofillForms", false);
+user_pref("signon.generation.enabled", false);
+user_pref("browser.formfill.enable", false);

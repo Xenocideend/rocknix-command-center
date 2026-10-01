@@ -7,7 +7,9 @@ each step does and how to undo it, is in
 **You need:** a Retroid Pocket 5 on ROCKNIX, the Retroid Dual Screen add-on
 attached in display mode and showing a picture, and SSH enabled
 (START > Network Settings > Enable SSH). The install scripts refuse to run
-unless they detect an RP5 with the add-on's display connected.
+unless they detect an RP5 with the add-on's display connected. Without the
+add-on (single-screen use), set `TD_ALLOW_UNDOCKED=1` on the device or pass
+`--undocked` to `deploy_rp5deck.py`.
 
 ## From a PC
 
@@ -21,6 +23,15 @@ ssh $RP5
 
 ## On the device
 
+Coming from the first release (25 Sep)? Run this first, it stops the old
+`092-dual-screen-persist` and `094-rp5deck` and moves their files aside:
+
+```bash
+sh /storage/rp5deck-scripts/migrate-old-daemon-names.sh
+```
+
+Then:
+
 ```bash
 cd /storage/rp5deck-new/rp5deck
 find . -type f ! -name MANIFEST.md5 ! -path '*/__pycache__/*' -print0 | xargs -0 md5sum > MANIFEST.md5
@@ -29,9 +40,13 @@ sh testday/td3-install.sh install       # backs up any old install, keeps config
 sh /storage/rp5deck/testday/td3-install.sh guard-live   # focus guard out of observe-only mode
 sh /storage/rp5deck/tools/install-es-hooks.sh           # add --force only if you accept its name warnings
 systemctl restart essway                # ES reads hooks only at startup; never restart sway.service
-sh /storage/rp5deck-scripts/install.sh  # 092-dual-screen-persist + dp-sleep-guard
-reboot                                  # 092 starts from autostart at boot
+sh /storage/rp5deck-scripts/install.sh  # dual-screen-layout-and-power + dp-sleep-guard
+sh /storage/rp5deck/steam/install-steam-nested.sh install   # optional: Steam beside the Command Center
+reboot                                  # the layout daemon starts from autostart at boot
 ```
+
+Update the layout daemon together with the app: a single screen needs its newer rules (a web app's
+workspace, ES back on its own).
 
 Instead of the first four device commands, `scripts/deploy_rp5deck.py <name> --install`
 run from a clone of this repo does the copy, checksum, verify, install and
@@ -46,6 +61,8 @@ guard-live steps over SSH (Python 3 with `paramiko`; connection details from
 - Per-game keys the Command Center should watch for go in
   `/storage/rp5deck/config.json` under `dualscreen.extra_keys`, e.g.
   `{"key": "nds[\"Game.zip\"].screen_layout", "line": "nds[\"Game.zip\"].screen_layout=6", "rom": "nds/Game.zip"}`.
+- Steam: with nested Steam installed, the Steam tab, the Companion card and Clean state's Steam items appear
+  while Steam is open ([Steam](COMMAND-CENTER-GUIDE.md#steam)).
 - Logs: `/storage/rp5deck/log/`. Settings: `/storage/rp5deck/config.json`.
 
 ## Turn off or roll back
@@ -56,8 +73,15 @@ guard-live steps over SSH (Python 3 with `paramiko`; connection details from
 | Disable the layout daemon | `touch /storage/.disable-dualscreen` |
 | Roll back the app | `sh /storage/rp5deck/testday/td3-install.sh rollback /storage/rp5deck-backups/<timestamp>` |
 | Remove the ES hooks | `sh /storage/rp5deck/tools/install-es-hooks.sh --remove && systemctl restart essway` |
+| Remove nested Steam | `sh /storage/rp5deck/steam/install-steam-nested.sh remove` |
 | Remove the sleep guard | `systemctl disable dp-sleep-guard.service`, then delete `/storage/.config/dp-sleep-guard.sh` and `/storage/.config/system.d/dp-sleep-guard.service` |
 
 Known issues (charging through the add-on, the top screen after a boot with
 a charger connected) and their workarounds are in
 [Known limitations](COMMAND-CENTER-GUIDE.md#12-known-limitations-and-troubleshooting).
+
+## Coming soon
+
+TV mode (gamepad, keyboard or mouse control on a TV), hibernate, a one-script installer, and the ROCKNIX
+charger and USB fixes once they are merged upstream. See the guide's
+[Coming soon](COMMAND-CENTER-GUIDE.md#15-coming-soon).

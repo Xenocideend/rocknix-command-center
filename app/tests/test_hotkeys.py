@@ -86,7 +86,7 @@ class TestDataIntegrity(unittest.TestCase):
         verified_on_device entries that were never actually checked)."""
         g = hotkeys.default_contexts()["global"]
         by_action = {c.action: c for c in g.combos}
-        kill = next(c for c in g.combos if "Kill" in c.action)
+        kill = next(c for c in g.combos if "Close the running" in c.action)
         self.assertTrue(kill.verified_on_device)
         self.assertEqual(hotkeys.format_combo(kill), "L1 + Select + Start")
         # bonus finds (screenshot/mangohud/game-guide) were NOT in the TASKS
@@ -169,10 +169,10 @@ class TestRealButtonNames(unittest.TestCase):
         dpad_actions = ("Volume up", "Volume down", "Brightness up", "Brightness down")
         found = 0
         for c in g.combos:
-            if c.action in dpad_actions:
+            if c.action in dpad_actions and any("D-pad" in b for b in c.buttons):
                 found += 1
-                self.assertIn("OFF", c.note, c)
-                self.assertIn("key.dpad.events", c.note, c)
+                self.assertIn("off on this device", c.note, c)
+                self.assertEqual(c.note, hotkeys.DPAD_NOTE, c)
         self.assertEqual(found, len(dpad_actions))
 
 
@@ -294,14 +294,14 @@ class TestApplyOverrides(unittest.TestCase):
     def test_no_overrides_leaves_defaults_untouched(self):
         contexts = hotkeys.default_contexts()
         out = hotkeys.apply_overrides(contexts, {"system_cfg": {}, "retroarch_cfg": {}})
-        kill = next(c for c in out["global"].combos if "Kill" in c.action)
+        kill = next(c for c in out["global"].combos if "Close the running" in c.action)
         self.assertEqual(hotkeys.format_combo(kill), "L1 + Select + Start")
 
     def test_hotkey_a_override_changes_the_kill_combo_glyph(self):
         contexts = hotkeys.default_contexts()
         overrides = {"system_cfg": {"key.hotkey.a": "BTN_TR"}, "retroarch_cfg": {}}
         out = hotkeys.apply_overrides(contexts, overrides)
-        kill = next(c for c in out["global"].combos if "Kill" in c.action)
+        kill = next(c for c in out["global"].combos if "Close the running" in c.action)
         self.assertEqual(hotkeys.format_combo(kill), "R1 + Select + Start")
 
     def test_unknown_override_value_falls_back_to_the_glyph_map(self):
@@ -310,13 +310,13 @@ class TestApplyOverrides(unittest.TestCase):
         contexts = hotkeys.default_contexts()
         overrides = {"system_cfg": {"key.hotkey.a": "BTN_SOMETHING_NEW"}, "retroarch_cfg": {}}
         out = hotkeys.apply_overrides(contexts, overrides)
-        kill = next(c for c in out["global"].combos if "Kill" in c.action)
+        kill = next(c for c in out["global"].combos if "Close the running" in c.action)
         self.assertIn("BTN_SOMETHING_NEW", hotkeys.format_combo(kill))
 
     def test_dpad_events_on_clears_the_off_by_default_note(self):
         contexts = hotkeys.default_contexts()
         vol = next(c for c in contexts["global"].combos if c.action == "Volume up")
-        self.assertIn("key.dpad.events", vol.note)
+        self.assertEqual(vol.note, hotkeys.DPAD_NOTE)
         out = hotkeys.apply_overrides(contexts, {"system_cfg": {"key.dpad.events": "1"},
                                                  "retroarch_cfg": {}})
         vol2 = next(c for c in out["global"].combos if c.action == "Volume up")
@@ -327,13 +327,13 @@ class TestApplyOverrides(unittest.TestCase):
         out = hotkeys.apply_overrides(contexts, {"system_cfg": {"key.dpad.events": "0"},
                                                  "retroarch_cfg": {}})
         vol2 = next(c for c in out["global"].combos if c.action == "Volume up")
-        self.assertIn("OFF", vol2.note)
+        self.assertEqual(vol2.note, hotkeys.DPAD_NOTE)
 
     def test_dpad_events_unread_leaves_the_unconfirmed_note_alone(self):
         contexts = hotkeys.default_contexts()
         out = hotkeys.apply_overrides(contexts, {"system_cfg": {}, "retroarch_cfg": {}})
         vol2 = next(c for c in out["global"].combos if c.action == "Volume up")
-        self.assertIn("key.dpad.events", vol2.note)
+        self.assertEqual(vol2.note, hotkeys.DPAD_NOTE)
 
     def test_retroarch_override_is_flagged_but_not_translated_to_a_wrong_glyph(self):
         contexts = hotkeys.default_contexts()
@@ -358,7 +358,7 @@ class TestLoad(unittest.TestCase):
     def test_load_with_no_readable_files_matches_defaults(self):
         contexts, order = hotkeys.load(read_fn=lambda path: None)
         self.assertEqual(order[0], "global")
-        kill = next(c for c in contexts["global"].combos if "Kill" in c.action)
+        kill = next(c for c in contexts["global"].combos if "Close the running" in c.action)
         self.assertEqual(hotkeys.format_combo(kill), "L1 + Select + Start")
 
     def test_load_applies_overrides_and_running_system_order(self):
@@ -366,7 +366,7 @@ class TestLoad(unittest.TestCase):
             return SYSTEM_CFG_SYNTHETIC if path == hotkeys.SYSTEM_CFG_PATH else None
         contexts, order = hotkeys.load(running_system="wiiu", read_fn=fake)
         self.assertEqual(order[0], "cemu")
-        kill = next(c for c in contexts["global"].combos if "Kill" in c.action)
+        kill = next(c for c in contexts["global"].combos if "Close the running" in c.action)
         self.assertEqual(hotkeys.format_combo(kill), "R1 + Select + Start")
 
 

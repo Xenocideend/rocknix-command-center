@@ -1,59 +1,37 @@
-"""theme_colour - CC4: the companion's system-carousel background colour
-should match the installed ES theme instead of hard-coded BLACK
-(companion.py CompanionView.draw(): `g.fill_rect(self.rect, BLACK)`).
+"""theme_colour: the companion's system carousel background colour, matched to the installed
+ES theme instead of plain black.
 
-Two independent sources, both implemented and unit-tested here, neither
-importing companion.py/gfx.py/media.py (no cairo/pango - this module loads
-cleanly on Windows, Linux, with or without the native libs):
+Two sources, neither needing cairo or pango so this loads anywhere:
 
-  (a) THEME XML, via parse_theme_variables()/theme_background_color().
-      Free (files already on disk, no device I/O beyond what system_logo()
-      already does), but only as good as the theme's *declared* colours -
-      it does not see a per-system BACKGROUND IMAGE the theme's own
-      "systembackground" subset might be showing instead of a flat colour
-      (see the module docstring section below - confirmed against the
-      device's real theme, es-theme-PiStation-X).
+(a) The theme XML (parse_theme_variables()/theme_background_color()). Free since the files
+are already on disk, but only as good as the theme's declared colours. It cant see a
+per-system background image the theme might show instead of a flat colour.
 
-  (b) DP-1 SCREEN SAMPLING, via SampleCache/capture_dp1()/decode_png().
-      Exact for whatever ES is really drawing (gradients, per-system
-      images, anything) but costs one `grim` screenshot per system change,
-      so it is debounced (SettleGate) and gated off entirely while a game
-      runs (should_sample()). A pure-Python PNG decoder is used instead of
-      cairo/PIL specifically so this module has zero native dependencies.
+(b) Sampling DP-1 (SampleCache/capture_dp1()/decode_png()). Exact for whatever ES is really
+drawing, but it costs a `grim` screenshot per system change, so it waits for scrolling to
+settle (SettleGate) and never runs while a game does (should_sample()). The PNG decoder is
+pure Python so there are no native dependencies.
 
-Real-capture research on es-theme-PiStation-X (the device's installed
-theme - companion.py's system_logo() already fetches paths under
-"/storage/roms/themes/es-theme-PiStation-X/main/logos/..."), fetched from
-https://github.com/JandersonJS/es-theme-PiStation-X @ 377efd8
-(2026-09-24) - see tests/fixtures/cc4-pistation-x-*-real-capture-*.xml:
+What the device's theme, es-theme-PiStation-X, actually does (from
+https://github.com/JandersonJS/es-theme-PiStation-X @ 377efd8, copies in
+tests/fixtures/cc4-pistation-x-*-real-capture-*.xml):
 
-  - theme.xml's top-level <variables> block defines backgroundColor
-    (default "ffffff"), baseColor, systemInfoColor, etc - one colour PER
-    THEME, not per system.
-  - infos/gba.xml (one of 419 per-system include files theme.xml pulls in
-    via `<include>./infos/${system.theme}.xml</include>`) carries only
-    system_description/system_name text, no colour or background override
-    - checked for gba specifically, matching DESIGN.md's worked example.
-  - main/colors/{blue,brawn,cyan,...}.xml each redefine the SAME variable
-    names with different hex values (alternate "colorset" choices a user
-    can pick in ES's theme options) - but this copy of theme.xml has no
-    `<subset name="colorset">` wiring them in (main/colors/ looks
-    orphaned/legacy in this theme revision). theme_background_color()
-    therefore reads the theme's *default* (unselected-colorset) variables
-    unless a caller passes one of these files in explicitly - there is no
-    reliable, confirmed way to learn the user's live colorset pick without
-    the device (see the CC4 report's device checklist).
-  - theme.xml itself is not strictly well-formed (`--->` instead of `-->`
-    closes one comment) - same class of bug as the "XML comment cannot
-    hold --" memory note. parse_theme_variables() therefore does NOT use
-    xml.etree (it would raise ParseError on this real file); it uses a
-    lenient regex scan instead, same approach already used elsewhere in
-    this repo for malformed ES XML (gamelists).
+theme.xml's top level <variables> sets backgroundColor (default "ffffff"), baseColor,
+systemInfoColor and so on, one colour for the whole theme, not per system.
 
-Because PiStation-X has no per-system colour, theme_background_color()
-also supports the MORE GENERAL case some other theme might use - a
-per-system `<view system="...">` background colour override - and prefers
-that when present (per_system_background()).
+The per-system includes (infos/gba.xml and 418 more, pulled in with
+`<include>./infos/${system.theme}.xml</include>`) only carry description and name text.
+
+main/colors/*.xml redefine the same variables with other values (colorsets you can pick in
+ES), but this theme.xml has no `<subset name="colorset">` wiring them in. So
+theme_background_color() reads the default variables unless a caller passes a colorset file
+in. There's no known way to read your live colorset pick.
+
+theme.xml isnt well-formed (`--->` closes one comment), so parse_theme_variables() uses a
+lenient regex scan instead of xml.etree, which would raise on it.
+
+Since PiStation-X has no per-system colour, theme_background_color() also handles themes
+that set one with `<view system="...">` and prefers it when there (per_system_background()).
 """
 import logging
 import os
@@ -63,18 +41,20 @@ import struct
 import subprocess
 import zlib
 
+import screen_map
+
 log = logging.getLogger("rp5deck.theme_colour")
 
 THEME_ENTRY = "theme.xml"
 
 
 # ---------------------------------------------------------------------------
-# Colour helpers (pure)
+# Colour helpers
 # ---------------------------------------------------------------------------
 def hex_to_rgb(s):
-    """"RRGGBB" or "RRGGBBAA" -> (r, g, b, a) floats 0..1. Raises ValueError
-    on anything else (missing/short/non-hex) - callers treat that as "no
-    usable colour", never a crash."""
+    """"RRGGBB" or "RRGGBBAA" -> (r, g, b, a) floats 0..1. Raises ValueError on anything else,
+    callers take that as no usable colour.
+    """
     s = (s or "").strip().lstrip("#")
     if len(s) not in (6, 8) or not re.match(r"^[0-9A-Fa-f]+$", s):
         raise ValueError("not a hex colour: %r" % s)
@@ -90,15 +70,15 @@ def _luminance(rgb):
 
 
 def contrast_text_color(rgb):
-    """A readable text colour for a background - near-black on a light
-    background, near-white on a dark one (WCAG-style relative luminance,
-    not exact contrast ratio - good enough for a system name/count label)."""
+    """A readable text colour for a background, near black on light and near white on dark (WCAG
+    style luminance, good enough for a name and count label).
+    """
     return (0.06, 0.06, 0.08, 1.0) if _luminance(rgb) > 0.55 else (0.96, 0.96, 0.98, 1.0)
 
 
 # ---------------------------------------------------------------------------
-# (a) Theme XML: variables + <include> chain, lenient (not xml.etree - see
-# module docstring: real theme.xml is not well-formed XML)
+# (a) Theme XML: variables and the <include> chain, read leniently since the real theme.xml
+# isnt well-formed
 # ---------------------------------------------------------------------------
 _COMMENT_RE = re.compile(r"<!--.*?--+>", re.S)
 _VARIABLES_RE = re.compile(r"<variables(\s[^>]*)?>(.*?)</variables(?=[\s>])\s*>", re.S)
@@ -111,19 +91,15 @@ _COLOR_TAG_RE = re.compile(r"<color>\s*([0-9A-Fa-f]{6,8})\s*</color>")
 
 
 def _strip_container_blocks(text, tags):
-    """Remove <subset>/<view>/<feature> blocks - their <variables>/
-    <include> children are CONDITIONAL (only apply if that theme option/
-    system/feature is the active one), so a plain "any <variables>
-    anywhere" scan would wrongly treat every alternative as always-applied.
+    """Removes <subset>/<view>/<feature> blocks. Their <variables>/<include> children only apply
+    when that option, system or feature is active, so scanning every <variables> anywhere would
+    treat every alternative as always on.
 
-    A tag-name match must require the next character to be whitespace, '/'
-    or '>' - never '.' - on BOTH the open and close tag, because real
-    theme.xml defines a *variable* literally named "subset.colorset"
-    (`<subset.colorset>Colorset</subset.colorset>`) which a naive `<subset`
-    match (with a `\\b` boundary, which also matches before '.') pairs with
-    the wrong, much later `</subset>` and silently deletes everything in
-    between, including the real <variables> block. Proven against the real
-    downloaded theme.xml during development; regression-tested here."""
+    The tag match needs whitespace, '/' or '>' after the name on both tags, never '.'. The real
+    theme.xml has a variable named "subset.colorset", and a plain `<subset` match (a \\b boundary
+    also matches before '.') pairs it with a much later `</subset>` and quietly deletes
+    everything between, real <variables> block included. The tests cover this.
+    """
     for tag in tags:
         pattern = re.compile(r"<%s(?=[\s/>])[^>]*?(?<!/)>.*?</%s(?=[\s>])\s*>" % (tag, tag), re.S)
         prev = None
@@ -134,22 +110,23 @@ def _strip_container_blocks(text, tags):
 
 
 def _top_level_variables_and_includes(text):
-    """(vars_dict, [include_path, ...]) from the parts of `text` that are
-    direct children of <theme> - not inside <subset>/<view>/<feature>."""
+    """(vars_dict, [include_path, ...]) from the parts of `text` directly under <theme>, not inside
+    <subset>/<view>/<feature>.
+    """
     text = _COMMENT_RE.sub("", text)
     stripped = _strip_container_blocks(text, ("subset", "view", "feature"))
     merged = {}
     for m in _VARIABLES_RE.finditer(stripped):
         attrs = m.group(1) or ""
         if "lang=" in attrs:
-            continue                        # default (unlocalised) block only
+            continue  # default (unlocalised) block only
         for km in _VAR_ENTRY_RE.finditer(m.group(2)):
             merged[km.group(1)] = km.group(2).strip()
     includes = []
     for m in _INCLUDE_RE.finditer(stripped):
         attrs = m.group(1) or ""
         if re.search(r"\bif\s*=", attrs):
-            continue                        # conditional - no runtime flag to evaluate it with
+            continue  # conditional, no runtime flag to evaluate it with
         body = (m.group(2) or "").strip()
         if body:
             includes.append(body)
@@ -157,9 +134,9 @@ def _top_level_variables_and_includes(text):
 
 
 def _resolve_refs(variables):
-    """${name} -> another collected variable's value, a few passes to a
-    fixed point (real themes nest at most 1-2 deep; a cycle just stops
-    changing and we bail, never hangs)."""
+    """${name} -> another variable's value, a few passes until nothing changes (real themes nest
+    1-2 deep, a cycle just stops changing and we bail).
+    """
     out = dict(variables)
     for _ in range(4):
         changed = False
@@ -180,13 +157,11 @@ def _read_text(path):
 
 def parse_theme_variables(theme_root, system=None, read=_read_text, isfile=os.path.isfile,
                            entry=THEME_ENTRY, _visited=None):
-    """Merge every top-level <variables> block reachable from
-    theme_root/entry, following unconditional <include> tags the way ES
-    does (path relative to the including file; "${system.theme}"
-    substituted with `system`). A file's OWN variables win over whatever
-    it included (matches this theme's real layout: <include> lines are
-    textually first, <variables> last) - see the module docstring's
-    real-capture summary."""
+    """Merges every top level <variables> block reachable from theme_root/entry, following
+    unconditional <include> tags like ES does (paths relative to the including file,
+    "${system.theme}" replaced with `system`). A file's own variables win over what it included,
+    which fits this theme's layout (<include> lines first, <variables> last).
+    """
     _visited = _visited if _visited is not None else set()
     path = os.path.normpath(os.path.join(theme_root, entry))
     if path in _visited or not isfile(path):
@@ -202,7 +177,7 @@ def parse_theme_variables(theme_root, system=None, read=_read_text, isfile=os.pa
     for inc in includes:
         inc = inc.replace("${system.theme}", system or "")
         if "${" in inc:
-            continue                        # an unresolvable placeholder - skip, don't crash
+            continue  # a placeholder that cant be resolved, skip it
         inc_rel = os.path.normpath(os.path.join(base_dir, inc))
         result.update(parse_theme_variables(theme_root, system, read, isfile, inc_rel, _visited))
     result.update(merged)
@@ -210,10 +185,9 @@ def parse_theme_variables(theme_root, system=None, read=_read_text, isfile=os.pa
 
 
 def per_system_background(theme_xml_text, system):
-    """A per-system `<view system="...">` background image's <color>, if
-    the theme defines one (PiStation-X does not - see module docstring;
-    this exists for themes that DO, so the parser genuinely answers
-    "the colour for a given system", not just "the theme's one colour")."""
+    """A per-system `<view system="...">` background image's <color>, if the theme has one.
+    PiStation-X doesnt, this is for themes that do.
+    """
     text = _COMMENT_RE.sub("", theme_xml_text)
     for m in _SYSTEM_VIEW_RE.finditer(text):
         names = [n.strip() for n in re.split(r"[,\s]+", m.group(1)) if n.strip()]
@@ -229,10 +203,10 @@ def per_system_background(theme_xml_text, system):
 
 
 def find_theme_root(any_theme_file_path, isfile=os.path.isfile):
-    """Walk up from a file ES handed us (system_logo()'s
-    "/storage/roms/themes/es-theme-PiStation-X/main/logos/gba.png") to the
-    directory holding theme.xml - independent of a theme's own internal
-    folder layout, which varies theme to theme."""
+    """Walks up from a file ES gave us (like system_logo()'s
+    "/storage/roms/themes/es-theme-PiStation-X/main/logos/gba.png") to the folder holding
+    theme.xml, whatever the theme's own folder layout is.
+    """
     if not any_theme_file_path:
         return None
     d = os.path.dirname(os.path.normpath(any_theme_file_path))
@@ -250,22 +224,16 @@ def find_theme_root(any_theme_file_path, isfile=os.path.isfile):
 
 def theme_background_color(theme_root, system, read=_read_text, isfile=os.path.isfile,
                             colorset=None, colorset_dir="main/colors"):
-    """(bg_rgba, fg_rgba) for `system`'s carousel background from the
-    theme's own XML, or None if it has nothing usable (caller keeps the
-    existing BLACK). fg is the theme's own systemInfoColor when it defines
-    one (it is meant to sit on this exact background), else a computed
-    contrast colour.
+    """(bg_rgba, fg_rgba) for `system`'s carousel background from the theme's XML, or None if it
+    has nothing usable (the caller keeps black). fg is the theme's systemInfoColor when it has
+    one, since that's meant for this background, else a computed contrast colour.
 
-    colorset: an optional theme colour-variant name (PiStation-X ships
-    main/colors/{blue,brawn,cyan,gray,green,orange,red,silver,violet,
-    yellow}.xml - each a full <variables> block overriding backgroundColor/
-    systemInfoColor/etc). When given and the file exists under
-    theme_root/colorset_dir, its variables are overlaid on top of the
-    theme's own (last write wins) before backgroundColor/systemInfoColor
-    are picked. There is no confirmed, device-verified way to learn which
-    colorset (if any) the user actually has selected in ES - see the
-    module docstring - so callers that want this should pass it in
-    explicitly (e.g. from a config setting), not assume one."""
+    colorset: an optional colour variant name (PiStation-X ships main/colors/{blue,brawn,cyan,
+    gray,green,orange,red,silver,violet,yellow}.xml). When given and the file exists under
+    theme_root/colorset_dir its variables go over the theme's own before the colours are
+    picked. Theres no way yet to know which colorset you picked in ES, so pass it in (from a
+    setting, say) instead of assuming one.
+    """
     entry_path = os.path.join(theme_root, THEME_ENTRY)
     if not isfile(entry_path):
         return None
@@ -303,14 +271,9 @@ def theme_background_color(theme_root, system, read=_read_text, isfile=os.path.i
     if fg_hex:
         try:
             candidate = hex_to_rgb(fg_hex)
-            # Only trust the theme's own text colour if it is actually
-            # readable on this background - real-capture proof: PiStation-
-            # X's UN-colorset-overridden defaults are backgroundColor
-            # "ffffff" and systemInfoColor "FFFFFF" (the same colour),
-            # because both are meant to be replaced together by a chosen
-            # colorset (main/colors/*.xml) that this parser cannot
-            # currently resolve (module docstring) - white-on-white would
-            # otherwise ship silently unreadable.
+            # Only trust the theme's text colour if it's readable on this background. PiStation-X's
+            # defaults are backgroundColor "ffffff" and systemInfoColor "FFFFFF", the same colour, since a
+            # colorset is meant to replace both together, and white on white would ship unreadable.
             if abs(_luminance(candidate) - _luminance(bg)) >= 0.3:
                 fg = candidate
         except ValueError:
@@ -319,8 +282,7 @@ def theme_background_color(theme_root, system, read=_read_text, isfile=os.path.i
 
 
 # ---------------------------------------------------------------------------
-# (b) DP-1 screen sampling: a dependency-free PNG decoder (no cairo/PIL -
-# this module must import cleanly on Windows) + median border colour.
+# (b) Sampling DP-1: a PNG decoder with no cairo or PIL, plus the median border colour
 # ---------------------------------------------------------------------------
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
@@ -330,10 +292,10 @@ class PngError(Exception):
 
 
 def decode_png(data):
-    """(w, h, rgba bytes, len == w*h*4). Supports 8-bit, non-interlaced
-    truecolor (colour type 2) and truecolor+alpha (6) - what `grim -t png`
-    produces; anything else raises PngError (caller treats as "no sample
-    this time", never a crash)."""
+    """(w, h, rgba bytes, len == w*h*4). Handles 8-bit non-interlaced truecolor (type 2) and
+    truecolor+alpha (6), which is what `grim -t png` makes. Anything else raises PngError and
+    the caller skips the sample.
+    """
     if data[:8] != _PNG_SIG:
         raise PngError("not a PNG (bad signature)")
     pos = 8
@@ -424,27 +386,22 @@ def _paeth(a, b, c):
 
 
 def default_exclude_box(w, h):
-    """The centre band where the carousel/logo sits, in screenshot pixel
-    space - from the real theme's main/systemview/reflected.xml
-    (real-capture fixture): <carousel><pos>0 0.39</pos>
-    <size>1 0.3925</size></carousel>, with <image name="logo"> inside it.
-    A generous margin around that band (0.28..0.82 of the height, full
-    width) so neither the logo nor the carousel's own glow/fade leaks into
-    the border sample.
+    """The centre band where the carousel and logo sit, in screenshot pixels, from the theme's
+    main/systemview/reflected.xml: <carousel><pos>0 0.39</pos><size>1 0.3925</size></carousel>
+    with the logo inside. There's a generous margin around it (0.28 to 0.82 of the height, full
+    width) so the logo and the carousel's glow dont leak into the border sample.
 
-    DEVICE CHECKLIST: this fraction is derived from the theme's declared
-    layout, not measured on the device's real DP-1 resolution - confirm it
-    still clears the actual on-screen logo before trusting "sample" mode,
-    and re-tune the fractions here if not (see the CC4 report)."""
+    This comes from the theme's declared layout and hasnt been measured on the real DP-1, so
+    check it still clears the logo before trusting sample mode.
+    """
     return (0, int(h * 0.28), w, int(h * 0.54))
 
 
 def median_border_colour(w, h, rgba, exclude_box=None, band_frac=0.06, stride=None):
-    """Median R/G/B of the outer border ring (top/bottom/left/right strips
-    `band_frac` of min(w, h) thick), skipping any pixel inside
-    exclude_box=(x, y, box_w, box_h). Median (not mean) resists a stray
-    bright/dark artifact skewing the result. None if nothing was sampled
-    (never happens unless exclude_box covers the whole image)."""
+    """Median R/G/B of the outer border ring (strips band_frac of min(w, h) thick), skipping pixels
+    inside exclude_box=(x, y, box_w, box_h). Median so one odd bright or dark pixel cant skew
+    it. None if nothing was sampled.
+    """
     band = max(2, int(min(w, h) * band_frac))
     step = stride or max(1, w // 64)
     vstep = stride or max(1, h // 64)
@@ -479,16 +436,15 @@ def median_border_colour(w, h, rgba, exclude_box=None, band_frac=0.06, stride=No
     return (r, g, b, 1.0)
 
 
-# Quarter size, no compression: the device measured 0.36 s per capture and
-# the same median colour as the full 1920x1080 capture (3.45 s), 24 Sep.
-DEFAULT_GRIM_CMD = ("grim", "-t", "png", "-l", "0", "-s", "0.25", "-o", "DP-1", "-")
+# Quarter size with no compression. On the device that took 0.36 s and gave the same median
+# as the full 1920x1080 capture, which took 3.45 s.
+DEFAULT_GRIM_CMD = ("grim", "-t", "png", "-l", "0", "-s", "0.25", "-o", screen_map.CURRENT.top, "-")
 
 
 def capture_dp1(run=subprocess.run, cmd=DEFAULT_GRIM_CMD, timeout=2.0):
-    """One read-only `grim` screenshot of DP-1 (the ES/top-screen output -
-    config.SCREEN_TO_OUTPUT["addon_top"]). Never raises: a missing grim
-    binary, a timeout, or a non-zero exit all just return None, so a
-    worker-thread caller can treat "no colour this time" uniformly."""
+    """One read-only `grim` screenshot of DP-1 (config.SCREEN_TO_OUTPUT["addon_top"]). Never
+    raises, a missing grim, a timeout or a bad exit all return None.
+    """
     try:
         r = run(cmd, capture_output=True, timeout=timeout)
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -501,19 +457,17 @@ def capture_dp1(run=subprocess.run, cmd=DEFAULT_GRIM_CMD, timeout=2.0):
 
 
 def should_sample(source, running):
-    """The one gate every caller must apply: never sample while a game is
-    running (RV1-M5-style rule - the game needs the CPU, and its window
-    covers DP-1 anyway so the capture would show the game, not ES)."""
+    """The one gate every caller needs: never sample while a game runs. The game needs the CPU and
+    its window covers DP-1 anyway, so the capture would show the game.
+    """
     return source == "sample" and not running
 
 
 class SettleGate:
-    """Debounce for the "sample" source: fast carousel scrolling fires a
-    system-selected event per tick, but only the LAST one (after
-    `settle_s` with no further change) should trigger a `grim` capture.
-    Pure logic (fake clock in tests) - the real timer callback lives in
-    companion.py's own Timers (call_later/cancel), wired by
-    patches/CC4-companion.patch."""
+    """Debounce for sample mode. Fast carousel scrolling fires a system-selected event per tick,
+    but only the last one (after `settle_s` of quiet) should trigger a capture. Pure logic with a
+    fake clock in tests, the real timer lives in companion.py.
+    """
 
     def __init__(self, settle_s=0.4):
         self.settle_s = settle_s
@@ -521,15 +475,16 @@ class SettleGate:
         self._due = None
 
     def note(self, system, now):
-        """A new system was selected (or re-selected): (re)start the
-        settle window - cancels whatever was pending before."""
+        """A system was selected (or selected again), restart the settle window and drop whatever was
+        pending.
+        """
         self._pending = system
         self._due = now + self.settle_s
 
     def ready(self, now):
-        """The system whose settle window has elapsed, exactly once (a
-        later call with no intervening note() returns None) - call this
-        from the same timer tick that would fire the capture."""
+        """The system whose settle window has passed, exactly once (another call with no note() in
+        between returns None). Call it from the timer tick that would fire the capture.
+        """
         if self._pending is not None and self._due is not None and now >= self._due - 1e-9:
             system = self._pending
             self._pending = self._due = None
@@ -541,10 +496,9 @@ class SettleGate:
 
 
 class SampleCache:
-    """(b), glued together: one grim capture per system, remembered in
-    memory. capture() is meant to run on a worker thread (submit()); it
-    never raises and returns None on any failure so a caller can just
-    check the result."""
+    """(b) put together: one grim capture per system, kept in memory. capture() runs on a worker
+    thread, never raises and returns None on any failure.
+    """
 
     def __init__(self, run=subprocess.run, cmd=DEFAULT_GRIM_CMD, timeout=2.0,
                  exclude_box=default_exclude_box, decode=decode_png,
@@ -569,8 +523,9 @@ class SampleCache:
             self._cache.pop(system, None)
 
     def capture(self, system):
-        """Worker-thread entry point: grim -> decode -> median colour,
-        cached under `system`. Returns (bg, fg) or None."""
+        """Worker thread entry: grim -> decode -> median colour, cached under `system`. Returns
+        (bg, fg) or None.
+        """
         png = self._capture()
         if png is None:
             return None

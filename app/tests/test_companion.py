@@ -47,7 +47,11 @@ PRIO = list(config.MEDIA_VALUES)     # video, titleshot, mix, image, marquee, fa
 
 
 def load_fixture(name):
-    with open(os.path.join(FIX, name), encoding="utf-8") as f:
+    path = os.path.join(FIX, name)
+    if not os.path.exists(path):
+        import unittest
+        raise unittest.SkipTest("fixture %s is a capture from the developer's device, not published" % name)
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -424,16 +428,129 @@ class TestVideoMuted(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # Resolver, against the real ES captures
-#
-# FakeES and TestResolver removed entirely: every method depended (via
-# FakeES.__init__ / TestResolver.setUp, both called unconditionally for
-# every test in the class) on tests/fixtures/es-games-gb-real-capture-*.json,
-# es-games-gb-localpaths-real-capture-*.json, es-systems-real-capture-*.json,
-# and es-system-gb-localpaths-real-capture-*.json - real on-device
-# EmulationStation API captures dropped from the public release (see
-# DROPPED-FIXTURES-list.txt). No synthetic equivalent exists for this shape,
-# so there was nothing to rewire onto.
 # ---------------------------------------------------------------------------
+class FakeES:
+    def __init__(self, up=True):
+        base = es_api.BASE_URL
+        self.up = up
+        self.bulk = [es_api._parse_game(g, base, "gb")
+                     for g in load_fixture("es-games-gb-real-capture-2026-09-23.json")]
+        self.detail_raw = {d["id"]: d for d in
+                           load_fixture("es-games-gb-localpaths-real-capture-2026-09-23.json")}
+        self.systems_list = [es_api._parse_system(s)
+                             for s in load_fixture("es-systems-real-capture-2026-09-23.json")]
+        self.calls = []
+
+    def games(self, system):
+        self.calls.append(("games", system))
+        return list(self.bulk) if (self.up and system == "gb") else []
+
+    def game_detail(self, system, gid):
+        self.calls.append(("detail", system, gid))
+        d = self.detail_raw.get(gid) if self.up else None
+        return es_api._parse_game(d, es_api.BASE_URL, system) if d else None
+
+    def systems(self):
+        return list(self.systems_list) if self.up else []
+
+    def _get(self, path):
+        self.calls.append(("get", path))
+        if self.up and path == "/systems/gb?localpaths=true":
+            return load_fixture("es-system-gb-localpaths-real-capture-2026-09-23.json")
+        return None
+
+
+class TestResolver(unittest.TestCase):
+    def setUp(self):
+        self.es = FakeES()
+        raw = load_fixture("es-games-gb-localpaths-real-capture-2026-09-23.json")
+        self.present = set()
+        for d in raw:
+            for k in es_api.MEDIA_KINDS:
+                if isinstance(d.get(k), str) and d[k].startswith("/storage/"):
+                    self.present.add(d[k])
+        self.present.add("/storage/roms/themes/es-theme-PiStation-X/main/logos/gb.png")
+        self.bomber = next(g for g in self.es.bulk if g.name == "Bomberman GB")
+        self.manual_calls = []
+
+    def resolver(self):
+        def fm(rom, system):
+            self.manual_calls.append((rom, system))
+            return None
+        orig = es_api.os.path.exists
+        es_api.os.path.exists = self.present.__contains__     # _media_ref's existence gate
+        self.addCleanup(setattr, es_api.os.path, "exists", orig)
+        return companion.Resolver(es=self.es, find_manual=fm, isfile=self.present.__contains__)
+
+    def test_selected_game_by_exact_rom_path_gets_local_media_and_metadata(self):
+        r = self.resolver()
+        info = r.resolve(Target("game", "gb", self.bomber.rom_path, "x"))
+        self.assertEqual(info["title"], "Bomberman GB")
+        self.assertEqual(info["developer"], "Hudson Soft")
+        self.assertTrue(info["media"]["video"].endswith("-video.mp4"))
+        self.assertTrue(all(p.startswith("/storage/roms/gb/") for p in info["media"].values()))
+        self.assertTrue(info["manual"].endswith("-manual.pdf"))    # ES manual when find_manual has none
+        self.assertEqual(self.manual_calls, [(self.bomber.rom_path, "gb")])
+
+    def test_matches_by_basename_under_the_other_rom_root(self):
+        r = self.resolver()
+        other = self.bomber.rom_path.replace("/storage/roms/", "/storage/games-internal/roms/")
+        info = r.resolve(Target("game", "gb", other, "x"))
+        self.assertEqual(info["title"], "Bomberman GB")
+
+    def test_rom_index_is_cached(self):
+        r = self.resolver()
+        r.resolve(Target("game", "gb", self.bomber.rom_path))
+        r.resolve(Target("game", "gb", self.bomber.rom_path))
+        self.assertEqual(self.es.calls.count(("games", "gb")), 1)
+        self.assertEqual(len([c for c in self.es.calls if c[0] == "detail"]), 1)
+
+    def test_es_down_falls_back_to_the_naming_convention_and_is_not_cached(self):
+        self.es.up = False
+        r = self.resolver()
+        info = r.resolve(Target("game", "gb", self.bomber.rom_path, "Bomberman"))
+        self.assertEqual(info["title"], "Bomberman")
+        self.assertIn("image", info["media"])
+        self.assertIn("video", info["media"])
+        self.es.up = True
+        info = r.resolve(Target("game", "gb", self.bomber.rom_path, "Bomberman"))
+        self.assertEqual(info["developer"], "Hudson Soft")        # ES answered this time
+
+    def test_running_game_with_local_media_needs_no_lookup(self):
+        r = self.resolver()
+        g = es_api._parse_game(self.es.detail_raw[self.bomber.id], es_api.BASE_URL, "gb")
+        info = r.resolve(Target("game", "gb", g.rom_path, g.name, g, True))
+        self.assertTrue(info["running"])
+        self.assertNotIn(("games", "gb"), self.es.calls)
+        self.assertEqual([c for c in self.es.calls if c[0] == "detail"], [])
+
+    def test_system_art_from_the_systems_route(self):
+        r = self.resolver()
+        info = r.resolve(Target("system", "gb"))
+        self.assertEqual(info["title"], "Game Boy")
+        self.assertEqual(info["total_games"], 555)
+        self.assertTrue(info["logo"].endswith("/logos/gb.png"))
+
+    def test_system_without_art_still_has_a_title(self):
+        self.es.up = False
+        info = self.resolver().resolve(Target("system", "gb"))
+        self.assertEqual((info["title"], info["logo"]), ("gb", None))
+
+    def test_system_art_picks_from_the_named_system_only(self):
+        """CC2 in-game "slideshow": scoped to ONE system, unlike
+        random_art() (the idle slideshow's whole-library shuffle)."""
+        r = self.resolver()
+        p = r.system_art("gb")
+        self.assertIsNotNone(p)
+        self.assertIn(p, self.present)
+        self.assertEqual([c for c in self.es.calls if c[0] == "games"], [("games", "gb")])
+
+    def test_system_art_empty_system_or_no_games(self):
+        r = self.resolver()
+        self.assertIsNone(r.system_art(""))
+        self.assertIsNone(r.system_art(None))
+        self.es.up = False
+        self.assertIsNone(r.system_art("gb"))
 
 
 # ---------------------------------------------------------------------------
@@ -1468,7 +1585,19 @@ class AppCase(unittest.TestCase):
             app.router.move(pid, x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps)
         app.router.up(pid, x1, y1)
 
+    # Batch 1 (owner: "remove tiles that have tabs"): these tiles are gone from Home;
+    # the tab strip opens the same apps. Flow tests that used to start from the tile
+    # now call the very handler the tile called, so what they exercise is unchanged.
+    REMOVED_TILE_HANDLERS = {"home.browser": "open_browser", "home.discord": "open_discord",
+                             "home.ytapp": "open_ytapp",
+                             # batch 1: Sleep moved into the Power sheet (power.sleep)
+                             "home.sleep": "open_sleep"}
+
     def tap(self, app, name):
+        if name in self.REMOVED_TILE_HANDLERS:
+            getattr(app, self.REMOVED_TILE_HANDLERS[name])()
+            app.post.drain()
+            return
         t = app.ui.targets()
         self.assertIn(name, t, sorted(t))
         x, y, w, h = t[name]
@@ -1502,7 +1631,7 @@ class TestAppNavigation(AppCase):
         self.assertIn("bar.slider", t)
         self.assertEqual(t["bar.slider"][1], 10)          # the first row, top edge
         self.assertTrue(all(t["bar.slider"][1] < t[k][1] for k in
-                            ("home.mixer", "home.hud", "home.settings", "home.discord")))
+                            ("home.mixer", "home.hotkeys", "home.settings", "home.power")))
         self.assertFalse(app.companion.active)             # no video under the CC
 
     def test_the_hardware_button_closes_it_and_opens_it_again(self):
@@ -1634,7 +1763,7 @@ class TestAppServices(AppCase):
         with open(os.path.join(os.environ["RP5DECK_RUN_DIR"], "state.json")) as f:
             st = json.load(f)
         self.assertFalse(st["running"])
-        self.assertEqual(st["version"], "I1")
+        self.assertEqual(st["version"], main.VERSION)
         self.assertEqual(st["companion"]["target"]["rom"], ROM_B)
 
     def test_no_summon_reader_for_binding_none(self):

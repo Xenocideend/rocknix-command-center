@@ -1,24 +1,19 @@
-"""ui - a small touch-first widget kit for rp5deck.
+"""ui: a small touch-first widget kit for rp5deck.
 
-Pure Python: it imports nothing native, so hit-testing, slider maths and
-layout are unit-tested off the device. Widgets draw through a Canvas-like
-object `g` (gfx.Canvas on the device) with methods fill_rect, round_rect,
-stroke_round_rect, circle, ring, line, polygon, text, and a clip_rect
-attribute.
+Pure Python, nothing native, so hit testing, slider maths and layout get tested off the
+device. Widgets draw through a Canvas-like `g` (gfx.Canvas on the device) with fill_rect,
+round_rect, stroke_round_rect, circle, ring, line, polygon, text and a clip_rect attribute.
 
-Model:
-- A Root holds the widget tree and collects damage. Widgets call
-  invalidate() when their appearance changes; the main loop redraws and
-  uploads only the union of the damaged rectangles, and sleeps when there is
-  none (battery handheld: idle means idle).
-- A TouchRouter turns pointer streams (one per finger, plus the mouse) into
-  press/move/release/cancel calls on whichever widget was hit at press time.
-  That widget keeps the pointer until release (capture), so a drag that
-  leaves the slider keeps driving the slider.
-- Rects are (x, y, w, h) in surface pixels.
+A Root holds the widget tree and collects damage. Widgets call invalidate() when they change
+look, the main loop redraws and uploads only the damaged area, and sleeps when there's none
+(idle means idle on a battery handheld).
 
-Touch sizing: the bottom panel is ~16 px/mm, so the defaults aim for targets
-of at least ~130 px and body text of at least 36 px.
+A TouchRouter turns pointer streams (one per finger, plus the mouse) into press, move,
+release and cancel calls on whatever widget was hit at press time. That widget keeps the
+pointer until release, so a drag that leaves the slider keeps driving it.
+
+Rects are (x, y, w, h) in surface pixels. The bottom panel is about 16 px/mm, so targets aim
+for at least ~130 px and body text for at least 36 px.
 """
 
 
@@ -27,8 +22,8 @@ def rgb(hexval, a=1.0):
             (hexval & 255) / 255.0, a)
 
 
-# Dark, high-contrast theme. BG is deliberately an exact, unusual colour so a
-# screenshot check can count "rp5deck pixels" (see B1-RESULTS.md).
+# Dark, high contrast theme. BG is an exact, unusual colour on purpose so a screenshot check
+# can count rp5deck's pixels (see B1-RESULTS.md).
 BG_RGB = (18, 20, 28)
 THEME = {
     "bg": rgb(0x12141C),
@@ -49,7 +44,7 @@ THEME = {
     "warn": rgb(0xF5A524),
 }
 
-MIN_TARGET = 130      # px, ~8 mm on the bottom panel
+MIN_TARGET = 130  # px, about 8 mm on the bottom panel
 BODY_TEXT = 36        # px
 
 
@@ -91,8 +86,9 @@ def inset(rect, dx, dy=None):
 
 
 def hsplit(rect, specs, gap=0):
-    """Split rect horizontally. specs: fixed widths (int) or None (flex; the
-    remaining width is shared equally). Returns one rect per spec."""
+    """Splits rect sideways. specs are fixed widths (int) or None (flex, sharing what's left
+    equally). Returns one rect per spec.
+    """
     x, y, w, h = rect
     fixed = sum(s for s in specs if s is not None)
     nflex = sum(1 for s in specs if s is None)
@@ -215,16 +211,10 @@ class Container(Widget):
     def __init__(self, rect=(0, 0, 0, 0), name=None, bg=None):
         Widget.__init__(self, rect, name)
         self.children = []
-        # bg may be an rgba tuple (frozen forever) OR a THEME key string,
-        # resolved live by bg_color() on every draw - Appearance
-        # (palettes.py) needs every already-built screen's background to
-        # follow a runtime theme change with no restart, and mutating
-        # THEME in place (see palettes.apply_theme()'s docstring) only
-        # reaches call sites that read THEME live at draw time. Every
-        # Container/Root construction in this app passes a THEME[...]
-        # value here, never an unrelated literal colour, so this file's
-        # own call sites (and screens.py/app_tabs.py/swap_ui.py's) were
-        # migrated to pass the bare key string instead.
+        # bg can be an rgba tuple (fixed) or a THEME key string resolved on every draw by bg_color().
+        # Changing the theme in Appearance has to recolour screens that are already built, with no
+        # restart, and THEME changing in place only reaches code that reads it at draw time. Every
+        # Container and Root here passes a key string.
         self.bg = bg
 
     def bg_color(self):
@@ -303,7 +293,7 @@ class Root(Container):
 
 
 def _grow(rect, by=2):
-    # Anti-aliased edges spill a pixel; damage a little more than the rect.
+    # anti-aliased edges spill a pixel, so damage a bit more than the rect
     return (rect[0] - by, rect[1] - by, rect[2] + 2 * by, rect[3] + 2 * by)
 
 
@@ -313,18 +303,9 @@ class Label(Widget):
         Widget.__init__(self, rect, name)
         self.text = text
         self.size = size
-        # color, like Container.bg above, may be an rgba tuple (frozen) or
-        # a THEME key string (resolved live by color_value()). Unstyled
-        # text (color=None, the common case) now defaults to the live key
-        # "text" instead of eagerly resolving THEME["text"] once - so a
-        # runtime theme change (Appearance) recolors it with no restart.
-        # A caller that still passes an already-resolved THEME["dim"]-
-        # style tuple keeps today's frozen-at-construction behaviour
-        # exactly (isinstance check below), so this is purely additive;
-        # settings_view.py/appearance_view.py's own Labels were migrated
-        # to pass the bare key ("dim", "warn", ...) instead, for the one
-        # screen an owner is actually looking at when they change this
-        # setting.
+        # color, like Container.bg, can be an rgba tuple (fixed) or a THEME key string resolved live by
+        # color_value(). With no color the default is the live key "text", so a theme change recolours
+        # it with no restart. A caller passing an already resolved tuple keeps it fixed.
         self.color = "text" if color is None else color
         self.bold = bold
         self.align = align
@@ -347,7 +328,7 @@ class Label(Widget):
 
 
 class Button(Widget):
-    """Press feedback on touch-down; on_click fires on release inside."""
+    """Press feedback on touch-down, on_click fires on a release inside."""
     interactive = True
 
     def __init__(self, text="", rect=(0, 0, 0, 0), on_click=None, name=None,
@@ -419,7 +400,7 @@ class Tile(Button):
                  icon=None, subtitle=""):
         Button.__init__(self, text, rect, on_click, name, 48, icon, 28)
         self.subtitle = subtitle
-        self.subtitle_size = BODY_TEXT      # I2: screens.Home shrinks it in a 5-column grid
+        self.subtitle_size = BODY_TEXT  # screens.Home shrinks it in a 5 column grid
 
     def draw(self, g):
         bg, fg = self.colors()
@@ -428,18 +409,44 @@ class Tile(Button):
         isz = min(w, h) * 0.38
         if self.icon:
             self.icon(g, (x + (w - isz) / 2, y + h * 0.14, isz, isz), fg)
-        g.text(self.text, (x + 12, y + h * 0.60, w - 24, 64), self.size, fg, True, "center")
+        # shrink a label that doesnt fit before g.text() cuts it off with an ellipsis
+        tsz = fit_text_size(g, self.text, self.size, w - 24, bold=True)
+        g.text(self.text, (x + 12, y + h * 0.60, w - 24, 64), tsz, fg, True, "center")
         if self.subtitle:
-            g.text(self.subtitle, (x + 12, y + h * 0.60 + 66, w - 24, 44), self.subtitle_size,
+            ssz = fit_text_size(g, self.subtitle, self.subtitle_size, w - 24)
+            g.text(self.subtitle, (x + 12, y + h * 0.60 + 66, w - 24, 44), ssz,
                    THEME["dim"], False, "center")
 
 
+# the smallest size fit_text_size() goes to before it lets the text ellipsize, below this a
+# tile label stops being readable at arm's length
+MIN_FIT_TEXT = 22
+
+
+def fit_text_size(g, text, size, width, bold=False, min_size=MIN_FIT_TEXT):
+    """The largest size <= `size` (steps of 2, not below min_size) where `text` fits `width`. A
+    drawing context without measure() (test fakes) gets `size`.
+    """
+    measure = getattr(g, "measure", None)
+    if measure is None or not text or width <= 0:
+        return size
+    s = size
+    while s > min_size:
+        try:
+            tw = measure(text, s, bold)[0]
+        except Exception:           # noqa: BLE001 - never break a draw over a measurement
+            return size
+        if tw <= width:
+            return s
+        s -= 2
+    return max(min_size, s)
+
+
 class LitButton(Button):
-    """A Button that can be shown "lit" (accent colour) to say a thing it
-    controls is on - e.g. the browser strip's Keyboard button while the
-    on-screen keyboard is up. Tapping it still just calls on_click; the
-    controller decides the lit state (set_lit), so it cannot drift from
-    what is really on screen."""
+    """A Button that can show "lit" (accent colour) to say what it controls is on, like the
+    browser strip's Keyboard button while the keyboard is up. A tap still just calls on_click
+    and the controller sets the lit state (set_lit), so it cant drift from what's on screen.
+    """
 
     def __init__(self, text="", rect=(0, 0, 0, 0), on_click=None, name=None, size=40,
                  icon=None, radius=22):
@@ -458,8 +465,9 @@ class LitButton(Button):
 
 
 class Toggle(Button):
-    """Two-state button. on_toggle(new_state) fires on a completed tap.
-    set_state() changes it from outside without firing the callback."""
+    """Two-state button. on_toggle(new_state) fires on a finished tap. set_state() changes it from
+    outside without firing the callback.
+    """
 
     def __init__(self, rect=(0, 0, 0, 0), state=False, on_toggle=None, name=None,
                  text_on="On", text_off="Off", icon_on=None, icon_off=None,
@@ -500,28 +508,25 @@ class Toggle(Button):
 class Slider(Widget):
     """Horizontal slider, value 0..1.
 
-    Touch-down never moves the knob (RV1-M1: a swipe that merely starts on a
-    slider must not change the volume). A stroke is judged once, by the first
-    axis to travel SLOP px:
-      sideways  the drag engages and is RELATIVE: the knob moves by the
-                finger's travel since touch-down, from wherever it was
-      vertical  the stroke is not for the slider; it changes nothing
-      neither   a clean tap: the value jumps to the tap on RELEASE
-    on_change(v) fires whenever the (stepped) value changes during a press.
-    Every press then ends in exactly one of:
+    Touch-down never moves the knob, a swipe that just starts on a slider mustnt change the
+    volume. A stroke is judged once, by the first axis to move SLOP px:
+      sideways  the drag engages and is relative, the knob moves by how far the finger
+                went since touch-down, from wherever it was
+      vertical  the stroke isnt for the slider and changes nothing
+      neither   a clean tap, the value jumps to the tap on release
+    on_change(v) fires whenever the stepped value changes during a press. Every press ends in
+    exactly one of:
       on_release(v)            a real release that changed the value (commit)
-      on_cancel(v0, changed)   anything else: a cancel (the router claimed the
-                               stroke as a gesture, a view closed, shutdown) or
-                               a release that changed nothing. The value is
-                               restored to v0, the one it had at touch-down;
-                               nothing is to be committed. Without an
-                               on_cancel, a changed value is restored through
-                               on_change(v0) so readouts follow.
-    The knob sits inside the rect, so 0 and 1 are reachable at the edges.
-    External set_value() calls are ignored while a finger is down, so a
-    change notification cannot yank the knob from under the finger."""
+      on_cancel(v0, changed)   anything else, a cancel (the router took the stroke as a
+                               gesture, a view closed, shutdown) or a release that changed
+                               nothing. The value goes back to v0 from touch-down and nothing
+                               gets committed. Without on_cancel a changed value is put back
+                               through on_change(v0) so readouts follow.
+    The knob sits inside the rect so 0 and 1 are reachable at the edges. set_value() from outside
+    is ignored while a finger is down, so an update cant yank the knob out from under you.
+    """
     interactive = True
-    SLOP = 24                   # px (~1.5 mm) of travel before a stroke is judged
+    SLOP = 24  # px (about 1.5 mm) of travel before a stroke is judged
 
     def __init__(self, rect=(0, 0, 0, 0), value=0.0, step=0.01, knob_r=46,
                  on_change=None, on_release=None, name=None, on_cancel=None):
@@ -566,7 +571,7 @@ class Slider(Widget):
                 self.on_change(v)
 
     def _drag_to(self, x):
-        # relative: the knob keeps the offset it had from the finger at touch-down
+        # relative, the knob keeps the offset it had from the finger at touch-down
         self._set(self.value_at(self._kx0 + (x - self._x0)))
 
     def _judge(self, x, y):
@@ -581,7 +586,7 @@ class Slider(Widget):
 
     def on_press(self, pid, x, y):
         if self.dragging:
-            return                  # a second finger does not steal the knob
+            return  # a second finger doesnt steal the knob
         self.dragging = True
         self._pid = pid
         self._phase = "pending"
@@ -610,7 +615,7 @@ class Slider(Widget):
         if self._phase == "drag":
             self._drag_to(x)
         elif self._phase == "pending":
-            self._set(self.value_at(x))         # a clean tap: set on release
+            self._set(self.value_at(x))  # a clean tap, set on release
         self._end()
         if self._changed:
             if self.on_release_cb:
@@ -693,15 +698,15 @@ def icon_back(g, r, color):
 
 
 # ---------------------------------------------------------------------------
-# Text entry inside rp5deck's own panel (HF1): a field and a built-in
-# keyboard. Both are ordinary widgets on the layer surface, so typing here
-# never involves keyboard focus at all - the surface keeps keyboard
-# interactivity NONE and the keys are just buttons.
+# Text entry inside rp5deck's own panel: a field and a built-in keyboard. Both are normal
+# widgets on the layer surface, so typing never involves keyboard focus. The surface keeps
+# keyboard interactivity NONE and the keys are just buttons.
 # ---------------------------------------------------------------------------
 class TextField(Button):
-    """A one-line text box. Tapping it calls on_focus (the owner of the
-    field shows a Keyboard); the text is edited through insert/backspace/
-    clear, never by a real keyboard. `focused` only draws the caret."""
+    """A one line text box. Tapping it calls on_focus (whatever owns the field shows a Keyboard).
+    The text changes through insert/backspace/clear, never a real keyboard, and `focused` only
+    draws the caret.
+    """
 
     def __init__(self, placeholder="", on_focus=None, name=None, size=44, max_len=200):
         Button.__init__(self, "", on_click=on_focus, name=name, size=size, radius=18)
@@ -737,7 +742,7 @@ class TextField(Button):
                             THEME["accent"] if self.focused else THEME["line"], 4)
         inner = (x + 28, y, w - 56, h)
         if self.text:
-            # show the END of a long entry: that is where the caret is
+            # show the end of a long entry, that's where the caret is
             shown = self.text if len(self.text) <= 48 else "…" + self.text[-47:]
             g.text(shown + ("|" if self.focused else ""), inner, self.size, THEME["text"])
         else:
@@ -745,8 +750,8 @@ class TextField(Button):
                    THEME["faint"])
 
 
-# Key specs: a plain string is a character key of width 1; a tuple is
-# (action, width units). Every row adds up to 10 units.
+# Key specs: a plain string is a character key 1 wide, a tuple is (action, width units). Every
+# row adds up to 10 units.
 KB_LAYERS = {
     "letters": [
         list("qwertyuiop"),
@@ -768,11 +773,11 @@ KB_LABELS = {"shift": "Shift", "bksp": "Delete", "sym": "?123", "letters": "abc"
 class Keyboard(Container):
     """A built-in on-screen keyboard for rp5deck's own text fields.
 
-    on_text(s) gets each typed character (a space is " "); on_backspace(),
-    on_clear() and on_enter() the edit keys (key ids are unique per layer).
-    Shift is one-shot: it uppercases the next letter and then turns itself
-    off. press(key) is the whole key logic, public so tests drive it
-    without geometry."""
+    on_text(s) gets each typed character (a space is " "), and on_backspace(), on_clear() and
+    on_enter() get the edit keys (key ids are unique per layer). Shift is one-shot, it uppercases
+    the next letter and turns itself off. press(key) is all the key logic, public so tests can
+    drive it without geometry.
+    """
 
     ROWS = 4
     GAP = 14
@@ -867,16 +872,16 @@ class Keyboard(Container):
 class SwipeRecognizer:
     """Watches every pointer stroke alongside the widgets.
 
-    A stroke becomes a gesture once it has travelled `distance` px and is
-    mostly vertical (|dy| >= 2|dx|). Names:
+    A stroke becomes a gesture once it's gone `distance` px and is mostly vertical
+    (|dy| >= 2|dx|). Names:
       swipe_down_from_top    started within `edge` px of the top
       swipe_down             started anywhere else
       swipe_up_from_bottom   started within `edge` px of the bottom
       swipe_up               started anywhere else
-    Each stroke is judged once: a stroke that goes `distance` px sideways
-    first (a slider drag) is never a gesture. If wants(name) is true the
-    router takes the pointer away from its widget (on_cancel) and calls
-    on_gesture(name); otherwise the widget keeps it."""
+    Each stroke is judged once, and one that goes `distance` px sideways first (a slider drag) is
+    never a gesture. If wants(name) is true the router takes the pointer from its widget
+    (on_cancel) and calls on_gesture(name), otherwise the widget keeps it.
+    """
 
     def __init__(self, height_fn, edge=60, distance=120, wants=None, on_gesture=None):
         self.height_fn = height_fn
@@ -892,9 +897,9 @@ class SwipeRecognizer:
     def classify(self, x0, y0, x, y):
         dx, dy = x - x0, y - y0
         if abs(dx) >= self.distance and abs(dx) > abs(dy) / 2.0:
-            return False            # horizontal: never a swipe
+            return False  # sideways, never a swipe
         if abs(dy) < self.distance or abs(dy) < 2 * abs(dx):
-            return None             # undecided yet
+            return None  # not decided yet
         if dy > 0:
             return "swipe_down_from_top" if y0 < self.edge else "swipe_down"
         return "swipe_up_from_bottom" if y0 >= self.height_fn() - self.edge else "swipe_up"
@@ -915,14 +920,13 @@ class SwipeRecognizer:
 
 
 class TouchRouter:
-    """Routes pointer streams to widgets with capture, and to an optional
-    SwipeRecognizer.
+    """Routes pointer streams to widgets with capture, and to an optional SwipeRecognizer.
 
-    pid identifies a pointer: ('f', finger_id) for touch, ('m', 0) for the
-    mouse / seat pointer. The widget hit on press receives every later event
-    of that pointer until release or cancel, even outside its rect - unless
-    the recogniser claims the stroke as a gesture, in which case the widget
-    gets on_cancel and the rest of the stroke goes nowhere."""
+    pid names a pointer: ('f', finger_id) for touch, ('m', 0) for the mouse or seat pointer. The
+    widget hit on press gets every later event of that pointer until release or cancel, even
+    outside its rect, unless the recogniser claims the stroke as a gesture. Then the widget gets
+    on_cancel and the rest of the stroke goes nowhere.
+    """
 
     def __init__(self, root, log=None, gestures=None):
         self.root = root
@@ -932,7 +936,7 @@ class TouchRouter:
         self.gestures = gestures
 
     def down(self, pid, x, y):
-        if pid in self.captures or pid in self.claimed:   # a lost release; close it first
+        if pid in self.captures or pid in self.claimed:  # a lost release, close it first
             self.cancel(pid)
         if self.gestures:
             self.gestures.start(pid, x, y)
@@ -948,7 +952,10 @@ class TouchRouter:
     def move(self, pid, x, y):
         if pid in self.claimed:
             return
-        if self.gestures:
+        # a widget that owns its drag (the Notes canvas while drawing, the manual's pan area) keeps the
+        # finger, otherwise a diagonal stroke got claimed as a swipe after 120 px and cut short
+        owner = self.captures.get(pid)
+        if self.gestures and not getattr(owner, "owns_drag", False):
             g = self.gestures.move(pid, x, y)
             if g:
                 self.claimed.add(pid)

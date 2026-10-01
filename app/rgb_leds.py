@@ -1,48 +1,35 @@
-"""rgb_leds - RGB stick-light control for the RP5's SM8250 analog stick
-rings (owner request: "add RGB controls for the thumb sticks").
+"""rgb_leds: the RP5's analog stick lights.
 
-Real device facts (read on the device 24 Sep 2026):
+On the device:
   /sys/class/leds/rgb:l1..rgb:l4   left stick ring (4 LEDs)
   /sys/class/leds/rgb:r1..rgb:r4   right stick ring (4 LEDs)
-  each is a MULTICOLOUR led class device: brightness 0-255
-  (max_brightness 255), multi_index = "blue green red" (NOTE the order -
-  never assume it, read_current() parses whatever multi_index actually
-  says), multi_intensity e.g. "0 20 255" meaning blue=0 green=20 red=255.
-  There are also single-channel l:r1/l:g1/... entries under the same
-  class - this module never touches them.
+  each is a multicolour LED with brightness 0-255 and multi_index "blue green red" (that
+  order isnt assumed, read_current() parses whatever multi_index says), and multi_intensity
+  like "0 20 255" for blue=0 green=20 red=255. The single channel l:r1/l:g1/... entries
+  in the same class are never touched.
 
-ROCKNIX ships the tool that actually knows how to drive all 4 LEDs of
-both rings together:
+ROCKNIX ships the tool that drives all 4 LEDs of both rings together:
 
-    /usr/bin/analog_sticks_ledcontrol <brightness> \
-        <right_r> <right_g> <right_b> <left_r> <left_g> <left_b>
+    /usr/bin/analog_sticks_ledcontrol <brightness> <right_r> <right_g> <right_b> <left_r> <left_g> <left_b>
 
-7 args, RIGHT first, then LEFT - the opposite order of this module's own
-LightState (left, right), so build_argv()/apply() must swap the pair when
-constructing argv. ledcontrol writes brightness and multi_intensity
-(in b g r order) itself, for all 4 LEDs of each stick, via
-/sys/devices/platform/multi-led{l,r}{1..4}/leds/rgb:{l,r}{n}/. This module
-NEVER writes sysfs directly to set a colour - the only command it ever
-runs is this tool, argv-only (no shell), and only after every one of the
-7 arguments passes build_argv()'s allow-list (int, not bool, 0-255).
+7 args, right first and then left, the opposite of this module's LightState (left, right), so
+build_argv()/apply() swap the pair. ledcontrol writes brightness and multi_intensity (in b g r
+order) itself for all 4 LEDs of each stick. This never writes sysfs directly to set a colour,
+the only command it runs is that tool, argv only with no shell, and only after all 7 args pass
+build_argv()'s allow list (int, not bool, 0-255).
 
-ROCKNIX re-applies ITS OWN idea of the stick colour on power events:
-powerstate runs `ledcontrol $(get_setting led.color)` on charge/discharge
-changes, rocknix-fake-suspend runs `ledcontrol ${LED_STATE}` on wake, and
-input_sense's FN_B does `ledcontrol` / `ledcontrol poweroff`. So once this
-module is in "off" or "colour" mode it is in a tug-of-war it can lose at
-any moment - Controller.keeper_tick() is the side that notices and wins it
-back, cheaply (two small sysfs reads), without spamming the tool if
-ROCKNIX keeps stomping (it gives up after a few tries in a row and logs
-once). In "rocknix" mode the keeper does nothing at all - ES's own LED
-menu and battery mode are left alone, on purpose.
+ROCKNIX puts its own stick colour back on power events: powerstate runs
+`ledcontrol $(get_setting led.color)` on charge changes, rocknix-fake-suspend runs
+`ledcontrol ${LED_STATE}` on wake, and input_sense's FN_B does `ledcontrol` or
+`ledcontrol poweroff`. So in "off" or "colour" mode this can lose at any moment, and
+Controller.keeper_tick() notices and wins it back cheaply (two small sysfs reads), and gives up
+after a few tries in a row with one log line instead of spamming the tool. In "rocknix" mode
+the keeper does nothing, so ES's own LED menu and battery mode are left alone.
 
-This module never reads or writes system.cfg (ES rewrites it from memory
-and it can hold credentials) - persistence goes through config.py's own
-"lights" group instead (patches/RG-config.patch, applied later by
-Main/CM): state_from_config()/config_changes_for() are the two ends of
-that bridge, both going through config.get_value()/config.save_changes()
-so this module has no schema of its own to keep in sync.
+This never reads or writes system.cfg (ES rewrites it from memory and it can hold
+credentials). Settings are saved through config.py's "lights" group instead.
+state_from_config()/config_changes_for() are the two ends, both through
+config.get_value()/config.save_changes(), so there's no schema here to keep in sync.
 """
 import logging
 import subprocess
@@ -59,10 +46,9 @@ STICKS = ("left", "right")
 MODE_ROCKNIX, MODE_OFF, MODE_COLOUR = "rocknix", "off", "colour"
 MODES = (MODE_ROCKNIX, MODE_OFF, MODE_COLOUR)
 
-# A small named palette, plus custom via hue_to_rgb(). Every preset is a
-# full-saturation, full-value hue (the per-stick "brightness" 0-255 sent to
-# ledcontrol scales overall intensity separately from these channel values,
-# matching the tool's own <brightness> + <r> <g> <b> split).
+# A small named palette, plus custom through hue_to_rgb(). Every preset is a full saturation,
+# full value hue. The per-stick brightness (0-255) sent to ledcontrol scales intensity
+# separately, the same brightness + r g b split the tool uses.
 PRESETS = [
     ("red", (255, 0, 0)),
     ("orange", (255, 120, 0)),
@@ -79,21 +65,21 @@ PRESET_BY_NAME = dict(PRESETS)
 DEFAULT_COLOUR = (255, 0, 0)
 DEFAULT_BRIGHTNESS = 200
 
-RATE_LIMIT_S = 0.08            # 80 ms: at most this often while a slider drags
+RATE_LIMIT_S = 0.08  # 80 ms, at most this often while a slider drags
 KEEPER_PERIOD_S = 5.0          # how often keeper_tick() actually checks
-KEEPER_MAX_TRIES = 3           # consecutive failed re-applies before giving up
+KEEPER_MAX_TRIES = 3  # failed re-applies in a row before giving up
 
 
 # ---------------------------------------------------------------------------
-# Pure colour helpers (no device, no I/O - safe to unit test directly)
+# Pure colour helpers, no device and no I/O
 # ---------------------------------------------------------------------------
 def hue_to_rgb(hue, sat=1.0):
-    """hue (any float, wraps mod 360) [+ optional saturation 0-1] -> an
-    (r, g, b) tuple of ints 0-255, at full value. The only place HSV maths
-    happens in this module."""
+    """hue (any float, wraps mod 360) [+ optional saturation 0-1] -> (r, g, b) ints 0-255 at full
+    value. The only HSV maths in this module.
+    """
     hue = float(hue) % 360.0
     sat = 0.0 if sat < 0.0 else 1.0 if sat > 1.0 else float(sat)
-    c = sat                      # value fixed at 1.0, so chroma == saturation
+    c = sat  # value fixed at 1.0 so chroma == saturation
     x = c * (1 - abs((hue / 60.0) % 2 - 1))
     m = 1.0 - c
     if hue < 60:
@@ -113,11 +99,10 @@ def hue_to_rgb(hue, sat=1.0):
 
 
 def rgb_to_hue(rgb):
-    """Approximate inverse of hue_to_rgb: (r, g, b) 0-255 -> (hue, sat) so
-    rgb_view can park its hue slider at roughly the right spot for a preset
-    or a stored colour. Grey (sat 0) returns hue 0 - the slider position is
-    then meaningless, which is fine: nothing reads hue for a colour that
-    has none."""
+    """Rough inverse of hue_to_rgb, (r, g, b) 0-255 -> (hue, sat), so rgb_view can put its hue
+    slider near a preset or saved colour. Grey (sat 0) gives hue 0, which is fine since nothing
+    reads hue for a colour that has none.
+    """
     r, g, b = (c / 255.0 for c in rgb)
     mx, mn = max(r, g, b), min(r, g, b)
     d = mx - mn
@@ -166,11 +151,10 @@ def _rgb_to_hex(rgb_val):
 # State
 # ---------------------------------------------------------------------------
 class LightState:
-    """mode in MODES; left/right are (r, g, b) 0-255 each; linked means
-    "the same colour on both sticks" (colour_for()/with_colour() enforce
-    it - the two colours cannot drift apart while linked); brightness is
-    the single 0-255 sent to ledcontrol's first argument. Immutable:
-    replace()/with_colour() return a new LightState."""
+    """mode is one of MODES, left/right are (r, g, b) 0-255, linked means the same colour on both
+    sticks (colour_for()/with_colour() keep them together), and brightness is the single 0-255
+    sent as ledcontrol's first arg. Immutable, replace()/with_colour() return a new LightState.
+    """
     __slots__ = ("mode", "linked", "left", "right", "brightness")
 
     def __init__(self, mode=MODE_ROCKNIX, linked=True, left=DEFAULT_COLOUR,
@@ -215,13 +199,12 @@ class LightState:
 
 
 # ---------------------------------------------------------------------------
-# config.py bridge (RG-config.patch adds the "lights" group there)
+# config.py bridge (the "lights" group)
 # ---------------------------------------------------------------------------
 def state_from_config(cfg, cfg_mod=None):
-    """Build a LightState from a loaded config dict. Falls back to
-    LightState()'s own defaults for anything config.get_value() cannot
-    answer (an unpatched config.py with no "lights" schema yet -
-    get_value() returns None for an unknown key path, never raises)."""
+    """Builds a LightState from a loaded config dict. Falls back to LightState()'s defaults for
+    anything config.get_value() cant answer (it returns None for an unknown key, never raises).
+    """
     m = cfg_mod or config
     mode = m.get_value(cfg, ("lights", "mode")) or MODE_ROCKNIX
     linked = m.get_value(cfg, ("lights", "linked"))
@@ -257,10 +240,10 @@ def _validate_byte_arg(v):
 
 
 def build_argv(brightness, right, left):
-    """THE only place argv for ledcontrol is built. Every one of the 7
-    numbers is validated as a real int 0-255 (never a bool, never a
-    string, never out of range) before it can reach subprocess - this is
-    what tools/rg_break_tests.py's allow-list break targets."""
+    """The only place ledcontrol's argv gets built. All 7 numbers are checked as real ints 0-255
+    (never a bool, a string or out of range) before anything reaches subprocess.
+    tools/rg_break_tests.py breaks this to prove it.
+    """
     vals = [brightness] + list(right) + list(left)
     if len(vals) != 7:
         raise ValueError("ledcontrol needs exactly 7 arguments, got %d" % len(vals))
@@ -269,10 +252,9 @@ def build_argv(brightness, right, left):
 
 
 def _run_tool(argv, timeout=3.0):
-    """The only function that ever calls subprocess for this module -
-    argv-only (no shell=True), and refuses anything that is not exactly
-    [TOOL, 7 numeric strings] even if a caller upstream slipped past
-    build_argv() (defence in depth, cheap to keep)."""
+    """The only function here that calls subprocess, argv only (no shell=True). It refuses anything
+    that isnt exactly [TOOL, 7 numeric strings] even if a caller got past build_argv().
+    """
     if len(argv) != 8 or argv[0] != TOOL:
         raise ValueError("refused command: %r" % (argv,))
     try:
@@ -287,11 +269,11 @@ def _run_tool(argv, timeout=3.0):
 
 
 def apply(state, run=None):
-    """mode "rocknix": do nothing at all - hands off completely, so ES's
-    own LED menu / battery mode keep working. "off": ledcontrol with
-    brightness 0 and every channel 0. "colour": ledcontrol with the
-    state's brightness and its two colours (RIGHT first, per the tool).
-    Returns None for "rocknix" (nothing ran), else run()'s bool result."""
+    """mode "rocknix" does nothing at all so ES's own LED menu and battery mode keep working. "off"
+    runs ledcontrol with brightness 0 and every channel 0. "colour" runs it with the state's
+    brightness and its two colours (right first, per the tool). Returns None for "rocknix"
+    (nothing ran), else run()'s bool.
+    """
     run = run or _run_tool
     if state.mode == MODE_ROCKNIX:
         return None
@@ -328,12 +310,11 @@ def _read_led(sysfs_dir, name):
 
 
 def read_current(sysfs_dir=SYSFS_DIR):
-    """Read back what is really lit on both sticks right now, using
-    multi_index to learn the real channel order (never assume "blue green
-    red" holds - read_current() parses whatever the file actually says).
-    Returns {"left": (r,g,b), "right": (r,g,b), "brightness": int}, or
-    None if either ring is unreadable (missing driver, wrong device,
-    permissions) - the keeper treats None as "cannot tell, do nothing"."""
+    """Reads back what's really lit on both sticks right now, using multi_index for the real
+    channel order. Returns {"left": (r,g,b), "right": (r,g,b), "brightness": int}, or None if
+    either ring cant be read (missing driver, wrong device, permissions), which the keeper takes
+    as cant tell, do nothing.
+    """
     left = _read_led(sysfs_dir, "rgb:l1")
     right = _read_led(sysfs_dir, "rgb:r1")
     if left is None or right is None:
@@ -349,7 +330,7 @@ def _matches(current, state):
     if state.mode == MODE_COLOUR:
         return (current["brightness"] == state.brightness and current["left"] == state.left
                and current["right"] == state.right)
-    return True                 # MODE_ROCKNIX: caller never gets here
+    return True  # MODE_ROCKNIX never gets here
 
 
 def _describe(current):
@@ -360,13 +341,13 @@ def _describe(current):
 
 
 # ---------------------------------------------------------------------------
-# Controller: owns the live LightState, rate-limits drags, runs the keeper
+# Controller: owns the live LightState, rate limits drags, runs the keeper
 # ---------------------------------------------------------------------------
 class Controller:
-    """`run` (ledcontrol invoker), `read` (read_current) and `now`
-    (time.monotonic) are all injectable so tests never touch a real
-    device. Not thread-aware by itself - main.py calls it from the UI
-    thread / its own timer callbacks, same as the rest of the app."""
+    """`run` (the ledcontrol call), `read` (read_current) and `now` (time.monotonic) can all be
+    swapped so tests never touch a device. Not thread aware, main.py calls it from the UI thread
+    and its own timers like everything else.
+    """
 
     def __init__(self, state=None, run=None, read=None, now=None,
                 rate_limit=RATE_LIMIT_S, keeper_period=KEEPER_PERIOD_S,
@@ -394,16 +375,17 @@ class Controller:
         return apply(self.state, run=self._run)
 
     def set_state(self, state):
-        """A discrete change (mode / linked / a preset tap / a slider's
-        final on_release value): apply immediately, no rate limit."""
+        """A one-off change (mode, linked, a preset tap, a slider's final on_release value) applies
+        right away with no rate limit.
+        """
         self.state = state
         return self._apply_now()
 
     def drag(self, state):
-        """A slider mid-drag: apply now if `rate_limit` seconds have
-        passed since the last apply, else just remember the value - call
-        drag_flush() when the drag ends so the final value is never
-        dropped (DESIGN: "always apply the final value")."""
+        """A slider mid-drag applies now if `rate_limit` seconds have passed since the last apply,
+        otherwise it just remembers the value. Call drag_flush() when the drag ends so the final
+        value always gets applied.
+        """
         self.state = state
         t = self._now()
         if t - self._last_apply_t >= self.rate_limit:
@@ -419,13 +401,12 @@ class Controller:
 
     # -- keeper -----------------------------------------------------------
     def keeper_tick(self, force=False):
-        """Call ~every keeper_period seconds, plus on demand (force=True:
-        app start, an ES "wake" event). Never acts in mode "rocknix".
-        Cheap: read_current() is two small sysfs reads; only re-applies
-        (a subprocess call) when the device disagrees with `state`, and
-        gives up after `max_tries` consecutive re-applies that did not
-        stick, logging once. Returns a short status string (used by
-        tests; main.py does not need it)."""
+        """Call about every keeper_period seconds, plus on demand (force=True on app start or an ES wake
+        event). Never acts in "rocknix" mode. read_current() is two small sysfs reads, it only
+        re-applies (a subprocess call) when the device disagrees with `state`, and gives up with one
+        log line after `max_tries` re-applies in a row that didnt stick. Returns a short status for
+        tests.
+        """
         if self.state.mode == MODE_ROCKNIX:
             return "rocknix"
         t = self._now()
@@ -450,9 +431,9 @@ class Controller:
         return "restored"
 
     def on_es_wake(self):
-        """main.py calls this from its ES "wake" event handler (esevents
-        WAKE) - the moment ROCKNIX's own wake path is most likely to have
-        just run `ledcontrol ${LED_STATE}` over whatever this module set."""
+        """main.py calls this on ES's wake event, the moment ROCKNIX's own wake path most likely just ran
+        `ledcontrol ${LED_STATE}` over whatever this set.
+        """
         return self.keeper_tick(force=True)
 
     def reset_backoff(self):

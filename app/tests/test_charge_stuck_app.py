@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """CHG: "charger connected but not charging" wired into the REAL main.App +
-screens.py (no SDL) - proves the plumbing (io_worker reuse, Home banner
-attribute names, the Dismiss button's on_click, and CHG-outranks-DS) rather
-than re-testing charge_stuck_view.py's own poll/dismiss logic (tests/
-test_charge_stuck_view.py) or the banner's own layout (tests/test_screens.py)."""
+screens.py (no SDL), the plumbing (io_worker reuse, the full-screen warning) rather than
+charge_stuck_view.py's own poll logic (tests/test_charge_stuck_view.py)."""
 import argparse
 import os
 import sys
@@ -54,15 +52,14 @@ class Case(AppCase):
 
 
 class TestWiring(Case):
-    def test_stuck_shows_the_home_banner(self):
+    def test_stuck_shows_the_big_warning_not_a_banner(self):
         app = self.build(samples=[sample(i * 10.0, True, 700_000, 0x00) for i in range(6)])
         for _ in range(6):
             app.charge_stuck.poll()
             app.post.drain()
-        self.open_cc(app)
-        self.assertTrue(app.ui.home.banner_label.visible)
-        self.assertIn("Not charging", app.ui.home.banner_label.text)
-        self.assertEqual(app.ui.home.banner_action.text, "Dismiss")
+        self.assertEqual(app.ui.sheet, "charge_warning")
+        self.assertIn("not charging", app.ui.cc.sheets["charge_warning"].headline.text.lower())
+        self.assertFalse(app.ui.home.banner_label.visible)
 
     def test_good_never_shows_it(self):
         app = self.build(samples=[sample(i * 10.0, True, -300_000, 0x0C) for i in range(6)])
@@ -72,17 +69,16 @@ class TestWiring(Case):
         self.open_cc(app)
         self.assertFalse(app.ui.home.banner_label.visible)
 
-    def test_tapping_dismiss_hides_it_through_the_real_button(self):
+    def test_the_warning_has_no_button_to_dismiss_it(self):
         app = self.build(samples=[sample(i * 10.0, True, 700_000, 0x00) for i in range(6)])
         for _ in range(6):
             app.charge_stuck.poll()
             app.post.drain()
-        self.open_cc(app)
-        self.tap(app, "home.banner_action")
-        self.assertFalse(app.ui.home.banner_label.visible)
-        self.assertTrue(app.charge_stuck.stuck)      # dismissed, not fixed
+        sheet = app.ui.cc.sheets["charge_warning"]
+        self.assertFalse([n for n in app.ui.targets() if n.startswith("charge_warning.")])
+        self.assertTrue(sheet.visible)
 
-    def test_charge_outranks_a_live_dualscreen_notice(self):
+    def test_the_dualscreen_banner_keeps_home_while_the_warning_is_on_top(self):
         app = self.build(
             samples=[sample(i * 10.0, True, 700_000, 0x00) for i in range(6)],
             ds_checker=lambda: {"available": True, "missing": ["3ds.screen_layout"],
@@ -92,12 +88,8 @@ class TestWiring(Case):
         for _ in range(6):
             app.charge_stuck.poll()
             app.post.drain()
-        self.open_cc(app)
-        self.assertIn("Not charging", app.ui.home.banner_label.text)
-        # dismiss the charge notice: the dualscreen one takes the slot back.
-        self.tap(app, "home.banner_action")
+        self.assertEqual(app.ui.sheet, "charge_warning")
         self.assertIn("3ds.screen_layout", app.ui.home.banner_label.text)
-        self.assertEqual(app.ui.home.banner_action.text, "Restore")
 
 
 class TestDemoNotice(Case):
@@ -108,16 +100,12 @@ class TestDemoNotice(Case):
         super().setUp()
         self.addCleanup(os.environ.pop, "RP5DECK_DEMO_NOTICE", None)
 
-    def test_charge_demo_shows_the_banner_without_a_poll(self):
+    def test_charge_demo_shows_the_warning_without_a_poll(self):
         os.environ["RP5DECK_DEMO_NOTICE"] = "charge"
-        # a good sampler: a real poll would never show the banner
+        # a good sampler: a real poll would never warn
         app = self.build(samples=[sample(i * 10.0, True, -300_000, 0x0C) for i in range(6)])
         app._charge_stuck_tick()
-        self.open_cc(app)
-        self.assertTrue(app.ui.home.banner_label.visible)
-        self.assertIn("Not charging", app.ui.home.banner_label.text)
-        self.tap(app, "home.banner_action")          # Dismiss: inert in demo
-        self.assertTrue(app.ui.home.banner_label.visible)
+        self.assertEqual(app.ui.sheet, "charge_warning")
 
     def test_dualscreen_demo_restore_never_opens_the_sheet(self):
         os.environ["RP5DECK_DEMO_NOTICE"] = "dualscreen"

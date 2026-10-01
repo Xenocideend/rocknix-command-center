@@ -33,7 +33,7 @@ SUP = ("tests.test_supervisor.TestSupervisorIntegration."
 
 BREAKS = [
     ("screens.py", "home grid stuck at 4 x 2 (9 tiles)",
-     "        return max(HOME_MIN_COLS, -(-len(self.tiles) // HOME_ROWS))",
+     "        return max(HOME_MIN_COLS, -(-len(self.visible_tiles()) // self.grid_rows()))",
      "        return HOME_MIN_COLS",
      ["tests.test_cc1_merged"], False),
     ("screens.py", "CC7 Hotkeys tile renamed",
@@ -49,8 +49,8 @@ BREAKS = [
      "        self.set_bg_color(None)",
      ["tests.test_cc4_merged.TestControllerBehaviour"], False),
     ("config.py", "CC23 in_game_display dropped from WIRED",
-     '    ("companion", "in_game_display"),                # companion.py',
-     '    # ("companion", "in_game_display"),              # companion.py',
+     '    ("companion", "in_game_display"),  # companion _in_game_mode()',
+     '    # ("companion", "in_game_display"),  # companion _in_game_mode()',
      ["tests.test_cc23_merged"], False),
     ("cc_overlay.py", "CC5: the overlay no longer defers to the panel's own CC",
      "        if panel_takes_summon(panel):",
@@ -60,7 +60,7 @@ BREAKS = [
      "        if screen_swap.peer_open(overlay):\n            return",
      "        if False:\n            return",
      ["tests.test_sw1_merged"], False),
-    ("094-rp5deck", "094 sway socket search global again (stray socket planted)",
+    ("command-center-app", "094 sway socket search global again (stray socket planted)",
      "    sock=$(find $SWAY_SOCK_DIRS -name",
      "    sock=$(find /run /tmp -name",
      [SUP], True),

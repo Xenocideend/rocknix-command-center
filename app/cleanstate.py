@@ -1,82 +1,66 @@
 #!/usr/bin/env python3
-"""cleanstate - the "Clean state" button's helper (CC1): stop what is running
-and bring the device back to how it is after boot, from an explicit
-allow-list, with every action logged, a dry-run mode, and nothing else.
+"""cleanstate: the helper behind the Clean up button. It stops what's running and puts the
+device back how it is after boot, from an explicit allow list, logging every action, with a
+dry run mode, and nothing else.
 
-rp5deck runs as root with no privilege separation, so this module is the
-separation: main.py (via cleanstate_view.py) only ever calls Helper.discover()
-and Helper.execute(); everything that signals a process or runs a command is
-here, behind the guards below, and tests/test_cleanstate.py breaks each guard
-to prove the suite notices.
+rp5deck runs as root with no privilege separation, so this module is the separation.
+main.py (through cleanstate_view.py) only calls Helper.discover() and Helper.execute(), and
+everything that signals a process or runs a command lives here behind the guards below.
+tests/test_cleanstate.py breaks each guard to prove the suite notices.
 
-THE ACTIONS (ACTIONS, nothing else is accepted):
-  kill-emulator          close the running game the way ROCKNIX does:
-                         1. ES's own GET /emukill, through emukill() - a
-                            separate, explicitly named function (es_api.py's
-                            allow-list stays closed). Source (ROCKNIX/
-                            emulationstation-next 9d664e2, the commit ROCKNIX
-                            dc5f51a pins): ApiSystem::emuKill() runs
-                            `batocera-es-swissknife --emukill` - a script that
-                            is in NO file of ROCKNIX dc5f51a's tree (10,434
-                            paths, not truncated). So on this build /emukill is
-                            expected to do nothing; it is still tried first,
-                            verified by observation, and not waited on for long
-                            when the script is absent.
-                         2. ROCKNIX's own kill target: the NAME(S) in
-                            /tmp/.process-kill-data that set_kill writes
-                            (001-functions) and input_sense's L1+SELECT+START
-                            runs as `killall ${TO_KILL}` (input_sense
-                            execute_kill). Only names are read from the file,
-                            never pids; each name must be on KILLABLE_NAMES and
-                            not on PROTECTED_NAMES (the file says
-                            "emulationstation" while no game runs - runemu.sh
-                            quit() - and "python3" while GPcal runs, so both
-                            are refused by name). The signal is the file's own
-                            flag (-9 -> SIGKILL, none -> SIGTERM), as killall
-                            would send it.
-                         3. a PortMaster port (runemu.sh -Pports; ports do not
-                            set a kill target - runemu.sh calls `set_kill
-                            stop`): SIGTERM to the processes in runemu.sh's own
-                            process subtree that are not shells, interpreters
-                            or protected names (the port binary, gptokeyb);
-                            the port script then runs its own cleanup.
-  stop-rp5deck-children  Firefox (rp5deck-web), mpv (rp5deck-yt), wvkbd:
-                         web_tiles.ChildRegistry.reap_stale() - the existing
-                         orphan-stop logic (a pid is only signalled while its
-                         cmdline still carries the marker recorded with it).
-                         cleanstate_view also ends the live session through
-                         WebApps.end_session() on the UI thread first.
-  enable-touch           `swaymsg input 0:0:generic_ft5x06_(a0) events enabled`
-                         - the exact command 092 runs in apply_layout(), and
-                         only when `swaymsg -t get_inputs` says the device is
-                         disabled. Why it is on the list: runemu.sh disables
-                         this touchscreen after every game when
-                         DEVICE_HAS_DUAL_SCREEN=true (DS1 Q2; seen on the
-                         device 24 Sep, DS3 Wii U row); 094 pins the flag off,
-                         but the pin can be skipped (keep-dual-flag file) or be
-                         a boot late. "As at boot" means touch on, which is
-                         what 092 establishes. It never changes the mapping
-                         (092 owns map_to_output).
-  restart-essway         `systemctl restart essway.service` - ES only, NEVER
-                         sway (restarting sway costs the internal panel, and
-                         `essway.service Requires=sway.service`). Only when
-                         es_health offers it (NOT_RUNNING / NO_WINDOW /
-                         FROZEN) or the owner chose "Restart anyway" on a
-                         SUSPECT verdict; refused if this process is itself in
-                         essway's cgroup (the restart would kill it midway).
-                         Note: a game ES started is in essway's cgroup too, so
-                         the restart also ends it.
+The actions (ACTIONS, nothing else is accepted):
 
-The only commands this module can run are the exact argv tuples in
-MUTATING_COMMANDS and READ_COMMANDS (enforce_command()).
+  kill-emulator          closes the running game the way ROCKNIX does:
+                         1. ES's own GET /emukill through emukill(), a separate named
+                            function so es_api.py's allow list stays closed. In ES's
+                            source ApiSystem::emuKill() runs `batocera-es-swissknife
+                            --emukill`, a script that isnt anywhere in ROCKNIX's tree, so
+                            on this build /emukill probably does nothing. It's still tried
+                            first, checked by watching, and not waited on long.
+                         2. ROCKNIX's own kill target, the name(s) in
+                            /tmp/.process-kill-data that set_kill writes and input_sense's
+                            L1+SELECT+START runs as `killall ${TO_KILL}`. Only names get
+                            read from the file, never pids, and each has to be on
+                            KILLABLE_NAMES and not PROTECTED_NAMES (the file says
+                            "emulationstation" when no game runs and "python3" while
+                            GPcal runs, so both get refused by name). The signal follows
+                            the file's own flag (-9 -> SIGKILL, none -> SIGTERM) like
+                            killall would.
+                         3. a PortMaster port (ports dont set a kill target, runemu.sh
+                            calls `set_kill stop`): SIGTERM to the processes in
+                            runemu.sh's own subtree that arent shells, interpreters or
+                            protected names (the port binary, gptokeyb), and the port
+                            script runs its own cleanup.
+  stop-rp5deck-children  Firefox, mpv and wvkbd through web_tiles.ChildRegistry.reap_stale(),
+                         the existing orphan stop (a pid only gets signalled while its
+                         cmdline still has the marker saved with it). cleanstate_view ends
+                         the live session through WebApps.end_session() on the UI thread
+                         first.
+  enable-touch           `swaymsg input 0:0:generic_ft5x06_(a0) events enabled`, the same
+                         command the dual-screen daemon runs in apply_layout(), and only when
+                         `swaymsg -t get_inputs` says the device is off. runemu.sh turns
+                         this touchscreen off after every game when
+                         DEVICE_HAS_DUAL_SCREEN=true. The Command Center daemon pins that
+                         flag off, but the pin can be skipped or land a boot late, and after
+                         boot touch is on. It never changes the mapping, the daemon owns
+                         map_to_output.
+  restart-essway         `systemctl restart essway.service`, ES only, never sway
+                         (restarting sway costs the internal panel, and essway.service
+                         Requires=sway.service). Only when es_health offers it
+                         (NOT_RUNNING / NO_WINDOW / FROZEN) or you picked "Restart anyway"
+                         on a SUSPECT verdict. Refused if this process is in essway's
+                         cgroup, since the restart would kill it halfway. A game ES started
+                         is in that cgroup too, so the restart ends it as well.
 
-Never touched: system services, sway, 092/093/094/095, pipewire/wireplumber,
-inputplumber, input_sense, NetworkManager, the charger session (limit-watch,
-dp-sleep-guard), ES itself (except the explicit restart), anything not named
-above.
+The only commands this can run are the exact argv tuples in MUTATING_COMMANDS and
+READ_COMMANDS (enforce_command()).
 
-CLI (on the device; plan-only unless told otherwise):
-    python3 cleanstate.py                      # show the plan (stop-list + ES health)
+Never touched: system services, sway, the rp5deck daemons, pipewire/wireplumber,
+inputplumber, input_sense, NetworkManager, the charger scripts (limit-watch,
+dp-sleep-guard), ES itself (except the explicit restart), anything not named above.
+
+CLI (on the device, plan only unless told otherwise):
+    python3 cleanstate.py                      # show the plan (stop list + ES health)
     python3 cleanstate.py run --dry-run ACTION...
     python3 cleanstate.py run --i-confirm ACTION...  [--force-restart]
 """
@@ -93,29 +77,36 @@ import urllib.error
 import urllib.request
 
 import es_health
+import screen_map
 
 log = logging.getLogger("rp5deck.cleanstate")
 
 KILL_EMULATOR = "kill-emulator"
+STOP_STEAM_GAME = "stop-steam-game"
+EXIT_STEAM = "exit-steam"
 STOP_CHILDREN = "stop-rp5deck-children"
 ENABLE_TOUCH = "enable-touch"
 RESTART_ES = "restart-essway"
-ACTIONS = (KILL_EMULATOR, STOP_CHILDREN, ENABLE_TOUCH, RESTART_ES)
-CLEAN_ACTIONS = (KILL_EMULATOR, STOP_CHILDREN, ENABLE_TOUCH)     # the "Clean up" button
+ACTIONS = (KILL_EMULATOR, STOP_STEAM_GAME, EXIT_STEAM, STOP_CHILDREN, ENABLE_TOUCH, RESTART_ES)
+CLEAN_ACTIONS = (KILL_EMULATOR, STOP_STEAM_GAME, EXIT_STEAM, STOP_CHILDREN, ENABLE_TOUCH)  # "Clean up"
 
-# ES's /emukill: compared verbatim in emukill(), never built from input.
+# Steam, only while it is open (nested in sway, so this process is running): the three programs of a
+# session, found by their own command line and never by a bare name, signalled with SIGTERM only.
+STEAM_CLIENT, STEAM_REAPER, STEAM_GAMESCOPE = "client", "reaper", "gamescope"
+_STEAM_APPID = re.compile(r"^AppId=(\d+)$")
+
+# ES's /emukill, compared exactly in emukill(), never built from input
 EMUKILL_URL = "http://127.0.0.1:1234/emukill"
 SWISSKNIFE = "batocera-es-swissknife"
 
-TOUCH_INT = "0:0:generic_ft5x06_(a0)"      # 092-dual-screen-persist TOUCH_INT
+TOUCH_INT = "0:0:generic_ft5x06_(a0)"      # dual-screen-layout-and-power TOUCH_INT
 CMD_ENABLE_TOUCH = ("swaymsg", "input", TOUCH_INT, "events", "enabled")
 CMD_RESTART_ES = ("systemctl", "restart", "essway.service")
 CMD_GET_INPUTS = ("swaymsg", "-t", "get_inputs", "-r")
 MUTATING_COMMANDS = frozenset({CMD_ENABLE_TOUCH, CMD_RESTART_ES})
 READ_COMMANDS = frozenset({CMD_GET_INPUTS})
 
-# Every set_kill target in ROCKNIX dc5f51a that is a game, an emulator, a
-# player or PortMaster (gh search "set_kill set", 73 files, read 24 Sep).
+# every set_kill target in ROCKNIX that's a game, emulator, player or PortMaster (73 files)
 KILLABLE_NAMES = frozenset({
     "retroarch", "retroarch32", "mednafen", "melonDS", "azahar", "SkyEmu", "vita3k-sa",
     "rpcs3", "rpcs3-sa", "dolphin-emu", "dolphin-emu-nogui", "xemu", "touchHLE", "scummvm",
@@ -124,10 +115,10 @@ KILLABLE_NAMES = frozenset({
     "supermodel", "mupen64plus", "m8c", "gzdoom", "gopher64", "drastic", "ares", "amiberry",
     "NanoBoyAdvance", "heroic", "Heroic", "AppRun.wrapped",
 })
-# Refused by name even if a kill file, a subtree or anything else names them.
-# Includes the set_kill targets that are NOT games: ES itself (the idle
-# value), python3 (GPcal; also rp5deck and focus_guard), the installer, the
-# terminals, the Steam/gamescope stack (sway is stopped then: no rp5deck).
+# Refused by name even if a kill file, a subtree or anything else names them. Includes the
+# set_kill targets that arent games: ES itself (the idle value), python3 (GPcal, and also
+# rp5deck and focus_guard), the installer, the terminals, and the Steam/gamescope stack (sway
+# is stopped then so rp5deck isnt running).
 PROTECTED_NAMES = frozenset({
     "emulationstation", "start_es.sh", "python", "python3", "installer", "foot", "qterminal",
     "commander", "gamepad-tester", "sdltouchtest", "FEXConfig", "FEX", "steam", "gamescope",
@@ -137,8 +128,8 @@ PROTECTED_NAMES = frozenset({
     "iwd", "connmand", "sshd", "dropbear", "limit-watch", "dp-sleep-guard",
     "rocknix-fake-suspend", "runemu.sh", "gptokeyb-helper",
 })
-# The same sets as /proc/<pid>/comm shows them: the kernel keeps 15 bytes,
-# so "emulationstation" is "emulationstatio" there (seen on the device).
+# the same sets the way /proc/<pid>/comm shows them, the kernel keeps 15 bytes so
+# "emulationstation" is "emulationstatio" there
 _KILLABLE_COMM = frozenset(n[:15] for n in KILLABLE_NAMES)
 _PROTECTED_COMM = frozenset(n[:15] for n in PROTECTED_NAMES)
 _NAME_RE = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
@@ -153,7 +144,7 @@ NEVER_TOUCHED = ("Never touched: system services, sway, the dual-screen scripts 
 
 
 class Refused(Exception):
-    """An action, command or signal target outside the allow-lists."""
+    """An action, command or signal target outside the allow lists."""
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +156,9 @@ def enforce_action(name):
 
 
 def enforce_command(argv):
-    """The whole command allow-list. Also refuses, by construction, anything
-    that names sway as a unit to stop or restart (belt and braces: no such
-    tuple is in the sets, and this second check proves it stays that way)."""
+    """The whole command allow list. It also refuses anything naming sway as a unit to stop or
+    restart, a second check on top of sway not being in the sets.
+    """
     t = tuple(argv)
     lowered = [a.lower() for a in t]
     if t and t[0] == "systemctl" and any(a in ("sway", "sway.service") for a in lowered):
@@ -178,8 +169,9 @@ def enforce_command(argv):
 
 
 def enforce_kill_name(name):
-    """A process name from /tmp/.process-kill-data (or a port subtree) may
-    only be signalled if it is a known game/emulator and not protected."""
+    """A process name from /tmp/.process-kill-data (or a port subtree) can only be signalled if
+    it's a known game or emulator and not protected.
+    """
     if not _NAME_RE.match(name or ""):
         raise Refused("kill target %r is not a plain process name" % (name,))
     if name in PROTECTED_NAMES:
@@ -189,8 +181,27 @@ def enforce_kill_name(name):
     return name
 
 
+def steam_kind(comm, cmd):
+    """Which Steam program a process is (STEAM_CLIENT / STEAM_REAPER / STEAM_GAMESCOPE), or None. Both the
+    process name and the command line have to say so: a game's own `steam` helper or an unrelated
+    gamescope is not one of ours. For a reaper, also the appid it launched."""
+    cmd = list(cmd or [])
+    if not cmd or not _NAME_RE.match(comm or ""):
+        return None
+    exe = cmd[0]
+    if comm == "steam" and exe.endswith("/steamrtarm64/steam") and "-gamepadui" in cmd:
+        return STEAM_CLIENT, None
+    if comm == "reaper" and exe.endswith("/steamrtarm64/reaper") and "SteamLaunch" in cmd:
+        i = cmd.index("SteamLaunch")
+        m = _STEAM_APPID.match(cmd[i + 1]) if i + 1 < len(cmd) else None
+        return (STEAM_REAPER, int(m.group(1))) if m else None
+    if comm.startswith("gamescope") and exe.rsplit("/", 1)[-1] == "gamescope" and "--backend" in cmd:
+        return STEAM_GAMESCOPE, None
+    return None
+
+
 def signal_for(flag):
-    """killall's flag from the kill file -> signal name; unknown flags refuse."""
+    """killall's flag from the kill file -> signal name, unknown flags get refused."""
     if flag not in _SIG:
         raise Refused("kill signal %r is not one ROCKNIX uses" % (flag,))
     return _SIG[flag]
@@ -201,7 +212,7 @@ def _signum(name):
 
 
 # ---------------------------------------------------------------------------
-# The plan: what is running, what would be stopped (the confirm's stop-list)
+# The plan: what's running and what would be stopped (the confirm's stop list)
 # ---------------------------------------------------------------------------
 class Item:
     def __init__(self, action, label, detail=""):
@@ -216,11 +227,12 @@ class Item:
 
 class Plan:
     def __init__(self):
-        self.items = []             # the stop-list, in order
+        self.items = []  # the stop list, in order
         self.health = None          # es_health.Health, or None if not checked
         self.game = {}              # what kill-emulator saw
         self.children = []          # [(kind, pid)] with a live marker
-        self.touch = None           # "enabled" / "disabled" / None (unknown / absent)
+        self.touch = None  # "enabled" / "disabled" / None (unknown or missing)
+        self.steam = {}             # {"client": [pid], "reapers": [(pid, appid)], "gamescope": [pid]}
         self.notes = []
 
     def actions(self):
@@ -241,7 +253,7 @@ class Plan:
         return {"items": [i.to_dict() for i in self.items], "actions": self.actions(),
                 "health": self.health.to_dict() if self.health else None,
                 "game": self.game, "children": self.children, "touch": self.touch,
-                "notes": self.notes, "never": NEVER_TOUCHED}
+                "steam": self.steam, "notes": self.notes, "never": NEVER_TOUCHED}
 
 
 class Step:
@@ -267,16 +279,18 @@ def _default_registry():
 
 
 class Helper:
-    """discover() -> Plan; execute(plan, actions, confirmed) -> [Step].
-    Every I/O seam is injectable for tests: probe (es_health.Probe), run
-    (subprocess.run-like), kill (os.kill-like), opener (urllib), registry
-    (web_tiles.ChildRegistry-like), which (shutil.which-like), cgroup text,
-    clock/sleep, health_fn (es_health.check-like)."""
+    """discover() -> Plan, execute(plan, actions, confirmed) -> [Step]. Every I/O seam can be
+    swapped for tests: probe (es_health.Probe), run (like subprocess.run), kill (like os.kill),
+    opener (urllib), registry (like web_tiles.ChildRegistry), which (like shutil.which), cgroup
+    text, clock/sleep, health_fn (like es_health.check).
+    """
 
     def __init__(self, probe=None, dry_run=False, run=None, kill=None, opener=None,
                  registry=None, which=shutil.which, cgroup=None, audit_path=None,
-                 clock=time.monotonic, sleep=time.sleep, health_fn=None, es_output="DP-1",
-                 verify_s=5.0, emukill_wait_s=4.0):
+                 clock=time.monotonic, sleep=time.sleep, health_fn=None, es_output=screen_map.CURRENT.top,
+                 verify_s=5.0, emukill_wait_s=4.0, steam_wait_s=15.0, steam_name=None):
+        self.steam_wait_s = steam_wait_s
+        self._steam_name = steam_name       # appid -> name, for the stop list (steam_library by default)
         self.probe = probe or es_health.Probe()
         self.dry_run = bool(dry_run)
         self._run = run or subprocess.run
@@ -292,8 +306,8 @@ class Helper:
         self.es_output = es_output
         self.verify_s = verify_s
         self.emukill_wait_s = emukill_wait_s
-        self.signalled = []         # [(pid, name, signal)] - also in the audit log
-        self.commands = []          # every argv run (or that a dry run would have run)
+        self.signalled = []  # [(pid, name, signal)], also in the audit log
+        self.commands = []  # every argv run, or that a dry run would have run
 
     # -- logging ------------------------------------------------------------
     def audit(self, action, what, **detail):
@@ -313,8 +327,9 @@ class Helper:
 
     # -- the two gated primitives -------------------------------------------
     def run_command(self, argv, timeout=10.0):
-        """Run one allow-listed command. Mutating ones are only logged in a
-        dry run; read-only ones run in both modes."""
+        """Runs one allow-listed command. Mutating ones are only logged in a dry run, read-only ones
+        run either way.
+        """
         t = enforce_command(argv)
         self.commands.append(t)
         mutating = t in MUTATING_COMMANDS
@@ -340,9 +355,9 @@ class Helper:
         return rc, out
 
     def _send_signal(self, pid, name, signame, action):
-        """Signal one pid that the caller found by NAME (or subtree) in this
-        process's own /proc scan. Re-checks the name right before sending, so
-        a pid reused in between is never hit."""
+        """Signals one pid the caller found by name (or subtree) in this process's own /proc scan.
+        Checks the name again right before sending so a reused pid never gets hit.
+        """
         enforce_kill_name(name)
         if self.probe.comm(pid) != name[:15]:
             self.audit(action, "skipped: pid changed", pid=pid, name=name)
@@ -366,9 +381,10 @@ class Helper:
         return bool(self._which(SWISSKNIFE)) or os.path.exists("/usr/bin/" + SWISSKNIFE)
 
     def emukill(self, confirmed=False, url=EMUKILL_URL):
-        """GET ES's /emukill - the one mutating ES route cleanstate may call,
-        and only from here: `url` must be EMUKILL_URL verbatim, the owner must
-        have confirmed, and a dry run only logs. Returns (sent, note)."""
+        """GETs ES's /emukill, the one mutating ES route cleanstate may call, and only from here: `url`
+        has to be EMUKILL_URL exactly, you have to have confirmed, and a dry run only logs. Returns
+        (sent, note).
+        """
         if url != EMUKILL_URL:
             raise Refused("emukill() only calls %s, not %r" % (EMUKILL_URL, url))
         if not confirmed:
@@ -393,8 +409,9 @@ class Helper:
         return self._registry
 
     def live_children(self):
-        """[(kind, pid)] recorded by web_tiles whose cmdline still carries
-        the marker (the same test reap_stale() applies before signalling)."""
+        """[(kind, pid)] saved by web_tiles whose cmdline still has the marker (the same test
+        reap_stale() uses before signalling).
+        """
         reg = self._registry_obj()
         out = []
         for kind, e in sorted(reg.entries().items()):
@@ -426,8 +443,9 @@ class Helper:
         return None
 
     def game_facts(self):
-        """What is running, from ES (read-only /runningGame), runemu.sh and
-        the kill file. Never signals anything."""
+        """What's running, from ES (read-only /runningGame), runemu.sh and the kill file. Never
+        signals anything.
+        """
         g = {"es_game": None, "system": None, "runemu": self.probe.runemu_pids(),
              "platform": None, "kill_data": None, "signal": None, "names": [],
              "alive": {}, "refused": {}}
@@ -455,11 +473,64 @@ class Helper:
                 g["alive"][n] = pids
         return g
 
+    def steam_processes(self):
+        """What of a Steam session is running: {"client": [pid], "reapers": [(pid, appid)], "gamescope":
+        [pid]}. Empty lists when Steam is not open, which is also when the stop items are not offered."""
+        out = {"client": [], "reapers": [], "gamescope": []}
+        for pid in self.probe.pids():
+            try:
+                k = steam_kind(self.probe.comm(pid), self.probe.cmdline(pid))
+            except Exception:       # noqa: BLE001 - a process that vanished mid-scan
+                continue
+            if k is None:
+                continue
+            kind, appid = k
+            if kind == STEAM_CLIENT:
+                out["client"].append(pid)
+            elif kind == STEAM_REAPER:
+                out["reapers"].append((pid, appid))
+            else:
+                out["gamescope"].append(pid)
+        return out
+
+    def steam_game_name(self, appid):
+        try:
+            if self._steam_name is not None:
+                return self._steam_name(appid)
+            import steam_library
+            return steam_library.info(steam_library.default_root(), appid).get("name")
+        except Exception:           # noqa: BLE001 - a name is only for the stop list
+            return None
+
+    def _send_steam_signal(self, pid, kind, action):
+        """SIGTERM to one Steam program found by steam_processes(). Looks at the process again right
+        before sending, so a pid that has been reused for something else is never signalled."""
+        try:
+            now = steam_kind(self.probe.comm(pid), self.probe.cmdline(pid))
+        except Exception:           # noqa: BLE001
+            now = None
+        if now is None or now[0] != kind:
+            self.audit(action, "skipped: pid changed", pid=pid, kind=kind)
+            return False
+        if self.dry_run:
+            self.audit(action, "would signal", pid=pid, kind=kind, signal="SIGTERM")
+            return True
+        if self._kill is None:
+            raise Refused("no kill() on this platform")
+        try:
+            self._kill(pid, _signum("SIGTERM"))
+        except OSError as e:
+            self.audit(action, "signal failed", pid=pid, kind=kind, error=str(e))
+            return False
+        self.signalled.append((pid, kind, "SIGTERM"))
+        self.audit(action, "signalled", pid=pid, kind=kind, signal="SIGTERM")
+        return True
+
     def port_processes(self, runemu_pids):
-        """[(pid, comm)] in runemu.sh's subtree that are a port's own
-        programs: not shells, not protected. (runemu.sh's own background
-        child, lowerdeck's `python3 ra_proxy.py`, is python3 - protected -
-        and so is anything of rp5deck's; _send_port_signal() checks again.)"""
+        """[(pid, comm)] in runemu.sh's subtree that are a port's own programs, not shells and not
+        protected. runemu.sh's own background child (lowerdeck's `python3 ra_proxy.py`) is python3 so
+        it's protected, and so is anything of rp5deck's. _send_port_signal() checks again.
+        """
         children = {}
         for p in self.probe.pids():
             pp = self.probe.ppid(p)
@@ -483,7 +554,19 @@ class Helper:
         plan = Plan()
         g = self.game_facts()
         plan.game = g
-        running = bool(g["runemu"] or g["alive"] or g["es_game"])
+        sp = self.steam_processes()
+        plan.steam = sp
+        steam_open = bool(sp["client"] or sp["reapers"] or sp["gamescope"])
+        # With Steam open its own items below stop it. ES's /emukill and ROCKNIX's kill target can not
+        # (the targets are on the protected list), so a "Game: Steam" item would only fail.
+        running = bool(g["runemu"] or g["alive"] or g["es_game"]) and not (steam_open and g["system"] == "steam")
+        if sp["reapers"]:
+            pid, appid = sp["reapers"][0]
+            name = self.steam_game_name(appid) or "appid %d" % appid
+            plan.items.append(Item(STOP_STEAM_GAME, "Steam game: %s" % name,
+                                   "stop the game, Steam stays open"))
+        elif steam_open:
+            plan.items.append(Item(EXIT_STEAM, "Steam", "close Steam and go back to ES"))
         if running:
             what = g["es_game"] and "%s (%s)" % (g["es_game"], g["system"] or "?") \
                 or (", ".join(sorted(g["alive"])) or "a game")
@@ -501,15 +584,14 @@ class Helper:
                 if n != "emulationstation":
                     plan.notes.append("not stopped: %s" % why)
             plan.items.append(Item(KILL_EMULATOR, "Game: %s" % what, ", ".join(how)))
-        labels = {"web": "Browser / Discord: Firefox (rp5deck-web)",
-                  "yt": "YouTube player: mpv (rp5deck-yt)", "osk": "On-screen keyboard (wvkbd)"}
+        labels = {"web": "Browser / Discord", "yt": "YouTube player", "osk": "On-screen keyboard"}
         try:
             plan.children = self.live_children()
         except Exception:           # noqa: BLE001 - reported, not fatal
             log.exception("reading the child registry")
             plan.children = []
         for kind, pid in plan.children:
-            plan.items.append(Item(STOP_CHILDREN, labels.get(kind, kind), "pid %d" % pid))
+            plan.items.append(Item(STOP_CHILDREN, labels.get(kind, kind), "running"))
         plan.touch = self.touch_state()
         if plan.touch == "disabled":
             plan.items.append(Item(ENABLE_TOUCH, "Built-in touch screen",
@@ -523,8 +605,9 @@ class Helper:
 
     # -- execution -----------------------------------------------------------
     def execute(self, plan, actions, confirmed=False, force_restart=False):
-        """Run the chosen actions, in ACTIONS order. Needs confirmed=True
-        unless this is a dry run. Returns [Step]."""
+        """Runs the chosen actions in ACTIONS order. Needs confirmed=True unless it's a dry run. Returns
+        [Step].
+        """
         for a in actions:
             enforce_action(a)
         if not confirmed and not self.dry_run:
@@ -536,6 +619,10 @@ class Helper:
             try:
                 if a == KILL_EMULATOR:
                     steps.append(self._kill_emulator(plan, confirmed))
+                elif a == STOP_STEAM_GAME:
+                    steps.append(self._stop_steam_game())
+                elif a == EXIT_STEAM:
+                    steps.append(self._exit_steam())
                 elif a == STOP_CHILDREN:
                     steps.append(self._stop_children())
                 elif a == ENABLE_TOUCH:
@@ -586,7 +673,7 @@ class Helper:
             how.append("ES's /emukill (%s)" % note)
         if not self.dry_run and self._wait_gone(wait):
             return Step(a, True, "Game closed by ES's /emukill", {"how": how})
-        # ROCKNIX's kill target, re-read now (runemu may have changed it)
+        # ROCKNIX's kill target, read again now since runemu may have changed it
         flag, names = es_health.parse_kill_data(self.probe.kill_data() or "")
         try:
             signame = signal_for(flag)
@@ -610,7 +697,7 @@ class Helper:
             how.append("ROCKNIX's kill target: %s (%s)" % (", ".join(hit), signame))
             if self.dry_run or self._wait_gone(self.verify_s):
                 return Step(a, True, "Game closed (%s)" % signame, {"how": how})
-        # a port: its own programs in runemu.sh's subtree
+        # a port, its own programs in runemu.sh's subtree
         runemu = self.probe.runemu_pids()
         platform = next((self.runemu_platform(p) for p in runemu if self.runemu_platform(p)),
                         None)
@@ -631,10 +718,62 @@ class Helper:
             return Step(a, True, "Dry run: %s" % "; ".join(how), {"how": how})
         return Step(a, False, "The game is still running (try L1+SELECT+START)", {"how": how})
 
+    def _steam_wait(self, done):
+        """Polls done() until it is true or steam_wait_s has passed."""
+        end = self.clock() + self.steam_wait_s
+        while True:
+            if done():
+                return True
+            if self.clock() >= end:
+                return False
+            self.sleep(0.25)
+
+    def _stop_steam_game(self):
+        """SIGTERM to the running game's reaper(s), Steam itself stays open."""
+        a = STOP_STEAM_GAME
+        reapers = self.steam_processes()["reapers"]
+        if not reapers:
+            self.audit(a, "nothing running")
+            return Step(a, True, "No Steam game was running")
+        for pid, appid in reapers:
+            self._send_steam_signal(pid, STEAM_REAPER, a)
+        if self.dry_run:
+            return Step(a, True, "Dry run: would stop %s" % ", ".join("appid %d" % ap for _, ap in reapers))
+        if self._steam_wait(lambda: not self.steam_processes()["reapers"]):
+            return Step(a, True, "Steam game closed", {"appids": [ap for _, ap in reapers]})
+        return Step(a, False, "The Steam game is still running")
+
+    def _exit_steam(self):
+        """SIGTERM to the Steam client, which closes its games and its gamescope; gamescope gets the same
+        signal if it outlives the client."""
+        a = EXIT_STEAM
+        sp = self.steam_processes()
+        if not (sp["client"] or sp["gamescope"] or sp["reapers"]):
+            self.audit(a, "nothing running")
+            return Step(a, True, "Steam was not running")
+        for pid in sp["client"]:
+            self._send_steam_signal(pid, STEAM_CLIENT, a)
+        if self.dry_run:
+            for pid in sp["gamescope"]:
+                self._send_steam_signal(pid, STEAM_GAMESCOPE, a)
+            return Step(a, True, "Dry run: would close Steam")
+
+        def gone():
+            s = self.steam_processes()
+            return not (s["client"] or s["gamescope"])
+        if self._steam_wait(gone):
+            return Step(a, True, "Steam closed")
+        for pid in self.steam_processes()["gamescope"]:
+            self._send_steam_signal(pid, STEAM_GAMESCOPE, a)
+        if self._steam_wait(gone):
+            return Step(a, True, "Steam closed (gamescope needed a second signal)")
+        return Step(a, False, "Steam is still running")
+
     def _send_port_signal(self, pid, comm):
-        """A port's program is not on KILLABLE_NAMES (every port ships its
-        own binary), so it gets its own, narrower gate: found in runemu.sh's
-        subtree by port_processes(), not protected, not a shell, SIGTERM only."""
+        """A port's program isnt on KILLABLE_NAMES (every port ships its own binary), so it gets its
+        own narrower gate: found in runemu.sh's subtree by port_processes(), not protected, not a
+        shell, SIGTERM only.
+        """
         if not _NAME_RE.match(comm or "") or (comm or "")[:15] in _PROTECTED_COMM or comm in _SHELLS:
             raise Refused("port process %r is protected" % (comm,))
         if self.probe.comm(pid) != comm:
@@ -734,7 +873,7 @@ class Helper:
             self.sleep(0.5)
         if not new:
             return Step(a, False, "essway restarted, but no new ES process within 30 s")
-        return Step(a, True, "ES restarted (pid %d)" % new[0])
+        return Step(a, True, "EmulationStation restarted")
 
 
 # ---------------------------------------------------------------------------
@@ -766,7 +905,7 @@ def main(argv=None):
     ap.add_argument("--force-restart", action="store_true",
                     help="restart ES on a SUSPECT verdict (the dialog's 'Restart anyway')")
     ap.add_argument("--no-health", action="store_true")
-    ap.add_argument("--es-output", default="DP-1")
+    ap.add_argument("--es-output", default=screen_map.CURRENT.top)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")

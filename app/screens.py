@@ -1,82 +1,58 @@
-"""screens - rp5deck's screens, built from ui.py widgets.
+"""rp5deck's screens, built from ui.py widgets.
 
-DeckUI owns the widget tree (Navigation v2, DESIGN.md):
-  companion  the default view (companion.CompanionView), when given
+DeckUI owns the widget tree:
+  companion  the default view (companion.CompanionView)
   cc         the Command Center, pulled down over it:
-    bar      volume strip: mute, master volume slider, % readout, battery
-             (tap -> HUD sheet), clock. In FULL mode it sits at the TOP of
-             the Command Center ("volume first"); in BAR mode it is the
-             whole 140 px surface.
-    home     tile grid: Mixer, HUD, Browser, Discord, YouTube App, Hotkeys
-             (CC7), Clean state (CC1), Settings, Swap screens (SW1) - 5 x 2
-             once there are more than 8 (I2, Home.grid_cols) - plus a Close
-             control (back to the companion). CC5 OVERLAY (over
-             an emulator's second screen, hidden_overlay.py): only Mixer,
-             HUD and a big Close, under the same volume strip
-    sheets   hud, mixer (paged, 5 rows a page), launch (status while Firefox
-             starts / why it failed), settings (settings_view.SettingsSheet,
-             full panel: it needs every row, and has its own Back)
+    bar      the volume strip (mute, slider, %, battery (tap for HUD), clock). In FULL
+             its the top row of the Command Center, in BAR its the whole 140 px surface.
+    home     the tile grid plus Close (back to the companion). Over an emulator's second
+             screen (OVERLAY) only the game tiles and a big Close show.
+    sheets   hud, mixer (5 rows a page), launch (while Firefox starts or why it didnt),
+             settings (full panel with its own Back) and the others added with add_sheet().
 
-BAR mode (HF1): while an rp5deck window (Firefox rp5deck-web) fills DSI-1
-above it, the strip keeps mute + volume and swaps battery / clock for that
-app's controls: Back, Reload, Home, Keyboard, Close for the browser; Home,
-the leanback D-pad, Close for the YouTube App (YT3 - no Tabs button on this
-row, see Bar.tv_controls()). Every control is a tap on the layer surface,
-so none of them moves focus.
+In BAR mode, while an rp5deck window fills DSI-1 above it, the strip keeps mute and volume
+and swaps battery and clock for that app's controls. Every control is a tap on the layer
+surface so none of them moves focus.
 
-Every view covers the whole panel in FULL mode (a tap on bare DSI-1 steals
-the game's focus, DESIGN.md).
+In FULL every view covers the whole panel, a tap on bare DSI-1 would steal the game's focus.
 
-Callbacks go to a `handlers` object (the controller in main.py). Pure
-formatting (hud_rows, fmt_*) is unit-tested; drawing is not.
+Callbacks go to a `handlers` object (main.App). The formatting helpers are unit tested,
+the drawing isnt.
 """
 import math
 import time
 
+import notepad
 import swap_ui
 import ui
 from ui import (THEME, Button, Container, Keyboard, Label, LitButton, Sheet, Slider, TextField,
                 Tile, Toggle)
 
 BAR_H = 140
-# AH: the YouTube TV app's auto-hidden strip - main.py's geometry()/
-# bar_autohide.py shrink the WHOLE layer surface (not just the drawn strip)
-# to this height instead of BAR_H, with the exclusive zone at 0, so the
-# leanback window gets the full 1080 and never reflows; a thin always-
-# touchable grab handle is all that is drawn or laid out at this height
-# (Bar.layout/_apply_app_visibility/draw, CommandCenter.layout). Every other
-# BAR app (Browser/Discord/mpv) never sees this - they keep the fixed BAR_H
-# reserved strip exactly as before.
+# The YouTube TV strip hides itself: main.py shrinks the whole layer surface to this height
+# (exclusive zone 0) so leanback gets the full 1080 and never reflows, and all thats drawn is
+# a thin grab handle. Every other BAR app keeps the fixed BAR_H strip.
 HANDLE_H = 24
-# CC5: the home tiles shown over an emulator's second screen (hidden_overlay.py):
-# per-app volume and device info. Browser / YouTube / Discord would open a
-# window on the screen the game owns; Settings is a whole-panel sheet.
-OVERLAY_TILES = ("home.mixer", "home.hud")
-# I2: the home grid is HOME_ROWS rows of at least HOME_MIN_COLS columns
-# (Home.grid_cols); tiles narrower than the 4-column width use a smaller label.
+# The home tiles over an emulator's second screen. Browser, YouTube and Discord would open a
+# window on the game's screen and Settings is a whole-panel sheet, so theyre left out.
+OVERLAY_TILES = ("home.mixer", "home.hud", "home.hotkeys", "home.perf", "home.notes", "home.quitgame")
+# the home grid is HOME_ROWS rows of at least HOME_MIN_COLS columns, tiles narrower than the
+# 4 column width get a smaller label
 HOME_ROWS = 2
+HOME_ROWS_THREE_AFTER = 12  # more tiles than this makes three rows
 HOME_MIN_COLS = 4
 TILE_TEXT = 48
 TILE_TEXT_NARROW = 42
 TILE_SUB_NARROW = 28
 
-# Tile customisation ("Edit tiles" mode, owner: "add a customisation mode
-# with drag and drop tiles"): a long-press on any home tile (held in place
-# past EDIT_LONG_PRESS_S) enters it - see _make_tile_editable() below. A
-# small persistent "Edit" button was the other option; long-press won out
-# because it matches the mobile home-screen rearrange gesture the owner is
-# almost certainly picturing, and it reuses the app's own call_at/
-# call_later timer (main.App, already relied on for the auto-close
-# countdown, the RGB keeper poll, etc.) rather than adding new permanent
-# header chrome for a rarely-used mode. TILE_BADGE is the per-tile hide/
-# show control's touch target (>= the 120 px floor).
+# Edit tiles mode: a long press on any home tile (held past EDIT_LONG_PRESS_S) starts it,
+# same as rearranging a phone home screen. TILE_BADGE is the hide/show button's touch size
+# (at least the 120 px floor).
 EDIT_LONG_PRESS_S = 0.5
 TILE_BADGE = 120
 
-# DS (dualscreen_keys_view.py): the "dual-screen settings missing" banner's
-# own band height, reserved above the tile grid only while it is shown -
-# tall enough that its Restore button clears the app's own >= 120 px touch
-# target floor (ui.MIN_TARGET), same as every tile/badge/button elsewhere.
+# Height of the "dual-screen settings missing" banner, only taken while its shown. Tall
+# enough that its Restore button makes the 120 px touch floor.
 DS_BANNER_H = 130
 
 
@@ -195,7 +171,7 @@ def icon_close(g, r, color):
 
 
 def icon_tabs(g, r, color):
-    """CC6: three tabs over a panel (the BAR strip's Tabs button)."""
+    """three tabs over a panel (the BAR strip's Tabs button)"""
     x, y, w, h = r
     for i in range(3):
         g.round_rect((x + w * (0.05 + 0.31 * i), y + h * 0.12, w * 0.27, h * 0.22), 4, color)
@@ -203,7 +179,7 @@ def icon_tabs(g, r, color):
 
 
 def icon_ytapp(g, r, color):
-    """W2b: a TV screen (leanback)."""
+    """a TV screen (leanback)"""
     x, y, w, h = r
     t = max(4, w * 0.07)
     g.stroke_round_rect((x + w * 0.1, y + h * 0.08, w * 0.8, h * 0.58), 6, color, t)
@@ -212,7 +188,7 @@ def icon_ytapp(g, r, color):
 
 
 def icon_stick_lights(g, r, color):
-    """RG: an analog stick cap with an RGB glow ring around it."""
+    """an analog stick cap with a glow ring around it"""
     x, y, w, h = r
     cx, cy = x + w / 2, y + h / 2
     g.circle(cx, cy, w * 0.22, color)
@@ -220,9 +196,9 @@ def icon_stick_lights(g, r, color):
 
 
 def icon_osk(g, r, color):
-    """The ROCKNIX on-screen keyboard toggle - like icon_keyboard's cheat
-    sheet glyph, but with a small pop-up caret above it so it reads as a
-    toggle rather than a reference card."""
+    """The ROCKNIX keyboard toggle, like the cheat sheet glyph but with a small caret above it so
+    it reads as a toggle.
+    """
     x, y, w, h = r
     t = max(4, w * 0.06)
     g.stroke_round_rect((x + w * 0.02, y + h * 0.32, w * 0.96, h * 0.56), h * 0.1, color, t)
@@ -235,17 +211,42 @@ def icon_osk(g, r, color):
 
 
 def icon_sleep(g, r, color):
-    """YT4: a crescent moon (Sleep tile) - a solid circle with a smaller
-    circle "cut out" of it in the tile's own background colour, the same
-    trick icon_home uses for its door cutout."""
+    """A crescent moon for Sleep, a circle with a smaller one cut out in the tile's colour (same
+    trick icon_home uses for its door).
+    """
     x, y, w, h = r
     cx, cy, rad = x + w * 0.5, y + h * 0.5, w * 0.34
     g.circle(cx, cy, rad, color)
     g.circle(cx + rad * 0.6, cy - rad * 0.5, rad * 0.85, THEME["tile"])
 
 
+def icon_top_screen(g, r, color):
+    """two stacked panels with the top one struck through (Top screen off)"""
+    x, y, w, h = r
+    t = max(4, w * 0.06)
+    g.stroke_round_rect((x + w * 0.18, y + h * 0.06, w * 0.64, h * 0.38), w * 0.05, color, t)
+    g.stroke_round_rect((x + w * 0.18, y + h * 0.56, w * 0.64, h * 0.38), w * 0.05, color, t)
+    g.line(x + w * 0.12, y + h * 0.48, x + w * 0.88, y + h * 0.02, color, t)
+
+
+def icon_bolt(g, r, color):
+    """a lightning bolt (Performance)"""
+    x, y, w, h = r
+    g.polygon([(x + w * 0.58, y + h * 0.04), (x + w * 0.22, y + h * 0.56),
+               (x + w * 0.47, y + h * 0.56), (x + w * 0.38, y + h * 0.96),
+               (x + w * 0.78, y + h * 0.40), (x + w * 0.52, y + h * 0.40)], color)
+
+
+def icon_stop_game(g, r, color):
+    """a stop square in a ring (Quit game), not Close's chevron"""
+    x, y, w, h = r
+    cx, cy = x + w / 2, y + h / 2
+    g.ring(cx, cy, w * 0.42, color, max(4, w * 0.08))
+    g.round_rect((cx - w * 0.17, cy - w * 0.17, w * 0.34, w * 0.34), 3, color)
+
+
 def icon_eye(g, r, color):
-    """Tile customisation: a tile is currently shown."""
+    """a tile thats showing"""
     x, y, w, h = r
     cx, cy = x + w / 2, y + h / 2
     g.stroke_round_rect((x + w * 0.06, y + h * 0.34, w * 0.88, h * 0.32), h * 0.16, color,
@@ -254,8 +255,7 @@ def icon_eye(g, r, color):
 
 
 def icon_eye_off(g, r, color):
-    """Tile customisation: a tile is currently hidden - the same eye, with
-    a diagonal bar through it."""
+    """a hidden tile, the same eye with a bar through it"""
     icon_eye(g, r, color)
     x, y, w, h = r
     t = max(4, w * 0.09)
@@ -284,7 +284,7 @@ def draw_battery(g, r, percent, charging, color):
 # ---------------------------------------------------------------------------
 # Formatting (pure)
 # ---------------------------------------------------------------------------
-NA = "—"       # em dash: "unknown" - never rendered as 0
+NA = "—"  # shown for "unknown", never as 0
 
 
 def fmt_num(v, fmt, suffix=""):
@@ -340,8 +340,9 @@ def _cluster_row(c):
 
 
 def hud_rows(s):
-    """Three columns of (title, value) from a hud.sample() dict. Every
-    top-level hud field appears; None renders as an em dash, never 0."""
+    """Three columns of (title, value) from a hud.sample() dict. Every top-level field shows up,
+    None shows as a dash never 0.
+    """
     s = s or {}
     status = s.get("battery_status")
     batt = fmt_num(s.get("battery_percent"), "%d", "%")
@@ -407,23 +408,23 @@ class BatteryButton(Button):
 
 
 class Bar(Container):
-    """The volume strip. In FULL mode (top row of the Command Center) and in
-    BAR mode without an app: mute, slider, readout, battery, clock. In BAR
-    mode with an app (HF1, set_app()): mute, slider, readout, then that
-    app's controls instead of battery and clock."""
+    """The volume strip. In FULL (top row of the Command Center) and in BAR without an app: mute,
+    slider, %, battery, clock. In BAR with an app (set_app()) that app's controls replace
+    battery and clock.
+    """
 
     APP_W = 150                 # an app control, px (the bar's targets are 120 px tall)
-    TABS_W = 110                # CC6: the Tabs button
-    TV_W = 120                  # W2: the leanback D-pad - 6 of them, so kept at the 120 px floor
-    TV_ACTION_W = 260           # YT3: Close / Home - icon + label, wider than the bare D-pad keys
+    TABS_W = 110  # the Tabs button
+    TV_W = 120  # the leanback D-pad, 6 of them so they stay at the 120 px floor
+    TV_ACTION_W = 260  # Close / Home, icon plus label, wider than the D-pad keys
 
     def __init__(self, h):
         Container.__init__(self, name="bar", bg="bar")
         self.mute = self.add(Toggle(name="bar.mute", on_toggle=h.on_mute_toggle,
                                     text_on="", text_off="",
                                     icon_on=icon_speaker_muted, icon_off=icon_speaker_on))
-        # on_cancel: a stroke that became a swipe (or any cancel) puts the
-        # volume back and commits nothing (RV1-M1).
+        # on_cancel: a stroke that turned into a swipe (or any cancel) puts the volume back and
+        # commits nothing
         self.slider = self.add(Slider(name="bar.slider", on_change=h.on_volume_drag,
                                       on_release=h.on_volume_release, knob_r=48,
                                       on_cancel=getattr(h, "on_volume_cancel", None)))
@@ -432,7 +433,7 @@ class Bar(Container):
         self.battery = self.add(BatteryButton(h.on_battery, "bar.battery"))
         self.clock = self.add(Label("", size=56, bold=True, align="center", name="bar.clock"))
         self.slider.hit_pad = 10
-        # HF1 app controls; each tap is handlers.on_app_action("<name>")
+        # app controls, each tap is handlers.on_app_action("<name>")
         act = getattr(h, "on_app_action", None)
 
         def ctl(key, text="", icon=None, cls=Button):
@@ -443,11 +444,8 @@ class Bar(Container):
         self.web_home = ctl("web.home", icon=icon_home)
         self.web_keys = ctl("web.keys", icon=icon_keyboard, cls=LitButton)
         self.web_close = ctl("web.close", icon=icon_close)
-        # W2: the YouTube TV (leanback) tile's D-pad - text labels, not icons,
-        # same minimal pattern the old "yt" mpv strip's -10 s/+10 s used (that
-        # strip is gone, YT3 - the old mpv-based "YouTube" tile). Sent as key
-        # presses (Browser.send_key(), WebDriver:PerformActions), never a
-        # page-specific control: leanback only takes arrow/Enter/Back.
+        # The YouTube TV D-pad, text labels not icons. Sent as key presses (Browser.send_key()),
+        # never a page control, leanback only takes arrows, Enter and Back.
         self.tv_left = ctl("tv.left", "←")
         self.tv_up = ctl("tv.up", "↑")
         self.tv_down = ctl("tv.down", "↓")
@@ -456,17 +454,12 @@ class Bar(Container):
         self.tv_back = ctl("tv.back", "Back")
         self._tv_btns = (self.tv_left, self.tv_up, self.tv_down, self.tv_right, self.tv_ok,
                          self.tv_back)
-        # YT3 (owner feedback: "no way to kill the app or tab out of it"):
-        # Home parks the tile (same park-not-close app_tabs.py already does
-        # for Browser/Discord) and shows the Command Center directly - a
-        # one-tap action, not the multi-app Tabs picker (bar.tabs, below)
-        # the owner never recognised; Close actually ends the session. Both
-        # get an icon AND a label (Button draws both when given both) so
-        # neither reads as a mystery icon the way the bare Tabs button did.
+        # Home parks the app (it keeps running) and shows the Command Center in one tap, Close
+        # actually ends it. Both get an icon and a label so neither is a mystery icon.
         self.tv_home = ctl("tv.home", "Home", icon=icon_home)
         self.tv_close = ctl("tv.close", "Close", icon=icon_close)
-        # CC6 (app_tabs.py): the tab strip does not fit in 140 px, so the strip
-        # gets one Tabs button: park this app's window, open the Command Center
+        # the tab strip doesnt fit in 140 px, so the strip gets one Tabs button (park this app's
+        # window, open the Command Center)
         tabs = getattr(h, "show_app_tabs", None)
         self.tabs_btn = self.add(Button("", on_click=tabs, name="bar.tabs", size=40,
                                         icon=icon_tabs)) if tabs else None
@@ -476,14 +469,10 @@ class Bar(Container):
         self.compact = False        # set by the Command Center: BAR mode
         self.keys_offered = True    # osk mode "off" drops the Keyboard button
         self.hinting = False
-        # AH: the YouTube TV app's auto-hidden strip - CommandCenter.layout()
-        # sets this (from the rect it hands down: shorter than BAR_H can only
-        # mean the surface itself shrank to screens.HANDLE_H, main.py's
-        # geometry()) and every control - including mute/slider/readout,
-        # never just the per-app ones - disappears in favour of one drawn
-        # grab handle (draw()). A tap anywhere in that handle still reaches
-        # main.App (there is nothing else on the surface to hit), which is
-        # all bar_autohide.BarAutoHide.touch() needs to bring the strip back.
+        # The YouTube TV auto-hidden strip. CommandCenter.layout() sets this (a rect shorter than
+        # BAR_H only happens when the surface shrank to HANDLE_H) and every control, mute and slider
+        # too, is replaced by one drawn grab handle. A tap on the handle still reaches main.App, which
+        # is all bar_autohide needs to bring the strip back.
         self.handle_only = False
         self._apply_app_visibility()
 
@@ -491,9 +480,7 @@ class Bar(Container):
         return [self.tabs_btn] if self.tabs_btn is not None else []
 
     def _all_controls(self):
-        """AH: every child this Bar can show, for the handle-only state
-        (_apply_app_visibility) where none of them are - not even mute/
-        slider/readout, unlike every other path through this class."""
+        """Every child this Bar can show, for the handle-only state where none of them are."""
         out = [self.mute, self.slider, self.readout, self.battery, self.clock, self.hint,
                self.web_back, self.web_reload, self.web_home, self.web_keys, self.web_close,
                self.tv_home, self.tv_close]
@@ -503,8 +490,9 @@ class Bar(Container):
         return out
 
     def _cell_w(self, c):
-        """CC6: the Tabs button is narrower, so the volume slider keeps
-        >= 600 px next to the browser's controls (HF1's floor)."""
+        """The Tabs button is narrower so the volume slider keeps at least 600 px next to the
+        browser's controls.
+        """
         if c in (self.tv_home, self.tv_close):
             return self.TV_ACTION_W
         if c in self._tv_btns:
@@ -518,9 +506,7 @@ class Bar(Container):
         return out + [self.web_close]
 
     def tv_controls(self):
-        """YT3: Home first (same "escape hatch first" convention the Tabs
-        button uses for web/yt), then the D-pad, then Close last - no Tabs
-        button on this row at all (see set_app()'s own note on why)."""
+        """Home first, then the D-pad, then Close last. No Tabs button on this row."""
         return [self.tv_home] + list(self._tv_btns) + [self.tv_close]
 
     def shown_app(self):
@@ -529,9 +515,8 @@ class Bar(Container):
     def layout(self, rect):
         self.set_rect(rect)
         x, y, w, h = rect
-        # AH: h < BAR_H can only happen while CommandCenter.layout() has
-        # shrunk the whole surface to screens.HANDLE_H for the auto-hidden
-        # YouTube TV strip - every normal BAR app always gets exactly BAR_H.
+        # h < BAR_H only happens for the auto-hidden YouTube TV strip, every other BAR app gets
+        # exactly BAR_H
         self.handle_only = self.compact and h < BAR_H
         if self.handle_only:
             self._apply_app_visibility()
@@ -544,10 +529,7 @@ class Bar(Container):
             for c, r in zip(ctrls, cells[3:]):
                 c.set_rect(r)
         elif app == "tv":
-            # YT3: no % readout cell here (0 px, still gapped like every
-            # other cell) - Close/Home plus the 6-button D-pad need the
-            # width instead; see set_app()'s note on the resulting slider
-            # width and _apply_app_visibility() for hiding the label itself.
+            # no % readout on the tv row (0 px), Close/Home and the 6 D-pad keys need the width
             ctrls = self.tv_controls()
             cells = ui.hsplit(inner, [150, None, 0] + [self._cell_w(c) for c in ctrls], gap=16)
             for c, r in zip(ctrls, cells[3:]):
@@ -582,8 +564,7 @@ class Bar(Container):
             self.tabs_btn.set_visible(app == "web")
         self.hint.set_visible(self.hinting)
         self.slider.set_visible(not self.hinting)
-        # YT3: the tv row drops the % readout entirely (see layout()'s own
-        # note) to make room for Close/Home alongside the 6-button D-pad.
+        # the tv row drops the % readout to make room for Close/Home and the D-pad
         self.readout.set_visible(not self.hinting and app != "tv")
 
     def set_app(self, app, keys_offered=None):
@@ -601,8 +582,9 @@ class Bar(Container):
         self.web_keys.set_lit(on)
 
     def show_hint(self, text):
-        """A short message over the volume area (e.g. "Tap the page first").
-        Never while a finger is on the slider: that would cancel its drag."""
+        """A short message over the volume area (like "Tap the page first"). Never while a finger is
+        on the slider, that would cancel its drag.
+        """
         if self.slider.dragging:
             return False
         self.hint.set_text(text)
@@ -631,18 +613,13 @@ class Bar(Container):
         g.fill_rect((x, y, w, 2), THEME["line"])
 
     def set_master(self, master, force=False):
-        """Apply an audio.get_master() dict. Returns False if the slider was
-        being dragged and kept its value."""
+        """Applies an audio.get_master() dict. Returns False if the slider was being dragged and kept
+        its value.
+        """
         ok = master is not None and master.get("state") == "ok" and master.get("volume") is not None
-        # A bare THEME key ("text"/"warn"), not the resolved tuple: this
-        # runs on every audio poll REGARDLESS of whether the volume itself
-        # changed while `ok` stays the same, so on a device the readout
-        # can sit for a long time between calls that would otherwise
-        # refresh a frozen colour - a runtime theme change must not have
-        # to wait for a volume change to be picked up here (found on the
-        # device: the readout stayed white on RP5 White, a light theme,
-        # because it happened to be set once under the dark Default theme
-        # and then never again while the volume held steady).
+        # Pass the THEME key ("text"/"warn"), not the resolved colour. This can go a long time
+        # between calls while the volume holds steady, and a resolved colour would freeze until the
+        # next volume change after a theme switch.
         self.readout.set_text(volume_readout(master), "text" if ok else "warn")
         self.slider.set_enabled(ok)
         self.mute.set_enabled(ok and master.get("muted") is not None)
@@ -664,29 +641,17 @@ class Bar(Container):
 # Home
 # ---------------------------------------------------------------------------
 def _make_tile_editable(t, grid):
-    """Wrap ONE Tile's on_press/on_move/on_release/on_cancel so it takes
-    part in Home's tile-customisation mode, without changing the Tile
-    class itself (swap_ui.swap_tile()'s returned Tile gets exactly the
-    same wrapping as one built here - no subclass, no swap_ui.py edit).
+    """Wraps one Tile's press/move/release/cancel so it works with Home's Edit tiles mode, without
+    touching the Tile class (so swap_ui's tile gets the same treatment).
 
-    NORMAL mode (grid.edit_mode False): behaves exactly like a plain Tile
-    (the wrapped functions call through to the ones it starts with), plus
-    a long-press timer armed on press via grid.h.call_later() - the same
-    timer idiom main.App already uses for its own auto-close countdown and
-    the RGB keeper poll. The timer is cancelled the moment the finger
-    leaves the tile or is released/cancelled, so a normal tap is
-    unaffected; if it fires, grid.enter_edit() runs and the pending
-    release is swallowed (no navigation on the same touch that just
-    entered edit mode).
+    Normal mode acts like a plain Tile plus a long-press timer (grid.h.call_later()). Moving off
+    the tile, releasing or cancelling kills the timer, so a normal tap isnt affected. If it
+    fires, grid.enter_edit() runs and that touch's release is swallowed.
 
-    EDIT mode (grid.edit_mode True): a fresh press-and-drag (a NEW touch,
-    not a continuation of the one that triggered the long-press) picks the
-    tile up and moves it with the finger; grid._drag_move() reflows every
-    OTHER tile live as the dragged one crosses into a new cell, and
-    release/cancel calls grid._drag_end() to snap it into place and
-    persist. A second finger touching a different tile while one is
-    already being dragged is ignored, the same "a second finger does not
-    steal" rule ui.Slider already uses."""
+    Edit mode: a new press-and-drag picks the tile up and moves it with the finger,
+    grid._drag_move() reflows the others live and release/cancel snaps it in place and saves.
+    A second finger on another tile during a drag is ignored.
+    """
     orig_press, orig_move = t.on_press, t.on_move
     orig_release, orig_cancel = t.on_release, t.on_cancel
     st = {"pid": None, "timer": None, "long_fired": False, "dx": 0.0, "dy": 0.0}
@@ -761,15 +726,14 @@ def _make_tile_editable(t, grid):
 class Home(Container):
     def __init__(self, h, title="Command Center"):
         Container.__init__(self, name="home", bg="bg")
-        self.h = h                      # tile customisation: call_later/cancel + on_tile_layout_changed
+        self.h = h  # Edit tiles: call_later/cancel and on_tile_layout_changed
         self._title_text = title
         self.close = self.add(Button("Close", on_click=getattr(h, "close_command_center", None),
                                      name="home.close", size=40, icon=icon_close_up))
         self.title = self.add(Label(title, size=52, bold=True, name="home.title"))
         self.sub = self.add(Label("", size=40, color="dim", align="right",
                                   name="home.sink"))
-        # Tile customisation ("Edit tiles" mode): Done / Reset replace
-        # Close / the sink label in the header row while active.
+        # In Edit tiles, Done and Reset replace Close and the sink label in the header row.
         self.edit_mode = False
         self.dragging_tile = None
         self.edit_done = self.add(Button("Done", on_click=self.exit_edit,
@@ -778,8 +742,8 @@ class Home(Container):
                                           name="home.edit.reset", size=32))
         self.edit_done.visible = False
         self.edit_reset.visible = False
-        # CC5 (hidden_overlay.py): over an emulator's second screen the home
-        # grid shrinks to OVERLAY_TILES plus a big Close and a one-line note.
+        # Over an emulator's second screen the grid shrinks to OVERLAY_TILES plus a big Close and a
+        # one line note.
         self.overlay = False
         self.overlay_tiles = OVERLAY_TILES
         self.overlay_close = self.add(Tile("Close", on_click=getattr(h, "close_command_center",
@@ -790,17 +754,11 @@ class Home(Container):
             "The game keeps running. Close gives its touch screen back.", size=40,
             color="dim", align="center", name="home.overlay_note"))
         self.overlay_close.visible = self.overlay_note.visible = False
-        # Banner strip above the tile grid - a persistent-until-fixed
-        # warning, never a tile itself (it must not change grid_cols()/tile
-        # order/hidden-tiles persistence, and it must show without the
-        # owner hunting for it). One shared Label + one shared Button:
-        # _refresh_banner() decides which registered notice (if any) is
-        # showing right now - CHG (charge_stuck_view.py) always outranks DS
-        # (dualscreen_keys_view.py), the owner's own rule for when both are
-        # active at once. Hidden by default; every setter's "" always hides
-        # it again, so an idle Home (every test that never raises a notice)
-        # lays out exactly as before either feature existed.
-        self._notice_text = {"charge": "", "dualscreen": ""}
+        # The banner strip above the grid, a warning that stays until its fixed and never a tile (it
+        # must not change the grid or tile order, and has to show without anyone hunting for it).
+        # One Label and one Button shared by every notice, _refresh_banner() picks which one shows.
+        # Hidden by default, "" hides it again.
+        self._notice_text = {"replug": "", "dualscreen": ""}
         self.banner_label = self.add(Label("", size=32, color="warn", align="left",
                                            name="home.banner_label"))
         self.banner_action = self.add(Button("", name="home.banner_action", size=34))
@@ -809,65 +767,63 @@ class Home(Container):
         self.tiles = [
             self.add(Tile("Mixer", on_click=h.open_mixer, name="home.mixer", icon=icon_mixer,
                           subtitle="Per-app volume")),
-            self.add(Tile("HUD", on_click=h.open_hud, name="home.hud", icon=icon_gauge,
-                          subtitle="Device info")),
-            self.add(Tile("Browser", on_click=h.open_browser, name="home.browser",
-                          icon=icon_globe, subtitle="Firefox, on this screen")),
-            self.add(Tile("Discord", on_click=getattr(h, "open_discord", None),
-                          name="home.discord", icon=icon_chat, subtitle="Web app, QR login")),
-            # W2b: its own Firefox profile/process (never Discord's/Browser's -
-            # see web_tiles.YtAppSession's own doc) - a QR code on the tile's
-            # own page signs the owner in on their phone.
-            self.add(Tile("YouTube App", on_click=getattr(h, "open_ytapp", None),
-                          name="home.ytapp", icon=icon_ytapp, subtitle="Sign in with a QR code")),
-            # CC7: reads combos from ROCKNIX source + this device's own
-            # retroarch.cfg/system.cfg where readable (hotkeys.py) - not a
-            # remote control, so it stays out of OVERLAY_TILES like Settings.
+            # HUD, Browser, Discord and YouTube App live in the tab strip above Home now, not as tiles.
+            # Hotkeys reads combos from ROCKNIX's source plus this device's retroarch.cfg/system.cfg.
+            # Its not a remote control so it stays out of OVERLAY_TILES like Settings.
             self.add(Tile("Hotkeys", on_click=getattr(h, "open_hotkeys", None),
                           name="home.hotkeys", icon=icon_keyboard, subtitle="Button cheat sheet")),
-            # CC1 (cleanstate_view.py): stop the game / Browser / YouTube and
-            # check ES; everything it stops is listed in its confirm first.
-            # Not in OVERLAY_TILES: over a running game it would close that game.
+            # Clean state stops the game, Browser or YouTube and checks ES, and lists everything it stops
+            # before asking. Not in OVERLAY_TILES since over a game it would close that game.
             self.add(Tile("Clean state", on_click=getattr(h, "open_clean_state", None),
                           name="home.clean", icon=icon_reload,
                           subtitle="Close apps, check ES")),
             self.add(Tile("Settings", on_click=getattr(h, "open_settings", None),
                           name="home.settings", icon=icon_gear, subtitle="Companion, screens")),
-            self.add(swap_ui.swap_tile(h)),                 # SW1
-            # RG: rgb_view.RGBController.open() - the 10th tile.
+            self.add(swap_ui.swap_tile(h)),
+            # stick lights
             self.add(Tile("Stick lights", on_click=getattr(h, "open_lights", None),
                           name="home.lights", icon=icon_stick_lights,
                           subtitle="Thumb stick RGB")),
-            # Keyboard: an immediate toggle (rocknix_keyboard.py), not a
-            # sheet - tapping it signals ROCKNIX's own touchkeyboard.service
-            # instance of wvkbd-mobintl directly, then closes the Command
-            # Center so the keys reach the emulator/ES underneath. Part of
-            # the tile-customisation set like every other tile here.
+            # Keyboard toggles ROCKNIX's own wvkbd right away (no sheet) and closes the Command Center so
+            # the keys reach the game or ES underneath.
             self.add(Tile("Keyboard", on_click=getattr(h, "toggle_keyboard", None),
                           name="home.keyboard", icon=icon_osk,
                           subtitle="Type into emulator settings")),
-            # YT4 (owner-approved): main.App.open_sleep() shows a brief
-            # "Sleeping..." hint, then runs `systemctl suspend` off the UI
-            # thread (system_sleep.py) after a short delay so this tap's own
-            # release animation gets to paint first.
-            self.add(Tile("Sleep", on_click=getattr(h, "open_sleep", None),
-                          name="home.sleep", icon=icon_sleep,
-                          subtitle="Suspend the device")),
+            # Power opens the Power sheet (Sleep, Restart, Shut down).
+            self.add(Tile("Power", on_click=getattr(h, "open_power", None),
+                          name="home.power", icon=icon_sleep,
+                          subtitle="Sleep, restart, shut down")),
+            # Top screen off cuts the add-on's display and power (about 3.0 -> 1.3 W). It asks first
+            # since this panel hides with it.
+            self.add(Tile("Top screen", on_click=getattr(h, "ask_top_screen_off", None),
+                          name="home.topscreen", icon=icon_top_screen,
+                          subtitle="Turn off to save power")),
+            # perf_profile's override: Auto (heavy games uncap) / Max / Saver.
+            self.add(Tile("Performance", on_click=getattr(h, "cycle_perf_mode", None),
+                          name="home.perf", icon=icon_bolt, subtitle="Auto")),
         ]
+        # HUD, Notes and Quit game only show in the over-a-game overlays (neither has the tab strip),
+        # never in the grid or the order.
+        self.overlay_only = [self.add(Tile("HUD", on_click=h.open_hud, name="home.hud",
+                                           icon=icon_gauge, subtitle="Device info")),
+                             self.add(Tile("Notes", on_click=getattr(h, "open_notes", None),
+                                           name="home.notes", icon=notepad.icon_notes,
+                                           subtitle="Notes for this game")),
+                             # quit the running game (asks first)
+                             self.add(Tile("Quit game", on_click=getattr(h, "ask_quit_game", None),
+                                           name="home.quitgame", icon=icon_stop_game,
+                                           subtitle="Close it without saving"))]
+        for t in self.overlay_only:
+            t.set_visible(False)
         self._tiles_by_name = {t.name: t for t in self.tiles}
-        # Order and hidden set: main.py pushes the real, persisted values in
-        # right after building the UI (config.py's "command_center.tile_order"
-        # / "hidden_tiles" - see set_order()/set_hidden()); construction order
-        # is the default/fallback until then. "home.settings" can never be
-        # hidden - enforced again here even though config.py's schema already
-        # refuses to store it, so a bug in the persistence path cannot lock
-        # the owner out either.
+        # main.py pushes the saved order and hidden set in right after building the UI, until then
+        # its construction order. "home.settings" can never be hidden, checked here too so a bug in
+        # saving cant lock anyone out.
         self.order = [t.name for t in self.tiles]
         self.hidden = set()
-        # One hide/show badge per hideable tile, added AFTER every tile so
-        # Container.hit()'s topmost-first search finds the badge before the
-        # tile underneath it (tapping the badge must never also start a
-        # drag). Hidden outside edit mode.
+        # One hide/show badge per hideable tile, added after every tile so hit() finds the badge
+        # before the tile under it (tapping the badge must never start a drag). Hidden outside edit
+        # mode.
         self.badges = {}
         for t in self.tiles:
             if t.name == "home.settings":
@@ -906,23 +862,28 @@ class Home(Container):
         self._relayout_tiles()
 
     def visible_tiles(self):
-        """Every tile in EDIT mode (a hidden one must still be reachable to
-        be shown again), or just the non-hidden ones in NORMAL mode - both
-        in the current persisted/live order."""
+        """In edit mode every tile (a hidden one has to be reachable to show again), in normal mode
+        just the shown ones, both in the current order.
+        """
         names = self.order if self.edit_mode else [n for n in self.order if n not in self.hidden]
         return [self._tiles_by_name[n] for n in names if n in self._tiles_by_name]
 
+    def grid_rows(self):
+        """Two rows up to 12 tiles, three past that (14 tiles in 7 columns were too narrow and cut the
+        subtitles off).
+        """
+        return HOME_ROWS if len(self.visible_tiles()) <= HOME_ROWS_THREE_AFTER else 3
+
     def grid_cols(self):
-        """I2: two rows, at least four columns, one more column per two tiles
-        past eight (now of whatever is actually shown right now - hiding
-        tiles in NORMAL mode gives the rest more room, same math)."""
-        return max(HOME_MIN_COLS, -(-len(self.visible_tiles()) // HOME_ROWS))
+        """At least four columns, as many as the rows need for whats shown right now (hiding tiles
+        gives the rest more room).
+        """
+        return max(HOME_MIN_COLS, -(-len(self.visible_tiles()) // self.grid_rows()))
 
     def _grid_rect(self):
         x, y, w, h = self.rect
-        # The banner (when shown) takes its own band just above the grid,
-        # on top of the fixed 150 px header - the grid never overlaps it,
-        # and it costs nothing when the banner is hidden (the default).
+        # The banner (when shown) gets its own band above the grid, under the 150 px header. Costs
+        # nothing when hidden.
         top = 150 + (DS_BANNER_H + 20 if self.banner_label.visible else 0)
         return (x + 30, y + top, w - 60, h - top - 30)
 
@@ -931,7 +892,7 @@ class Home(Container):
             return
         cols = self.grid_cols()
         shown = self.visible_tiles()
-        cells = ui.grid(self._grid_rect(), cols, HOME_ROWS, 30)
+        cells = ui.grid(self._grid_rect(), cols, self.grid_rows(), 30)
         narrow = cols > HOME_MIN_COLS
         shown_set = set(shown)
         for t in self.tiles:
@@ -991,7 +952,7 @@ class Home(Container):
         self._notify_layout_changed()
 
     def _toggle_hidden(self, name):
-        if name == "home.settings":            # can never be hidden - see __init__
+        if name == "home.settings":  # can never be hidden, see __init__
             return
         if name in self.hidden:
             self.hidden.discard(name)
@@ -1020,14 +981,12 @@ class Home(Container):
             self._update_badge(name)
         self._relayout_tiles()
 
-    # -- the shared banner: CHG always outranks DS ----------------------------
-    # key -> (button text, main.App callback attribute, shown during CC5's
-    # OVERLAY too). Order is priority order: the first key in _NOTICE_ORDER
-    # with non-empty text wins the one shared banner slot - the owner's own
-    # rule for "the charge one takes priority if both are active".
-    _NOTICE_ORDER = ("charge", "dualscreen")
+    # -- the shared banner ------------------------------------------------------
+    # key -> (button text, main.App callback name, shown over OVERLAY too). The first key in
+    # _NOTICE_ORDER with text gets the one banner slot.
+    _NOTICE_ORDER = ("replug", "dualscreen")
     _NOTICE_ACTION = {
-        "charge": ("Dismiss", "on_charge_notice_dismiss", True),
+        "replug": ("", None, True),
         "dualscreen": ("Restore", "on_dualscreen_restore", False),
     }
 
@@ -1038,22 +997,17 @@ class Home(Container):
         self._notice_text[key] = text
         self._refresh_banner()
 
-    def set_charge_notice(self, text):
-        """charge_stuck_view.ChargeStuckController: "" hides it; any other
-        text names the "charger connected but not charging" condition, with
-        a Dismiss button - re-arming itself (on the next plug-in) is the
-        controller's own job, not this widget's. Shown over CC5's OVERLAY
-        too: a battery draining mid-game matters more than the emulator's
-        own minimal tile set, unlike DS below."""
-        self._set_notice("charge", text)
-
     def set_dualscreen_notice(self, text):
-        """dualscreen_keys_view.DualScreenKeysController: "" hides it; any
-        other text names the missing system.cfg keys, with a Restore
-        button - never as a tile. Never shown during CC5's OVERLAY (it
-        would invite a system.cfg edit while a game/emulator owns essway's
-        cgroup) and never shown while an active charge notice outranks it."""
+        """The "dual-screen settings missing" notice. "" hides it, anything else names the missing
+        system.cfg keys with a Restore button. Never shown over OVERLAY (it would invite a
+        system.cfg edit mid-game).
+        """
         self._set_notice("dualscreen", text)
+
+    def set_replug_notice(self, text):
+        """The "add-on isnt answering" notice from dual-screen-layout-and-power. No button, the fix is
+        a replug by hand, and it shows over a game too."""
+        self._set_notice("replug", text)
 
     def _refresh_banner(self):
         text = action = cb = None
@@ -1062,7 +1016,7 @@ class Home(Container):
             if self._notice_text[key]:
                 text = self._notice_text[key]
                 action, attr, in_overlay = self._NOTICE_ACTION[key]
-                cb = getattr(self.h, attr, None)
+                cb = getattr(self.h, attr, None) if attr else None
                 break
         text = text or ""
         self.banner_label.set_text(text)
@@ -1075,7 +1029,7 @@ class Home(Container):
         if self.rect[2]:
             self.layout(self.rect)
 
-    # -- dragging (EDIT mode only - see _make_tile_editable()) ---------------
+    # -- dragging (edit mode only, see _make_tile_editable()) ---------------------
     def _raise_tile(self, t):
         if t in self.children:
             self.children.remove(t)
@@ -1087,7 +1041,7 @@ class Home(Container):
 
     def _drag_move(self, t):
         cols = self.grid_cols()
-        cells = ui.grid(self._grid_rect(), cols, HOME_ROWS, 30)
+        cells = ui.grid(self._grid_rect(), cols, self.grid_rows(), 30)
         if not cells:
             return
         cx, cy, cw, ch = t.rect
@@ -1116,9 +1070,10 @@ class Home(Container):
         self._relayout_tiles()             # snaps t into its final cell too
         self._notify_layout_changed()
 
-    # -- CC5 --------------------------------------------------------------
+    # -- over an emulator's second screen ---------------------------------------------
     def overlay_shown_tiles(self):
-        return [t for t in self.tiles if t.name in self.overlay_tiles] + [self.overlay_close]
+        return [t for t in self.tiles + self.overlay_only if t.name in self.overlay_tiles] + \
+            [self.overlay_close]
 
     def _layout_overlay(self, rect):
         x, y, w, h = rect
@@ -1129,17 +1084,20 @@ class Home(Container):
         self.overlay_note.set_rect((x + 30, y + 150 + row_h + 30, w - 60, 70))
 
     def set_overlay(self, on):
-        """CC5: only the tiles that belong over a running game (per-app
-        volume, device info) and a big Close; everything back when off."""
+        """Only the tiles that belong over a running game plus a big Close, and everything back when
+        off.
+        """
         on = bool(on)
         if on == self.overlay:
             return
         self.overlay = on
         for t in self.tiles:
             t.set_visible(t.name in self.overlay_tiles if on else True)
+        for t in self.overlay_only:
+            t.set_visible(on and t.name in self.overlay_tiles)
         self.overlay_close.set_visible(on)
         self.overlay_note.set_visible(on)
-        self._refresh_banner()      # CHG may still show over OVERLAY; DS never does
+        self._refresh_banner()  # the charger notice can still show over OVERLAY, the dual-screen one never does
         if self.rect[2]:
             self.layout(self.rect)
         self.invalidate()
@@ -1148,6 +1106,64 @@ class Home(Container):
 # ---------------------------------------------------------------------------
 # Sheets
 # ---------------------------------------------------------------------------
+class ChargeWarningSheet(Container):
+    """The full-screen "charger connected but not charging" warning. No buttons, it closes
+    when the charger is unplugged."""
+
+    def __init__(self, headline, lines, name="charge_warning"):
+        Container.__init__(self, name=name, bg="danger")
+        white = ui.rgb(0xFFFFFF)
+        self.headline = self.add(Label(headline, size=84, bold=True, align="center", color=white))
+        self.lines = [self.add(Label(t, size=50, align="center", color=white)) for t in lines]
+
+    def layout(self, rect):
+        self.set_rect(rect)
+        x, y, w, h = rect
+        block = 150 + 90 * len(self.lines)
+        top = y + max(0, (h - block) // 2)
+        self.headline.set_rect((x + 40, top, w - 80, 120))
+        for i, lab in enumerate(self.lines):
+            lab.set_rect((x + 40, top + 160 + i * 90, w - 80, 80))
+
+
+class PowerSheet(Sheet):
+    """Sleep / Restart / Shut down / Hibernate. Restart and Shut down ask first, Hibernate stays
+    greyed out until it resumes reliably.
+    """
+    # Hibernate is a work in progress, it saves but doesnt resume after a restart yet
+    # (kernel-patches/HIBERNATE-FINDINGS.md)
+    HIBERNATE_WIP = "Work in progress"
+    HIBERNATE_NOTE = ("Hibernate is a work in progress: it saves to storage, "
+                      "but does not resume on this device yet.")
+
+    def __init__(self, h):
+        Sheet.__init__(self, "Power", on_close=h.close_sheet, name="power")
+        act = getattr(h, "power_action", None) or (lambda _n: None)
+        self.buttons = []
+        for key, label in (("sleep", "Sleep"), ("restart", "Restart"),
+                           ("shutdown", "Shut down"), ("hibernate", "Hibernate")):
+            b = self.body.add(Button(label, name="power." + key, size=48,
+                                     on_click=lambda k=key: act(k)))
+            self.buttons.append(b)
+        self.hibernate = self.buttons[3]
+        self.hibernate.set_enabled(False)
+        self.wip = self.body.add(Label(self.HIBERNATE_WIP, size=28, color="warn",
+                                       align="center", name="power.hibernate_wip"))
+        self.note = self.body.add(Label(self.HIBERNATE_NOTE, size=32, color="dim",
+                                        align="center", name="power.note"))
+
+    def layout(self, rect):
+        Sheet.layout(self, rect)
+        bx, by, bw, bh = self.body.rect
+        row_h = min(260, max(130, bh - 160))
+        for b, r in zip(self.buttons, ui.hsplit((bx + 40, by + 40, bw - 80, row_h),
+                                                [None] * 4, gap=30)):
+            b.set_rect(r)
+        hx, hy, hw, hh = self.hibernate.rect
+        self.wip.set_rect((hx, hy + hh + 8, hw, 40))       # under the greyed Hibernate
+        self.note.set_rect((bx + 40, by + 110 + row_h, bw - 80, 60))
+
+
 class HudSheet(Sheet):
     def __init__(self, h):
         Sheet.__init__(self, "Device", on_close=h.close_sheet, name="hud")
@@ -1179,10 +1195,8 @@ class HudSheet(Sheet):
         for (hl, cells), (heading, rows) in zip(self.cols, hud_rows(s)):
             for (tl, vl), (title, value) in zip(cells, rows):
                 tl.set_text(title)
-                # A bare THEME key (see Bar.set_master()'s comment above
-                # for why a resolved tuple would freeze here too) - the
-                # HUD only calls this on its own poll tick, independent of
-                # any theme change.
+                # pass the THEME key, not the resolved colour (see Bar.set_master()), the HUD only calls this
+                # on its own poll
                 vl.set_text(value, "dim" if value == NA else "text")
 
 
@@ -1208,8 +1222,9 @@ class StreamRow(Container):
         self.pct.set_text("%d%%" % int(round(v * 100)))
 
     def _cancelled(self, h, v0, changed):
-        """The press ended without a commit (RV1-M1): put the readout back
-        and let the controller undo any live change."""
+        """The press ended without a commit, put the readout back and let the controller undo any
+        live change.
+        """
         if changed:
             self._pct(v0)
         cb = getattr(h, "on_stream_cancel", None)
@@ -1244,8 +1259,7 @@ class StreamRow(Container):
 
 
 class MixerSheet(Sheet):
-    """Per-app streams, MAX_ROWS a page. More streams than that get Prev /
-    Next in the header (I1: B1 showed only "and N more")."""
+    """Per-app streams, MAX_ROWS a page, with Prev / Next in the header when theres more."""
     ROW_H = 150
     MAX_ROWS = 5
 
@@ -1279,11 +1293,11 @@ class MixerSheet(Sheet):
             self.set_streams(self.streams)
 
     def set_streams(self, streams):
-        """streams: list from audio.list_streams(), None if pw-dump failed."""
+        """streams is audio.list_streams(), None if pw-dump failed."""
         self.streams = streams
         if streams is None:
             self.msg.set_text("Could not read audio streams")
-            self.msg2.set_text("pw-dump failed; will retry on the next audio event.")
+            self.msg2.set_text("Trying again when the sound changes.")
         elif not streams:
             self.msg.set_text("No app is playing audio right now")
             self.msg2.set_text("Games and videos appear here while they make sound.")
@@ -1325,10 +1339,9 @@ class MixerSheet(Sheet):
 
 
 class LaunchSheet(Sheet):
-    """What the Command Center shows while an app starts (Firefox takes a few
-    seconds to open a window) or why it did not: a headline, two lines, and
-    one action button (Cancel / Close), which goes to
-    handlers.on_app_action("launch.action")."""
+    """What shows while an app starts (Firefox takes a few seconds) or why it didnt: a headline,
+    two lines and one button (Cancel / Close) that goes to on_app_action("launch.action").
+    """
 
     def __init__(self, h):
         Sheet.__init__(self, "", on_close=h.close_sheet, name="launch")
@@ -1367,40 +1380,40 @@ class LaunchSheet(Sheet):
 # The whole UI
 # ---------------------------------------------------------------------------
 class CommandCenter(Container):
-    """The Command Center: volume strip, HOME tile grid and its sheets, as
-    ONE self-contained view, pulled down over the companion view.
+    """The Command Center: volume strip, Home and its sheets as one view, pulled down over the
+    companion.
 
-    FULL mode: the volume strip is at the TOP (volume is the owner's top
-    priority, and it is the first thing under the finger after a pull-down),
-    home / hud / mixer / launch / youtube fill the rest, and the settings
-    sheet covers the whole panel. BAR mode (compact): only the strip, filling
-    the surface, with the running app's controls (set_bar_app)."""
+    FULL: the volume strip is on top (its the first thing under your finger after a pull-down),
+    home and the sheets fill the rest, and Settings covers the whole panel. BAR: just the strip
+    with the running app's controls.
+    """
 
     def __init__(self, handlers, title="Command Center", settings=None, hotkeys=None):
         Container.__init__(self, name="cc")
         self.title = title
         self.home = self.add(Home(handlers, title))
         self.hud = self.add(HudSheet(handlers))
+        self.power = self.add(PowerSheet(handlers))
         self.mixer = self.add(MixerSheet(handlers))
         self.launch = self.add(LaunchSheet(handlers))
-        self.confirm = self.add(swap_ui.ConfirmSheet(handlers))     # SW1 (and CC1)
+        self.confirm = self.add(swap_ui.ConfirmSheet(handlers))  # Swap screens and Clean state
         self.bar = self.add(Bar(handlers))
-        # W: BAR mode's Tabs button shows the app strip inline in the bar's
-        # own row instead of always parking + opening Home. app_tabs.py owns
-        # the tab list shown there (a Home pill is appended - the escape
-        # hatch to Settings / Mixer, replacing the old park-and-open-Home
-        # single tap) and calls close_bar_tabs() once a tap starts a switch.
+        # BAR's Tabs button shows the app strip inline in the bar's own row. app_tabs.py owns the
+        # list (with a Home pill for Settings / Mixer) and calls close_bar_tabs() once a tap starts a
+        # switch.
         self.bar_tabs_open = False
         if self.bar.tabs_btn is not None:
             self.bar.tabs_btn.on_click = self.toggle_bar_tabs
+        # the Notes tab's sheet (drawing and typing)
+        self.notes = self.add(notepad.NotesSheet(handlers))
         self.sheets = {"hud": self.hud, "mixer": self.mixer, "launch": self.launch,
+                       "notes": self.notes, "power": self.power,
                        swap_ui.CONFIRM_SHEET: self.confirm}
         self.settings = None
         if settings is not None:
             self.settings = self.add(settings)
             self.sheets["settings"] = settings
-        # CC7: hotkeys_view.HotkeysSheet - same optional-extra-sheet shape as
-        # `settings` just above (owned by CC7, not this file).
+        # the hotkey cheat sheet (hotkeys_view.HotkeysSheet)
         self.hotkeys = None
         if hotkeys is not None:
             self.hotkeys = self.add(hotkeys)
@@ -1412,16 +1425,16 @@ class CommandCenter(Container):
     def screen(self):
         return self.sheet or "home"
 
-    tabs = None                     # CC6: app_tabs.TabStrip, under the volume strip
-    # CC6: the sheets that keep the tab strip above them. The others (mixer,
-    # launch, youtube, ...) have fixed row / keyboard heights and use the
-    # full area under the volume strip, as before.
-    TABBED = ("hud",)
+    tabs = None  # app_tabs.TabStrip, under the volume strip
+    # the sheets that keep the tab strip above them. The others have fixed row or keyboard
+    # heights and use the full area under the volume strip.
+    FULL_PANEL = ("settings", "charge_warning")   # these cover the volume strip too
+    TABBED = ("hud", "notes", "steam")
 
     def set_tabs(self, strip):
-        """CC6: the app tab strip (app_tabs.py) - between the volume strip
-        and home / the sheets in FULL mode; hidden in BAR mode and under the
-        full-panel settings sheet."""
+        """The app tab strip, between the volume strip and home/sheets in FULL. Hidden in BAR and
+        under the full-panel Settings sheet.
+        """
         if self.tabs is not None:
             self.remove(self.tabs)
         self.tabs = self.add(strip)
@@ -1430,7 +1443,7 @@ class CommandCenter(Container):
         return strip
 
     def set_bar_app(self, app, keys_offered=None):
-        """What the BAR strip controls: None, "web" or "yt" (HF1)."""
+        """What the BAR strip controls: None, "web" or "tv"."""
         self.bar.set_app(app, keys_offered)
 
     def layout(self, rect):
@@ -1438,30 +1451,27 @@ class CommandCenter(Container):
         x, y, w, h = rect
         self.compact = h <= BAR_H + 10
         if not self.compact:
-            self.bar_tabs_open = False      # W: the inline picker only exists in BAR mode
+            self.bar_tabs_open = False  # the inline picker only exists in BAR
         self.bar.compact = self.compact
-        # AH: h < BAR_H while compact can only be the YouTube TV app's
-        # auto-hidden strip (main.py's geometry() shrinks the whole surface
-        # to screens.HANDLE_H, exclusive zone 0) - the bar IS the (already
-        # small) rect handed down, not a BAR_H-tall strip pinned to its
-        # bottom. Every other BAR app always arrives here with h >= BAR_H.
+        # h < BAR_H while compact can only be the auto-hidden YouTube TV strip, so the bar is the
+        # small rect handed down, not a BAR_H strip pinned to its bottom.
         if self.compact and h < BAR_H:
             bar_rect = (x, y, w, h)
         else:
             bar_rect = (x, y + h - BAR_H, w, BAR_H) if self.compact else (x, y, w, BAR_H)
         self.bar.layout(bar_rect)
         content = (x, y + BAR_H, w, max(0, h - BAR_H))
-        tabbed = content                # CC6: home and TABBED sheets sit under the tab strip
+        tabbed = content  # home and the tabbed sheets sit under the tab strip
         if self.tabs is not None:
             if self.compact and self.bar_tabs_open:
-                self.tabs.layout(bar_rect)              # W: inline, the bar's own row
+                self.tabs.layout(bar_rect)  # inline, in the bar's own row
             elif not self.compact:
                 th = self.tabs.HEIGHT
                 self.tabs.layout((x, y + BAR_H, w, th))
                 tabbed = (x, y + BAR_H + th, w, max(0, h - BAR_H - th))
         self.home.layout(tabbed)
         for name, s in self.sheets.items():
-            s.layout(rect if name == "settings" else (tabbed if name in self.TABBED else content))
+            s.layout(rect if name in self.FULL_PANEL else (tabbed if name in self.TABBED else content))
         self._apply_visibility()
 
     def _apply_visibility(self):
@@ -1472,20 +1482,17 @@ class CommandCenter(Container):
         self.home.set_visible(not self.compact and self.sheet is None)
         for name, s in self.sheets.items():
             s.set_visible(not self.compact and self.sheet == name)
-        # the full-panel settings sheet hides the strip; everything else keeps it
-        # (W: in BAR mode the inline picker takes the bar's own place instead)
+        # the full-panel Settings sheet hides the strip, everything else keeps it (in BAR the inline
+        # picker takes the bar's place)
         self.bar.set_visible((self.compact and not self.bar_tabs_open)
-                             or (not self.compact and self.sheet != "settings"))
+                             or (not self.compact and self.sheet not in self.FULL_PANEL))
 
     def toggle_bar_tabs(self):
-        """W: BAR mode's Tabs button - shows the app tab strip inline in the
-        bar's own 140 px row, in place of the volume/app controls, so
-        Browser / Discord / YouTube can jump straight to another running app
-        (or tap the strip's Home pill for Settings / Mixer) without first
-        parking to the full Command Center. The button itself is part of the
-        bar it replaces, so it disappears once shown; a tap on any tab there
-        (app_tabs.TabsController.select) is what closes it again, via
-        close_bar_tabs()."""
+        """BAR's Tabs button shows the tab strip inline in the bar's 140 px row, so Browser, Discord
+        or YouTube can jump straight to another running app (or the Home pill) without parking to
+        the full Command Center. The button is part of the bar it replaces, and a tap on any tab
+        closes it again through close_bar_tabs().
+        """
         if not self.compact or self.tabs is None:
             return
         self.bar_tabs_open = not self.bar_tabs_open
@@ -1494,9 +1501,9 @@ class CommandCenter(Container):
             self.layout(self.rect)
 
     def close_bar_tabs(self):
-        """W: app_tabs.TabsController.select() calls this once a tap starts
-        a real switch, so picking e.g. Browser while Discord is showing (mode
-        stays BAR throughout) does not leave the inline strip stuck open."""
+        """TabsController.select() calls this once a tap starts a real switch, so picking Browser
+        while Discord shows (still BAR) doesnt leave the inline strip stuck open.
+        """
         if self.bar_tabs_open:
             self.bar_tabs_open = False
             self._tabs_reopened()
@@ -1504,16 +1511,15 @@ class CommandCenter(Container):
                 self.layout(self.rect)
 
     def _tabs_reopened(self):
-        """W: let app_tabs.py's TabStrip.on_open (if wired) refresh its tab
-        list (the Home pill) right after bar_tabs_open flips, before the
-        strip is laid out inline / restored."""
+        """Lets TabStrip.on_open refresh its tab list (the Home pill) right after bar_tabs_open
+        flips, before the strip is laid out.
+        """
         on_open = getattr(self.tabs, "on_open", None)
         if on_open is not None:
             on_open()
 
     def add_sheet(self, name, sheet):
-        """CC1: a sheet owned by another module (cleanstate_view), laid out
-        and shown like hud / mixer (the content area under the strip)."""
+        """A sheet from another module (like Clean state), laid out and shown like hud and mixer."""
         if name in self.sheets:
             raise ValueError("sheet %r exists" % name)
         self.add(sheet)
@@ -1533,8 +1539,9 @@ class CommandCenter(Container):
         self._apply_visibility()
 
     def set_overlay(self, on):
-        """CC5: the Command Center over an emulator's second screen - the
-        strip (volume first) stays, home shows only OVERLAY_TILES + Close."""
+        """The Command Center over an emulator's second screen, the strip stays and home shows only
+        OVERLAY_TILES and Close.
+        """
         self.home.set_overlay(on)
 
     @property
@@ -1543,12 +1550,11 @@ class CommandCenter(Container):
 
 
 class DeckUI:
-    """The widget tree root: the companion view (the default, when given)
-    with the Command Center above it. Without a companion (B1's shape, and
-    the tests that predate Navigation v2) the Command Center is the only view.
+    """The widget tree root: the companion view with the Command Center above it. Without a
+    companion (older tests) the Command Center is the only view.
 
-    view: "companion" or "cc" - which one FULL mode shows. BAR mode (compact)
-    always shows just the Command Center's strip."""
+    view is "companion" or "cc", which one FULL shows. BAR always shows just the strip.
+    """
 
     def __init__(self, handlers, w, h, title="Command Center", companion=None,
                  settings=None, hotkeys=None):
@@ -1581,7 +1587,7 @@ class DeckUI:
     hotkeys = property(lambda self: self.cc.hotkeys)
 
     def add_sheet(self, name, sheet):
-        """CC1: see CommandCenter.add_sheet."""
+        """see CommandCenter.add_sheet"""
         self.cc.add_sheet(name, sheet)
         self.root.damage_all()
         return sheet
@@ -1620,12 +1626,13 @@ class DeckUI:
         self.cc.set_visible(visible)
 
     def set_overlay(self, on):
-        """CC5 (hidden_overlay.py): see CommandCenter.set_overlay."""
+        """see CommandCenter.set_overlay"""
         self.cc.set_overlay(on)
 
     def targets(self):
-        """Visible interactive widgets by name -> [x, y, w, h] (for
-        state.json, so a shell test can click what it means to click)."""
+        """Visible interactive widgets by name -> [x, y, w, h], for state.json so a shell test can tap
+        what it means to.
+        """
         out = {}
         for wdg in self.root.walk():
             if wdg.name and wdg.interactive and wdg.shown() and wdg.enabled:

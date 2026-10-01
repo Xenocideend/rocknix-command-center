@@ -1,51 +1,47 @@
-"""media - game art and game video drawn INSIDE rp5deck's own surface.
+"""media: game art and video drawn inside rp5deck's own surface.
 
-Why in-surface: a separate mpv window on DSI-1 takes keyboard focus from the
-game on the other screen (DESIGN.md, E1). So video is decoded by libmpv and
-rendered with its *software* render API into a memory buffer we own, and art
-is decoded straight into a cairo-ready buffer. Both end up as pixels the app
-paints with cairo or uploads to its SDL texture. No window, no Wayland surface.
+A separate mpv window on DSI-1 takes keyboard focus from the game on the other screen, so
+video is decoded by libmpv with its software render API into a buffer we own, and art is
+decoded straight into a cairo ready buffer. Both end up as pixels the app paints with cairo
+or uploads to its SDL texture. No window, no Wayland surface.
 
 Images
     load_image(path, w, h, mode="fit") -> Image
         PNG  -> cairo's own loader (cairo_image_surface_create_from_png)
-        JPEG -> libturbojpeg, decoded directly as BGRA, with DCT-domain
-                downscaling (n/8) when the target box is much smaller
+        JPEG -> libturbojpeg, decoded as BGRA, with DCT downscaling (n/8) when the box is
+                much smaller
         WebP -> libwebp's advanced API in MODE_bgrA (premultiplied BGRA)
-        The format is sniffed from the file's magic bytes, not the extension.
-        Scaling to the box is a cairo paint with FILTER_GOOD.
-    Image.data layout: cairo FORMAT_ARGB32, premultiplied, native endian,
-    i.e. bytes B,G,R,A on little-endian == SDL_PIXELFORMAT_ARGB8888.
+        The format comes from the file's magic bytes, not the extension. Scaling to the box
+        is a cairo paint with FILTER_GOOD.
+    Image.data is cairo FORMAT_ARGB32, premultiplied, native endian, so bytes B,G,R,A on
+    little endian == SDL_PIXELFORMAT_ARGB8888.
 
-    Modes (CSS object-fit names are accepted as aliases):
-        fit  (contain) whole image inside the box, aspect kept; the Image is
-                       the scaled size (<= box). Centre it with place().
-        fill (stretch) exactly box size, aspect ignored.
-        crop (cover)   exactly box size, aspect kept, overflow cut off evenly.
+    Modes (the CSS object-fit names work too):
+        fit  (contain) the whole image inside the box with its aspect kept, the Image is
+                       the scaled size (<= box), centre it with place()
+        fill (stretch) exactly the box size, aspect ignored
+        crop (cover)   exactly the box size, aspect kept, the overflow cut evenly
 
 Video
     VideoPlayer(path, w, h, loop=True, mute=True, hwdec="no", ao=None,
                 mode="fit", wake=None)
-        .poll_frame() -> bool   drain mpv events; True when a new frame is due
-        .render()               render into the player's own 64-byte aligned
-                                buffer (.address, .stride; format bgr0)
+        .poll_frame() -> bool   drain mpv events, True when a new frame is due
+        .render()               render into the player's own 64-byte aligned buffer
+                                (.address, .stride, format bgr0)
         .render_into(buf, stride)  render into caller memory instead
         .start() .pause() .resume() .stop() .seek(t) .set_loop(b) .set_mute(b)
         .load(path) .resize(w, h) .close()   (also a context manager)
-    Pixel format "bgr0": bytes B,G,R,X. X is GARBAGE (mpv render.h), so treat
-    it as cairo FORMAT_RGB24 / SDL_PIXELFORMAT_XRGB8888 - never as ARGB, or the
-    X byte becomes alpha.
+    Pixel format "bgr0" is bytes B,G,R,X and X is garbage (mpv render.h), so treat it as
+    cairo FORMAT_RGB24 / SDL_PIXELFORMAT_XRGB8888, never ARGB, or X becomes alpha.
 
-    Threading: all VideoPlayer methods must be called from ONE thread (the
-    app's main thread). `wake` is called from mpv's own threads whenever
-    poll_frame() should be called soon (new frame or new event); it must only
-    signal (e.g. main.Poster.wake / SDL_PushEvent), never call back into the
-    player. mpv's calls into Python never hold the GIL across mpv calls:
-    ctypes.CDLL releases the GIL for every foreign call.
+    Every VideoPlayer method has to be called from one thread (the app's main thread).
+    `wake` is called from mpv's threads when poll_frame() should run soon, and it may only
+    signal (main.Poster.wake, SDL_PushEvent), never call back into the player. ctypes.CDLL
+    releases the GIL for every foreign call, so mpv never waits on Python.
 
-Everything that needs a native library is loaded lazily, so importing this
-module on the PC (no cairo, no libmpv) is fine; the pure helpers (geometry,
-sniffing, strides, state machine, option building) are unit-tested there.
+Anything needing a native library loads lazily, so importing this on the PC (no cairo, no
+libmpv) works and the pure helpers (geometry, sniffing, strides, state machine, options)
+get tested there.
 
 CLI (headless, on the device):
     python3 media.py libs
@@ -69,11 +65,11 @@ from ctypes import (POINTER, Structure, Union, byref, c_char_p, c_double, c_int,
 
 
 class MediaError(Exception):
-    """Decode / playback failure with a human-readable reason."""
+    """decode or playback failure with a readable reason"""
 
 
 # ===========================================================================
-# Pure logic (no native libraries) - unit-tested on the PC
+# Pure logic, no native libraries, tested on the PC
 # ===========================================================================
 
 FIT, FILL, CROP = "fit", "fill", "crop"
@@ -90,9 +86,9 @@ def norm_mode(mode):
 
 
 class Geometry(tuple):
-    """(out_w, out_h, sx, sy, ox, oy): the output image is out_w x out_h; the
-    source is drawn scaled by (sx, sy) with its top-left corner at (ox, oy)
-    in output pixels (negative offsets = cropped)."""
+    """(out_w, out_h, sx, sy, ox, oy): the output is out_w x out_h and the source is drawn scaled by
+    (sx, sy) with its top left at (ox, oy) in output pixels (negative = cropped).
+    """
     __slots__ = ()
 
     def __new__(cls, out_w, out_h, sx, sy, ox, oy):
@@ -160,9 +156,9 @@ def scaled_dim(d, factor):
 
 
 def pick_jpeg_factor(src_w, src_h, need_w, need_h, factors=JPEG_FACTORS):
-    """Smallest DCT scaling factor whose output is still >= the needed size,
-    so the decoder does the bulk of a big downscale and cairo only refines.
-    Falls back to the largest factor <= 1 (full size)."""
+    """Smallest DCT scaling factor whose output is still >= the needed size, so the decoder does
+    most of a big downscale and cairo only refines. Falls back to the largest factor <= 1.
+    """
     best = None
     for f in factors:
         if f[0] > f[1]:
@@ -178,15 +174,16 @@ def pick_jpeg_factor(src_w, src_h, need_w, need_h, factors=JPEG_FACTORS):
 
 
 def stride_for(width, bpp=4, align=4):
-    """Bytes per row, rounded up to `align` (cairo: 4; mpv sw: 64)."""
+    """bytes per row, rounded up to `align` (cairo 4, mpv sw 64)"""
     if width <= 0 or bpp <= 0 or align <= 0:
         raise ValueError("width, bpp and align must be positive")
     return ((width * bpp + align - 1) // align) * align
 
 
 def sniff(head):
-    """Image format from the first bytes of a file (extension-independent:
-    scrapers sometimes save JPEG data under .png)."""
+    """Image format from the first bytes of a file, since scrapers sometimes save JPEG data as
+    .png.
+    """
     if head[:8] == b"\x89PNG\r\n\x1a\n":
         return "png"
     if head[:3] == b"\xff\xd8\xff":
@@ -199,8 +196,9 @@ def sniff(head):
 
 
 class AlignedBuffer:
-    """size bytes of ctypes-owned memory whose address is a multiple of align.
-    mpv recommends 64-byte aligned SW render targets."""
+    """`size` bytes of ctypes memory whose address is a multiple of align. mpv recommends 64-byte
+    aligned SW render targets.
+    """
 
     def __init__(self, size, align=64):
         if size <= 0:
@@ -223,9 +221,10 @@ class AlignedBuffer:
 
 
 def buffer_address(buf, need):
-    """Address of caller-supplied memory, refusing anything too small.
-    Accepts AlignedBuffer, a ctypes array, a writable bytearray/memoryview,
-    or a raw int address (unchecked - the caller vouches for its size)."""
+    """Address of caller memory, refusing anything too small. Takes AlignedBuffer, a ctypes
+    array, a writable bytearray/memoryview, or a raw int address (unchecked, the caller vouches
+    for its size).
+    """
     if isinstance(buf, int):
         return buf
     if isinstance(buf, AlignedBuffer):
@@ -251,8 +250,9 @@ END_EOF, END_STOP, END_QUIT, END_ERROR, END_REDIRECT = 0, 2, 3, 4, 5
 
 
 def next_state(state, event, paused=False, end_reason=None):
-    """Player state after an mpv event (pure). Events: "start-file",
-    "file-loaded", "end-file", "shutdown", "pause", "resume"."""
+    """Player state after an mpv event (pure). Events: "start-file", "file-loaded", "end-file",
+    "shutdown", "pause", "resume".
+    """
     if state == CLOSED:
         return CLOSED
     if event == "start-file":
@@ -276,10 +276,9 @@ def next_state(state, event, paused=False, end_reason=None):
     return state
 
 
-# mpv's BUILT-IN Lua scripts (stats, console, select, ...) still start with
-# load-scripts=no - measured: 6 lua/* threads per player. Each has its own
-# switch; an unknown name on some future mpv must not break playback, so these
-# are applied "soft" (failure logged, not raised).
+# mpv's built-in Lua scripts (stats, console, select, ...) still start with load-scripts=no,
+# 6 lua threads per player when measured. Each has its own switch, and an unknown name on a
+# future mpv shouldnt break playback, so these are applied soft (a failure is logged).
 SOFT_OPTIONS = (
     ("load-stats-overlay", "no"),
     ("load-console", "no"),
@@ -290,17 +289,18 @@ SOFT_OPTIONS = (
     ("load-auto-profiles", "no"),
 )
 
-# Measured on the RP5 in one run (MEDIA-NOTES.md), 640x480 source -> 1920x1080:
-# mpv's default bicubic swscale 21.9 ms/frame (45.5 fps of 59.94, 143 drops);
-# bilinear 12.2 ms (60.2 fps, 0 drops); fast-bilinear 12.3 ms. Bilinear costs
-# the same as fast-bilinear and looks better, so it is the default.
+# Measured on the RP5 in one run (MEDIA-NOTES.md), 640x480 source to 1920x1080: mpv's default
+# bicubic swscale 21.9 ms/frame (45.5 fps of 59.94, 143 drops), bilinear 12.2 ms (60.2 fps,
+# 0 drops), fast-bilinear 12.3 ms. Bilinear costs the same and looks better, so it's the
+# default.
 DEFAULT_SCALER = "bilinear"
 
 
 def build_options(hwdec="no", loop=True, mute=True, ao=None, mode=FIT,
                   extra=None, scaler=DEFAULT_SCALER):
-    """mpv options, in order, for a headless in-surface player (the hard
-    ones; SOFT_OPTIONS are applied separately and may fail)."""
+    """mpv options in order for a headless in-surface player (the required ones, SOFT_OPTIONS are
+    applied separately and can fail).
+    """
     mode = norm_mode(mode)
     opts = [
         ("config", "no"),                  # ignore any mpv.conf on the device
@@ -313,8 +313,8 @@ def build_options(hwdec="no", loop=True, mute=True, ao=None, mode=FIT,
         ("sub-auto", "no"),
         ("audio-display", "no"),           # never show cover art as video
         ("idle", "yes"),                   # keep the core alive between files
-        ("keep-open", "no"),               # EOF -> end-file; our buffer keeps the last frame
-        ("vo", "libmpv"),                  # render API only - no window, ever
+        ("keep-open", "no"),  # EOF -> end-file, our buffer keeps the last frame
+        ("vo", "libmpv"),  # render API only, never a window
         ("hwdec", str(hwdec)),
         ("loop-file", "inf" if loop else "no"),
         ("mute", "yes" if mute else "no"),
@@ -331,9 +331,9 @@ def build_options(hwdec="no", loop=True, mute=True, ao=None, mode=FIT,
 
 
 class FrameSignal:
-    """Coalescing, thread-safe "something new" flag. set() may be called from
-    any thread (mpv's); take() on the owner thread returns True once per
-    burst of set() calls."""
+    """Thread-safe "something new" flag that folds bursts. set() can be called from any thread
+    (mpv's), take() on the owner thread returns True once per burst.
+    """
 
     def __init__(self, wake=None):
         self._ev = threading.Event()
@@ -497,7 +497,7 @@ class _WebPConfig(Structure):
 
 
 class _WebPConfigGuarded(Structure):
-    # trailing guard: if a future libwebp's struct were larger, its memset in
+    # trailing guard, if a future libwebp's struct were bigger its memset in
     # WebPInitDecoderConfig lands here instead of on the Python heap
     _fields_ = [("cfg", _WebPConfig), ("guard", c_ubyte * 256)]
 
@@ -511,7 +511,7 @@ class _WebP:
         self.get_features = _fn(L, "WebPGetFeaturesInternal", I, c_char_p, c_size_t, V, I)
         self.decode = _fn(L, "WebPDecode", I, c_char_p, c_size_t, V)
         self.free_dec_buffer = _fn(L, "WebPFreeDecBuffer", None, V)
-        # encoder: only used by the self-test to make a WebP with alpha
+        # encoder, only used by the self-test to make a WebP with alpha
         self.encode_lossless_bgra = _fn(L, "WebPEncodeLosslessBGRA", c_size_t,
                                         V, I, I, I, POINTER(c_void_p))
         self.free = _fn(L, "WebPFree", None, V)
@@ -522,7 +522,7 @@ _LIBS_LOCK = threading.Lock()
 
 
 def _lib(name):
-    """Load a native binding once; raise MediaError if it is unavailable."""
+    """Loads a native binding once, raises MediaError if it isnt there."""
     with _LIBS_LOCK:
         if name not in _LIBS:
             cls = {"cairo": _Cairo, "turbojpeg": _TurboJpeg, "webp": _WebP,
@@ -554,8 +554,9 @@ def available():
 # ===========================================================================
 
 class Image:
-    """Decoded, scaled art: w x h, cairo FORMAT_ARGB32 premultiplied
-    (B,G,R,A bytes on little-endian), rows `stride` bytes apart."""
+    """Decoded, scaled art: w x h, cairo FORMAT_ARGB32 premultiplied (B,G,R,A bytes on little
+    endian), rows `stride` bytes apart.
+    """
 
     FORMAT = "argb32"
 
@@ -580,15 +581,16 @@ class Image:
         return tuple(ctypes.string_at(self.address + y * self.stride + x * 4, 4))
 
     def cairo_surface(self):
-        """A cairo surface VIEWING this image's memory (caller destroys it;
-        the Image must outlive it)."""
+        """A cairo surface viewing this image's memory. The caller destroys it and the Image has to
+        outlive it.
+        """
         c = _lib("cairo")
         s = c.create_for_data(self.address, CAIRO_FORMAT_ARGB32, self.w, self.h, self.stride)
         c.check_surface(s, "wrap image")
         return s
 
     def paint(self, cr, x, y, alpha=1.0):
-        """Draw at (x, y) on a cairo context (e.g. gfx.Canvas.cr)."""
+        """Draws at (x, y) on a cairo context (like gfx.Canvas.cr)."""
         c = _lib("cairo")
         s = self.cairo_surface()
         try:
@@ -720,8 +722,9 @@ def _decode_webp(path, data):
 
 
 def _scale_surface(src, src_w, src_h, geom, orig_w, orig_h):
-    """Paint src (a decode of an orig_w x orig_h image, possibly pre-shrunk
-    to src_w x src_h) into a new Image per geom."""
+    """Paints src (a decode of an orig_w x orig_h image, maybe pre-shrunk to src_w x src_h) into a
+    new Image per geom.
+    """
     c = _lib("cairo")
     ow, oh = geom.out_w, geom.out_h
     stride = c.stride_for_width(CAIRO_FORMAT_ARGB32, ow)
@@ -749,8 +752,9 @@ def _scale_surface(src, src_w, src_h, geom, orig_w, orig_h):
 
 
 def load_image(path, w, h, mode=FIT, upscale=True):
-    """Decode PNG/JPEG/WebP art and scale it into a w x h box (see module
-    docstring for modes). Raises MediaError on any failure."""
+    """Decodes PNG/JPEG/WebP art and scales it into a w x h box (modes in the module docstring).
+    Raises MediaError on any failure.
+    """
     c = _lib("cairo")
     fmt, sw, sh, data = _probe(path)
     geom = fit_geometry(sw, sh, w, h, mode, upscale)
@@ -771,7 +775,7 @@ def load_image(path, w, h, mode=FIT, upscale=True):
 
 
 def save_frame_png(address, w, h, stride, path):
-    """Write a bgr0 / RGB24 frame (e.g. VideoPlayer's) to a PNG."""
+    """Writes a bgr0 / RGB24 frame (like VideoPlayer's) to a PNG."""
     c = _lib("cairo")
     s = c.create_for_data(address, CAIRO_FORMAT_RGB24, w, h, stride)
     c.check_surface(s, "wrap frame")
@@ -831,8 +835,7 @@ _CB = ctypes.CFUNCTYPE(None, c_void_p)
 
 
 class _MpvLib:
-    """Thin Python-level wrapper over libmpv; VideoPlayer only talks to this
-    interface, so tests can substitute a fake."""
+    """Thin wrapper over libmpv. VideoPlayer only talks to this, so tests can swap in a fake."""
 
     def __init__(self):
         L = _cdll("libmpv.so.2")
@@ -899,7 +902,7 @@ class _MpvLib:
         self._check(self._command(h, arr), "command %s" % args[0])
 
     def wait_event(self, h, timeout=0.0):
-        """-> None when the queue is empty, else (name_or_id, error, info)."""
+        """None when the queue is empty, else (name_or_id, error, info)."""
         ev = self._wait_event(h, timeout).contents
         eid = ev.event_id
         if eid == MPV_EVENT_NONE:
@@ -1033,7 +1036,7 @@ class VideoPlayer:
         self.buffer.clear()
 
     def resize(self, w, h):
-        """New render size; the next render() fills the new buffer."""
+        """New render size, the next render() fills the new buffer."""
         self._alive()
         self._set_size(w, h)
         self.signal.set()           # make sure the next poll renders
@@ -1057,7 +1060,7 @@ class VideoPlayer:
         self.state = LOADING
 
     def start(self):
-        """Play: resume if paused, restart the file if it ended or stopped."""
+        """Play: resume if paused, restart the file if it ended or was stopped."""
         self._alive()
         if self.state in (ENDED, STOPPED, ERROR, IDLE):
             if not self.path:
@@ -1079,8 +1082,9 @@ class VideoPlayer:
         self.state = next_state(self.state, "resume")
 
     def stop(self):
-        """Stop playback (the player stays usable: start() or load() again).
-        The buffer keeps the last rendered frame. close() tears down."""
+        """Stops playback, the player stays usable (start() or load() again). The buffer keeps the
+        last frame. close() tears down.
+        """
         self._alive()
         self._mpv.command(self._handle, ["stop"])
         self.state = STOPPED
@@ -1114,9 +1118,10 @@ class VideoPlayer:
         return float(v) if v not in (None, "") else None
 
     def native_size(self):
-        """(w, h) of the video after aspect correction ("dwidth"/"dheight"),
-        or None before the file is loaded. Rendering at this size and letting
-        the GPU (SDL_RenderTexture dst rect) scale is the cheapest path."""
+        """(w, h) of the video after aspect correction ("dwidth"/"dheight"), or None before the file
+        loads. Rendering at this size and letting the GPU scale (SDL_RenderTexture dst rect) is
+        cheapest.
+        """
         try:
             w, h = self.get("dwidth"), self.get("dheight")
             return (int(w), int(h)) if w and h else None
@@ -1143,8 +1148,9 @@ class VideoPlayer:
                 self.state = next_state(self.state, name, self._paused)
 
     def poll_frame(self):
-        """Owner thread. Drains mpv events, then returns True iff mpv has a new
-        frame to render. Cheap when nothing happened."""
+        """Owner thread. Drains mpv events, then returns True if mpv has a new frame to render. Cheap
+        when nothing happened.
+        """
         if self._handle is None:
             return False
         if not self.signal.take():
@@ -1155,8 +1161,9 @@ class VideoPlayer:
         return bool(self._mpv.update(self._ctx) & MPV_RENDER_UPDATE_FRAME)
 
     def render_into(self, buf, stride, w=None, h=None):
-        """Render the current frame into caller memory (bgr0 rows of `stride`
-        bytes). w/h default to the player's size."""
+        """Renders the current frame into caller memory (bgr0 rows of `stride` bytes). w/h default to
+        the player's size.
+        """
         self._alive()
         w = self.w if w is None else int(w)
         h = self.h if h is None else int(h)
@@ -1167,12 +1174,12 @@ class VideoPlayer:
         self.frames_rendered += 1
 
     def render(self):
-        """Render into the player's own buffer; returns (address, stride)."""
+        """Renders into the player's own buffer, returns (address, stride)."""
         self.render_into(self.buffer, self.stride)
         return self.buffer.address, self.stride
 
     def paint(self, cr, x, y):
-        """Draw the last rendered frame on a cairo context."""
+        """Draws the last rendered frame on a cairo context."""
         c = _lib("cairo")
         s = c.create_for_data(self.buffer.address, CAIRO_FORMAT_RGB24, self.w, self.h,
                               self.stride)
@@ -1186,9 +1193,10 @@ class VideoPlayer:
 
     # -- teardown ------------------------------------------------------------
     def close(self):
-        """Idempotent. Order matters: no callback may run into a freed context,
-        and the render context must be freed before the core is destroyed
-        (mpv_terminate_destroy joins every mpv thread)."""
+        """Safe to call twice. Order matters: no callback can run into a freed context, and the render
+        context has to be freed before the core is destroyed (mpv_terminate_destroy joins every mpv
+        thread).
+        """
         m = self._mpv
         if self._ctx is not None:
             try:
@@ -1277,7 +1285,7 @@ def _cmd_bench(argv):
                     mode=a.mode, options=extra, log_level="warn", scaler=scaler,
                     wake=lambda: wake_count.__setitem__(0, wake_count[0] + 1))
     t_open = _threads()
-    # warm up: wait for the first frame so startup cost is not in the numbers
+    # warm up, wait for the first frame so startup cost isnt in the numbers
     t0 = time.monotonic()
     while time.monotonic() - t0 < 10:
         p.signal.wait(0.05)
@@ -1356,8 +1364,9 @@ def _cmd_bench(argv):
 
 
 def _cmd_control_test(argv):
-    """Exercise every control on a real video, headless, ao=null. Each check
-    prints PASS/FAIL with the observed values."""
+    """Runs every control on a real video, headless with ao=null. Each check prints PASS/FAIL with
+    what it saw.
+    """
     import time
     video = argv[0]
     results = []
@@ -1426,7 +1435,7 @@ def _cmd_control_test(argv):
     check("recovers with load()", p.state == PLAYING and n > 30, "state=%s frames=%d" % (p.state, n))
     t_play = _threads()
     p.close()
-    p.close()                                           # idempotent
+    p.close()  # safe twice
     time.sleep(0.2)
     t_after = _threads()
     leaked = [t for t in t_after if t not in t_before]
@@ -1443,8 +1452,9 @@ def _cmd_control_test(argv):
 
 
 def _cmd_webp_selftest(argv):
-    """Encode a synthetic BGRA image with alpha as lossless WebP, decode it
-    through load_image, and check premultiplication."""
+    """Encodes a made-up BGRA image with alpha as lossless WebP, decodes it through load_image and
+    checks premultiplication.
+    """
     outdir = argv[0]
     wp = _lib("webp")
     W, H = 64, 32

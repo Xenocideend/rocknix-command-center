@@ -1,15 +1,13 @@
-"""gfx - cairo + pango drawing onto an ARGB32 image, through ctypes.
+"""gfx: cairo + pango drawing onto an ARGB32 image, through ctypes.
 
-The Canvas is what ui.py widgets draw with. Colours are (r, g, b) or
-(r, g, b, a) tuples of floats in 0..1 (ui.rgb() builds them from hex).
-Rectangles are (x, y, w, h) tuples in pixels.
+The Canvas is what ui.py widgets draw with. Colours are (r, g, b) or (r, g, b, a) float tuples
+in 0..1 (ui.rgb() builds them from hex), and rects are (x, y, w, h) in pixels.
 
-The image's bytes are handed to SDL as an ARGB8888 streaming texture (cairo
-ARGB32 on little-endian == SDL ARGB8888). Every drawing call honours the
-current clip, and Canvas.clip_rect lets widgets skip drawing entirely when
-they are outside the damaged area.
+The image's bytes go to SDL as an ARGB8888 streaming texture (cairo ARGB32 on little endian ==
+SDL ARGB8888). Every drawing call follows the current clip, and Canvas.clip_rect lets widgets
+skip drawing when they're outside the damaged area.
 
-Importing this module loads libcairo/libpango, so tests never import it.
+Importing this loads libcairo/libpango, so tests never import it.
 """
 import ctypes
 from contextlib import contextmanager
@@ -179,12 +177,13 @@ class Canvas:
         stroke(self.cr)
 
     def image(self, img, x, y, alpha=1.0):
-        """Paint a media.Image (premultiplied ARGB32) at (x, y) - I1 art."""
+        """Paints a media.Image (premultiplied ARGB32) at (x, y)."""
         img.paint(self.cr, x, y, alpha)
 
     def clear_rect(self, rect):
-        """Make rect fully transparent (alpha 0). I1: the companion punches
-        this hole where the video texture, drawn under the UI, must show."""
+        """Makes rect fully transparent (alpha 0). The companion punches this hole where the video
+        texture drawn under the UI has to show through.
+        """
         save(self.cr)
         set_operator(self.cr, OPERATOR_CLEAR)
         rectangle(self.cr, *rect)
@@ -215,8 +214,9 @@ class Canvas:
         return tw.value, th.value
 
     def text_block(self, text, rect, size, color, bold=False, max_lines=3):
-        """Word-wrapped text inside rect, at most max_lines lines, the last
-        one ellipsized (I1: the companion's game description)."""
+        """Word wrapped text inside rect, at most max_lines lines with the last one ellipsized (the
+        companion's game description).
+        """
         x, y, w, h = rect
         layout_set_font(self.layout, self._font(size, bold))
         layout_set_text(self.layout, text.encode("utf-8"), -1)
@@ -234,7 +234,7 @@ class Canvas:
 
     def text(self, text, rect, size, color, bold=False, align="left",
              valign="middle"):
-        """Draw one line of text inside rect, ellipsized to its width."""
+        """Draws one line of text inside rect, ellipsized to its width."""
         x, y, w, h = rect
         tw, th = self._prep(text, size, bold, w if w > 0 else None)
         if align == "center":

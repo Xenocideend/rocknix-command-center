@@ -2,14 +2,14 @@
 # rp5deck supervisor - start the bottom-screen companion app AND the focus
 # guard (FOC1 fix), and keep both running.
 #
-# Install to: /storage/.config/autostart/094-rp5deck   (chmod +x)
+# Install to: /storage/.config/autostart/command-center-app   (chmod +x)
 # App files:  /storage/rp5deck/*.py   (main.py, focus_guard.py, and modules)
 # NOT installed by B1; installing is V1.
 #
 # Self-backgrounds so autostart is not blocked, single instance via a pid
-# lock, kill switch file, waits for the sway IPC socket - and additionally
-# for the add-on (DP-1), because without it EmulationStation lives on DSI-1
-# and the panel has nothing to do. Then it runs TWO independent children,
+# lock, kill switch file, waits for the sway IPC socket and for sway to list
+# its outputs. The add-on (DP-1) is not required: undocked, the Command Center
+# opens over ES on this panel. Then it runs TWO independent children,
 # each in its own restart loop with exponential backoff:
 #
 #   main.py         the companion app itself (layer surface on DSI-1).
@@ -51,10 +51,10 @@
 #                                            before every restart of it.
 # To stop a running instance right now (a clean, documented stop that MUST
 # stay stopped - it does not get relaunched by anything in this file):
-#     kill $(cat /run/094-rp5deck.pid)
+#     kill $(cat /run/command-center-app.pid)
 # This sends SIGTERM to the supervisor, which forwards it to both the app
 # and the focus guard's own loop (which forwards it to ITS current child in
-# turn) and exits without restarting anything. Re-running 094-rp5deck after
+# turn) and exits without restarting anything. Re-running command-center-app after
 # that starts a fresh supervisor as normal (subject to the kill-switch files
 # above).
 #
@@ -67,7 +67,7 @@
 # Testing the restart/backoff decision on a PC (no sway/python/device
 # needed at all): the pure decision function below is exposed as a hidden
 # CLI mode -
-#     sh 094-rp5deck --print-backoff-decision PREV_RAPID RAN RAPID_SECS RAPID_MAX BACKOFF_MAX
+#     sh command-center-app --print-backoff-decision PREV_RAPID RAN RAPID_SECS RAPID_MAX BACKOFF_MAX
 # prints "<new_rapid> <action>" (action is a sleep-seconds number, or the
 # literal GIVEUP) and exits immediately, running nothing else. See
 # tests/test_supervisor.py.
@@ -93,8 +93,8 @@ HB_GRACE_SECS=${RP5DECK_HB_GRACE_SECS:-30}     # no check within this long of a 
 HB_CHECK_INTERVAL=${RP5DECK_HB_CHECK_INTERVAL:-5}
 HB_KILL_GRACE=${RP5DECK_HB_KILL_GRACE:-5}      # SIGTERM, then SIGKILL after this long
 LOG_DIR=${RP5DECK_LOG_DIR:-$RP5DECK_HOME/log}
-LOG=$LOG_DIR/094-rp5deck.log
-LOCK=${RP5DECK_LOCK:-/run/094-rp5deck.pid}
+LOG=$LOG_DIR/command-center-app.log
+LOCK=${RP5DECK_LOCK:-/run/command-center-app.pid}
 DISABLE=${RP5DECK_DISABLE:-/storage/.disable-rp5deck}
 GUARD_DISABLE=${RP5DECK_GUARD_DISABLE:-/storage/.disable-rp5deck-focus-guard}
 OVERLAY_DISABLE=${RP5DECK_OVERLAY_DISABLE:-/storage/.disable-rp5deck-overlay}
@@ -444,7 +444,7 @@ echo $$ > "$LOCK"
 
 mkdir -p "$LOG_DIR"
 exec >>"$LOG" 2>&1
-echo "=== $(date '+%Y-%m-%d %H:%M:%S') 094-rp5deck starting (pid $$) ==="
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') command-center-app starting (pid $$) ==="
 
 rotate_log() {
     local sz
@@ -517,18 +517,22 @@ done
 [ -n "$SWAYSOCK" ] || finish "FATAL: no sway IPC socket after 60s - doing nothing" 1
 log "sway socket: $SWAYSOCK"
 
-# --- wait for the add-on ------------------------------------------------------
+# --- wait for sway to list its outputs -----------------------------------------
 # A failed query (empty output while sway is busy) means "ask again", never
 # "absent" - the lesson 092 learned the hard way.
 waited=0
-until swaymsg -t get_outputs 2>/dev/null | grep -q "\"name\": *\"$EXTERNAL\""; do
-    [ "$STOP" -eq 1 ] && finish "stopped while waiting for $EXTERNAL"
+until swaymsg -t get_outputs 2>/dev/null | grep -q '"name"'; do
+    [ "$STOP" -eq 1 ] && finish "stopped while waiting for sway's outputs"
     [ -e "$DISABLE" ] && finish "kill switch present"
-    [ $((waited % 60)) -eq 0 ] && log "waiting for $EXTERNAL (the add-on) to appear"
+    [ $((waited % 60)) -eq 0 ] && log "waiting for sway to list its outputs"
     nap 5
     waited=$((waited + 5))
 done
-log "$EXTERNAL present"
+if swaymsg -t get_outputs 2>/dev/null | grep -q "\"name\": *\"$EXTERNAL\""; then
+    log "$EXTERNAL present"
+else
+    log "$EXTERNAL absent (undocked): starting on DSI-1 alone"
+fi
 log "env: XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY dryrun=${RP5DECK_AUDIO_DRYRUN:-0}"
 
 # --- start the focus guard's own restart loop as a separate process --------
@@ -564,11 +568,13 @@ TOUCH_ADDON="${RP5DECK_TOUCH_ADDON:-8746:1:RetroidPocket_RDS_Touchscreen}"
 TOUCH_BUILTIN="${RP5DECK_TOUCH_BUILTIN:-0:0:generic_ft5x06_(a0)}"
 TOUCH_ADDON_MATRIX="${RP5DECK_TOUCH_ADDON_MATRIX:-0 1 0 -1 0 1}"
 apply_touch_config() {
+    # the built-in panel first and on its own: undocked the add-on's lines fail
+    swaymsg "input \"$TOUCH_BUILTIN\" map_to_output DSI-1" >/dev/null 2>&1 ||
+        log "WARNING: built-in touch not mapped to DSI-1 (swaymsg failed)"
     swaymsg "input \"$TOUCH_ADDON\" calibration_matrix $TOUCH_ADDON_MATRIX" >/dev/null 2>&1 &&
     swaymsg "input \"$TOUCH_ADDON\" map_to_output $EXTERNAL" >/dev/null 2>&1 &&
-    swaymsg "input \"$TOUCH_BUILTIN\" map_to_output DSI-1" >/dev/null 2>&1 &&
         log "touch config applied (add-on matrix $TOUCH_ADDON_MATRIX -> $EXTERNAL, built-in -> DSI-1)" ||
-        log "WARNING: touch config not applied (swaymsg failed)"
+        log "touch config: built-in -> DSI-1; add-on not configured (absent or swaymsg failed)"
 }
 rapid=0
 while [ "$STOP" -eq 0 ]; do

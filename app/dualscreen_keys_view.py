@@ -1,20 +1,15 @@
-"""dualscreen_keys_view - the "dual-screen settings missing" warning and its
-one-tap Restore.
+"""dualscreen_keys_view: the "dual-screen settings missing" warning and its one tap Restore.
 
-Same shape as cleanstate_view.py (CC1): a small Sheet with CONFIRM / RUNNING
-/ RESULT phases, driven by dualscreen_keys.check()/restore() through a
-worker so the file read and the systemctl/chksysconfig calls never block the
-UI thread. Unlike Clean state this feature is not a tile: screens.Home shows
-it as a persistent banner (Home.set_dualscreen_notice) above the tile grid
-whenever a check finds a missing key, with its own Restore button that opens
-this sheet - the tile grid's own math (grid_cols(), tile order/hidden
-persistence) never has to know this feature exists.
+Shaped like cleanstate_view.py, a small Sheet with CONFIRM / RUNNING / RESULT phases driven by
+dualscreen_keys.check()/restore() on a worker, so the file read and the systemctl/chksysconfig
+calls never block the UI thread. It isnt a tile. screens.Home shows a banner above the tile
+grid (Home.set_dualscreen_notice) whenever a check finds a missing key, with a Restore button
+that opens this sheet, so the tile grid never has to know about it.
 
-poll() is the read-only half: called once at app start and on a timer
-(main.DS_POLL_S) - it only ever updates the banner text, never writes
-system.cfg itself (the owner's rule: WARN ONLY from a background check).
-open()/action() are the write half, and only ever run from the owner's own
-tap on the Restore button, behind the sheet's confirmation."""
+poll() is the read-only half, run once at start and on a timer (main.DS_POLL_S). It only
+updates the banner and never writes system.cfg, a background check only warns. open()/action()
+are the write half and only run from your own tap on Restore, behind the sheet's confirm.
+"""
 import logging
 
 import ui
@@ -28,8 +23,9 @@ CONFIRM, RUNNING, RESULT = "confirm", "running", "result"
 
 
 class DualScreenKeysSheet(Sheet):
-    """Widgets only; DualScreenKeysController fills them. on_action(name)
-    gets "ds.primary" or "ds.cancel"."""
+    """Widgets only, DualScreenKeysController fills them. on_action(name) gets "ds.primary" or
+    "ds.cancel".
+    """
 
     MAX_LINES = 4
 
@@ -50,8 +46,7 @@ class DualScreenKeysSheet(Sheet):
         colors = list(colors or [])
         for i, lab in enumerate(self.lines):
             text = lines[i] if i < len(lines) else ""
-            col = colors[i] if i < len(colors) and colors[i] else "text"   # bare THEME key - see
-            # screens.py Bar.set_master()'s comment: a resolved tuple here would freeze forever
+            col = colors[i] if i < len(colors) and colors[i] else "text"  # bare THEME key, a resolved tuple would never follow a theme change
             lab.set_text(text, col)
         for btn, text in ((self.primary, primary), (self.cancel, cancel)):
             if text:
@@ -78,12 +73,11 @@ class DualScreenKeysSheet(Sheet):
 
 
 class DualScreenKeysController:
-    """host: main.App (ui, post, close_sheet, state_dirty). submit(fn, *args,
-    done=cb) runs fn on a worker and posts cb(result) to the UI thread -
-    dualscreen_keys.check()/restore() do real file/systemctl I/O, so this
-    must never run on the UI thread. checker/restorer default to
-    dualscreen_keys.check/restore (tests inject fakes, same shape as
-    cleanstate_view's helper_factory)."""
+    """host is main.App (ui, post, close_sheet, state_dirty). submit(fn, *args, done=cb) runs fn on a
+    worker and posts cb(result) to the UI thread, since check()/restore() do real file and
+    systemctl I/O. checker/restorer default to dualscreen_keys.check/restore (tests pass fakes,
+    like cleanstate_view's helper_factory).
+    """
 
     def __init__(self, host, submit, checker=None, restorer=None):
         self.host = host
@@ -99,10 +93,10 @@ class DualScreenKeysController:
 
     # -- read-only: app start + the periodic poll ----------------------------
     def poll(self):
-        """Never called from a tap: the owner's rule is WARN ONLY from a
-        background check, so this only ever calls dualscreen_keys.check()
-        (read-only) and updates the Home banner - it never opens the sheet
-        and never writes anything."""
+        """Never called from a tap. A background check only warns, so this only calls
+        dualscreen_keys.check() (read only) and updates the Home banner, never opens the sheet and never
+        writes anything.
+        """
         if self.check_inflight:
             return
         self.check_inflight = True
@@ -117,9 +111,8 @@ class DualScreenKeysController:
         if home is None:
             return
         if not available:
-            # "cannot check" is never shown as "missing" - a corrupt/absent
-            # file is chksysconfig's own problem to notice at the next boot,
-            # not a claim that keys are gone.
+            # cant check is never shown as missing, a corrupt or absent file is chksysconfig's problem to
+            # notice at the next boot, not a sign that keys are gone
             home.set_dualscreen_notice("")
         elif missing:
             home.set_dualscreen_notice("Dual-screen settings missing: %s" % ", ".join(missing))
@@ -148,7 +141,7 @@ class DualScreenKeysController:
         log.info("dual-screen keys: %s (%s)", name, self.phase)
         if name == "ds.cancel":
             if self.phase == RUNNING:
-                return              # cannot be interrupted; the result will say what happened
+                return  # cant be interrupted, the result says what happened
             self.gen += 1
             self.phase = None
             self.host.close_sheet()
@@ -175,7 +168,7 @@ class DualScreenKeysController:
                         primary=None, cancel="Done")
         self.host.state_dirty = True
         if ok:
-            self.poll()          # re-check: a fixed file should clear the banner itself
+            self.poll()  # check again, a fixed file should clear the banner by itself
 
     def state(self):
         return {"phase": self.phase, "missing": list(self.missing), "result": self.result}

@@ -1,69 +1,46 @@
-"""dualscreen_keys - the "dual-screen settings missing" guard and its
-one-tap Restore (owner-approved: WARN ONLY at boot, plus a one-tap restore).
+"""dualscreen_keys: warns when the dual-screen settings are missing from system.cfg, with a one
+tap Restore. Only a warning at boot, the fix is always a tap.
 
-Why this exists: ROCKNIX's /usr/bin/chksysconfig runs `verify` at every boot
-(/usr/lib/autostart/common/001-setup) - if system.cfg looks binary (e.g. NUL
-blocks left by an unclean reset) it copies system.cfg.backup over it, and
-system.cfg.backup is only refreshed at a CLEAN shutdown
-(save-sysconfig.service -> `chksysconfig backup`). A crash between those two
-points silently drops the dual-screen keys 092-dual-screen-persist/ES itself
-add, and 3DS / Wii U / a configured per-game DS title then show on a single
-screen again with no error anywhere. The owner's choice: never write
-system.cfg while ES is starting (so this module NEVER edits it from a
-background poll), just say so - plus a button that does the fix once the
-owner has confirmed it is safe (no game running) and accepted that ES
-restarts for a few seconds.
+ROCKNIX's /usr/bin/chksysconfig runs `verify` every boot, and if system.cfg looks binary (NUL
+blocks from an unclean reset) it copies system.cfg.backup over it. That backup is only
+refreshed at a clean shutdown (save-sysconfig.service -> `chksysconfig backup`), so a crash
+in between quietly drops the dual-screen keys, and 3DS, Wii U or a per-game DS title go back
+to one screen with no error anywhere. system.cfg never gets written while ES is starting, so
+this never edits it from a background poll. It just says so, and the button does the fix once
+you've confirmed no game is running and that ES restarts for a few seconds.
 
-THE KEYS: two are generic and always checked, in BASE_KEYS / KEY_LINES below
-(never re-derived, never guessed):
+Two keys are always checked, from BASE_KEYS / KEY_LINES (never worked out or guessed):
     3ds.screen_layout=5
     wiiu.gamepad_enabled=true
-A DS title can need its own per-game override (e.g. `nds["<rom
-filename>"].screen_layout=<value>`), but which title and what value is
-entirely a matter of what is actually in an owner's own ROM collection - it
-is never hard-coded here. Instead it comes from config.json's
-dualscreen.extra_keys (config.py's schema; public default: empty list), a
-list of {"key": the exact system.cfg key name, "line": the exact "key=value"
-text restore() appends verbatim, "rom": optional, a path relative to
-ROMS_DIR}. An entry with "rom" only counts as "expected" while that file
-actually exists under roms_dir (an owner without the game never sees it
-listed as missing); an entry with no "rom" is always expected once
-configured. See DEVICE-CONFIG-NOTE.md style guidance in config.py's
-dualscreen.extra_keys schema comment for how an owner adds their own entry.
+A DS title can need its own override (`nds["<rom filename>"].screen_layout=<value>`), but
+which title and value depends on your own ROM collection, so it's never hard-coded. It comes
+from config.json's dualscreen.extra_keys (empty by default), a list of {"key": the exact
+system.cfg key, "line": the exact "key=value" text restore() appends as is, "rom": optional, a
+path relative to ROMS_DIR}. An entry with "rom" only counts while that file exists, so without
+the game it never shows as missing. One with no "rom" always counts once it's set up.
 
-A key is "present" if some line in system.cfg starts with "<key>=" - ANY
-value counts (the owner may have changed it by hand through ES; this module
-only ever reports a NAME missing, never a value it disagrees with), and the
-"=" must follow the key immediately, so "3ds.screen_layout_x=..." is never
-mistaken for "3ds.screen_layout=...".
+A key is present if some line starts with "<key>=", any value, since you might have changed it
+yourself in ES. This only ever reports a missing name, never a value it disagrees with. The
+"=" has to follow the key right away, so "3ds.screen_layout_x=..." never passes for
+"3ds.screen_layout=...".
 
-Three pieces, like charge_limit.py / system_sleep.py / cleanstate.py before
-it:
-  missing_keys()   pure: file text + the already-resolved list of expected
-                   extra key NAMES -> the list of missing key NAMES. No
-                   filesystem, no clock.
-  check()          reads system.cfg (tolerant of it being absent, unreadable
-                   or undecodable - "cannot check", never reported as
-                   "missing": a corrupt file must never be double-counted as
-                   both chksysconfig's problem AND this module's) and
-                   resolves dualscreen.extra_keys against roms_dir.
-  restore()        the privileged fix: refuses while a game/emulator is
-                   running (same "how do we know a game is running" signal
-                   es_health.game_running() already uses for CC1), then
-                   systemctl stop essway.service, waits for ES to actually
-                   exit (bounded; aborts - and still restarts essway - if it
-                   does not), backs up system.cfg, appends ONLY the keys
-                   still missing (re-checked right before writing - never
-                   trusts a caller's possibly-stale list), tells
-                   chksysconfig to refresh ITS OWN boot-time snapshot so a
-                   crash five minutes later cannot undo the fix, then always
-                   restarts essway (try/finally) - a half-finished edit must
-                   never leave the owner without EmulationStation.
+Three parts, like charge_limit.py, system_sleep.py and cleanstate.py:
+  missing_keys()   pure: file text + the list of extra key names to expect -> the missing
+                   key names. No filesystem, no clock.
+  check()          reads system.cfg and resolves dualscreen.extra_keys against roms_dir. An
+                   absent, unreadable or undecodable file is "cant check", never "missing",
+                   so a corrupt file isnt counted as both chksysconfig's problem and this one.
+  restore()        the privileged fix. Refuses while a game runs (the same check es_health
+                   uses), stops essway.service, waits for ES to exit (bounded, and if it
+                   doesnt it gives up and still restarts essway), backs up system.cfg,
+                   appends only the keys still missing (checked again right before writing),
+                   tells chksysconfig to refresh its own boot snapshot so a crash later cant
+                   undo the fix, and always restarts essway in a finally, so a half done edit
+                   never leaves you without ES.
 
-Owner rules this module keeps: never prints system.cfg in full anywhere,
-logs included (only key names ever appear in a log line or a returned
-"detail" string); the whole flow is behind a UI confirmation - nothing here
-runs on its own from a background poll.
+system.cfg never gets printed in full anywhere, logs included, only key names show up in a
+log line or a returned detail. The whole thing sits behind a confirm, nothing runs by itself
+from a background poll.
 """
 import logging
 import os
@@ -83,9 +60,8 @@ KEY_3DS = "3ds.screen_layout"
 KEY_WIIU = "wiiu.gamepad_enabled"
 
 BASE_KEYS = (KEY_3DS, KEY_WIIU)
-# The two generic keys' own lines, verbatim - restore() never builds a
-# "key=value" string any other way. Any further (per-game) key/line comes
-# from config.json's dualscreen.extra_keys - see _key_lines() below.
+# The two keys' own lines, as is. restore() never builds a "key=value" string any other way,
+# and any per-game key/line comes from config.json's dualscreen.extra_keys (see _key_lines()).
 KEY_LINES = {
     KEY_3DS: "3ds.screen_layout=5",
     KEY_WIIU: "wiiu.gamepad_enabled=true",
@@ -95,7 +71,7 @@ CMD_STOP_ES = ("systemctl", "stop", "essway.service")
 CMD_START_ES = ("systemctl", "start", "essway.service")
 CMD_CHKSYSCONFIG = ("/usr/bin/chksysconfig", "backup")
 
-STOP_WAIT_S = 15.0           # bounded wait for ES to actually exit after the stop
+STOP_WAIT_S = 15.0  # how long to wait for ES to exit after the stop
 POLL_S = 0.25
 
 
@@ -108,33 +84,30 @@ def _present(lines, key):
 
 
 def missing_keys(text, expected_extra=()):
-    """text (system.cfg's raw content, any line ending, a trailing newline
-    or not) -> the list of expected key NAMES not present in it, in
-    BASE_KEYS order with `expected_extra`'s keys last, in the order given.
-    Pure: no filesystem, no clock - expected_extra is the plain list of
-    already-resolved key NAMES the caller wants checked (check(), below,
-    derives it from config.json's dualscreen.extra_keys, filtered by
-    whether each entry's optional ROM file actually exists)."""
+    """text (system.cfg's raw content, any line ending, trailing newline or not) -> the expected key
+    names not in it, BASE_KEYS order first, then expected_extra's in the order given. Pure,
+    expected_extra is the plain list of key names the caller wants checked (check() builds it
+    from dualscreen.extra_keys, filtered by whether each entry's ROM exists).
+    """
     lines = text.splitlines()
     keys = list(BASE_KEYS) + list(expected_extra)
     return [k for k in keys if not _present(lines, k)]
 
 
 def _default_extra_specs():
-    """The owner's own per-game keys, straight from config.json
-    (dualscreen.extra_keys - RP5DECK_CONFIG override honoured, same as
-    every other rp5deck setting). The public default is an empty list, so
-    a fresh install checks/restores only the two generic BASE_KEYS."""
+    """Your own per-game keys from config.json (dualscreen.extra_keys, RP5DECK_CONFIG override
+    honoured like every other setting). Empty by default, so a fresh install only checks and
+    restores the two BASE_KEYS.
+    """
     cfg, _note = config.load()
     return config.get_value(cfg, ("dualscreen", "extra_keys"))
 
 
 def _expected_extra_keys(specs, roms_dir):
-    """specs (dualscreen.extra_keys, already validated by config.py) -> the
-    key NAMES currently "expected": every entry with no "rom" is always
-    expected once configured; an entry with a "rom" only while that file
-    actually exists under roms_dir (an owner without the game never sees
-    it listed as missing)."""
+    """specs (dualscreen.extra_keys, already validated by config.py) -> the key names expected right
+    now. An entry with no "rom" always is once it's set up, one with a "rom" only while that file
+    exists under roms_dir.
+    """
     out = []
     for spec in specs:
         key = spec.get("key")
@@ -148,9 +121,9 @@ def _expected_extra_keys(specs, roms_dir):
 
 
 def _key_lines(specs):
-    """BASE_KEYS' own KEY_LINES plus a "key" -> "line" entry for every
-    configured extra spec that has both - the exact text restore() ever
-    appends for that key, verbatim from config.json, never rebuilt."""
+    """BASE_KEYS' own KEY_LINES plus a "key" -> "line" entry for every extra spec that has both,
+    exactly the text restore() appends for that key, from config.json as is.
+    """
     out = dict(KEY_LINES)
     for spec in specs:
         key, line = spec.get("key"), spec.get("line")
@@ -163,14 +136,12 @@ def _key_lines(specs):
 # Read-only check
 # ---------------------------------------------------------------------------
 def check(cfg_path=SYSTEM_CFG, roms_dir=ROMS_DIR, extra_key_specs=None):
-    """{"available", "missing", "error"}. available False means "cannot
-    check" (the file is absent, unreadable, or not valid UTF-8 text - e.g.
-    the NUL-block state chksysconfig itself is watching for): the caller
-    must never turn that into "keys are missing", only into its own
-    separate "could not check" note. Never raises, never logs any of the
-    file's own content. extra_key_specs defaults to config.json's
-    dualscreen.extra_keys (None means "look it up"; tests pass an explicit
-    list instead of touching a real config file)."""
+    """{"available", "missing", "error"}. available False means cant check (the file is missing,
+    unreadable or not valid UTF-8, like the NUL block state chksysconfig watches for), and the
+    caller must never turn that into "keys are missing", only its own "couldnt check" note. Never
+    raises and never logs the file's content. extra_key_specs defaults to dualscreen.extra_keys
+    (None means look it up, tests pass a list instead of touching a real config).
+    """
     specs = _default_extra_specs() if extra_key_specs is None else extra_key_specs
     expected_extra = _expected_extra_keys(specs, roms_dir)
     try:
@@ -185,7 +156,7 @@ def check(cfg_path=SYSTEM_CFG, roms_dir=ROMS_DIR, extra_key_specs=None):
 
 
 # ---------------------------------------------------------------------------
-# The restore (privileged; touch-only, behind a UI confirmation)
+# The restore (privileged, touch only, behind a confirm)
 # ---------------------------------------------------------------------------
 def _default_game_running():
     return es_health.game_running(es_health.Probe())[0]
@@ -211,12 +182,11 @@ def _wait_es_gone(probe, clock, sleep, timeout_s, poll_s):
 
 
 def _still_missing(cfg_path, requested):
-    """Re-derive, from the file as it is RIGHT NOW (immediately before the
-    append), which of the caller's requested keys are still absent - so a
-    key the owner added by hand through ES between check() and this restore
-    (or between the confirm sheet opening and the tap) is never appended a
-    second time. Falls back to trusting the caller's list only if the file
-    cannot be read here (it was readable moments ago, at backup time)."""
+    """Works out from the file as it is right now, right before the append, which of the requested
+    keys are still missing, so a key you added yourself in ES since check() (or since the confirm
+    opened) never gets appended twice. Only trusts the caller's list if the file cant be read here
+    (it was readable a moment ago at backup time).
+    """
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             lines = f.read().splitlines()
@@ -240,12 +210,12 @@ def _backup(cfg_path, backup_dir, stamp):
 
 
 def _append_lines(cfg_path, keys, key_lines=KEY_LINES):
-    """Byte-level append: add a newline only if the file does not already end
-    with one, then exactly `key_lines`'s text for `keys`. Opened for APPEND,
-    never rewritten: a crash mid-write can only lose the new lines, never
-    truncate the existing file (a truncated or NUL-padded system.cfg is what
-    makes chksysconfig restore a stale backup at the next boot). fsync'd
-    before returning, since chksysconfig backup copies the file right after."""
+    """Byte level append: a newline only if the file doesnt already end with one, then exactly
+    `key_lines`'s text for `keys`. Opened for append, never rewritten, so a crash mid-write can
+    only lose the new lines, never cut the file short (a truncated or NUL padded system.cfg is what
+    makes chksysconfig restore a stale backup next boot). fsynced before returning since
+    chksysconfig backup copies the file right after.
+    """
     try:
         with open(cfg_path, "rb") as f:
             data = f.read()
@@ -268,17 +238,14 @@ def _append_lines(cfg_path, keys, key_lines=KEY_LINES):
 def restore(missing, cfg_path=SYSTEM_CFG, backup_dir=BACKUP_DIR, run=None, probe=None,
            game_running=None, clock=time.monotonic, sleep=time.sleep, stamp_fn=None,
            stop_wait_s=STOP_WAIT_S, poll_s=POLL_S, extra_key_specs=None):
-    """Fix exactly the keys in `missing` (every one must be a known key name
-    - BASE_KEYS or a configured dualscreen.extra_keys entry; an unknown name
-    refuses rather than guessing a line for it). Returns {"ok", "detail",
-    "restored", "backup"}. `detail`/log lines only ever name keys, never a
-    "key=value" line or any other system.cfg content. extra_key_specs
-    defaults to config.json's dualscreen.extra_keys (None means "look it
-    up"; tests pass an explicit list instead of touching a real config
-    file). Order: refuse while a game runs -> stop essway -> wait for ES
-    to exit (bounded) -> back up -> append only what is STILL missing ->
-    chksysconfig backup -> [finally] restart essway, even on any failure
-    above (a partial edit must never leave the owner without ES)."""
+    """Fixes exactly the keys in `missing`, each has to be a known name (BASE_KEYS or a configured
+    dualscreen.extra_keys entry), an unknown one refuses instead of guessing a line. Returns
+    {"ok", "detail", "restored", "backup"}, and detail and log lines only ever name keys, never a
+    "key=value" line or anything else from system.cfg. extra_key_specs defaults to
+    dualscreen.extra_keys (None means look it up, tests pass a list). Order: refuse while a game
+    runs -> stop essway -> wait for ES to exit (bounded) -> back up -> append only what's still
+    missing -> chksysconfig backup -> finally restart essway even if anything above failed.
+    """
     run = run or subprocess.run
     probe = probe or es_health.Probe()
     game_running = game_running or _default_game_running

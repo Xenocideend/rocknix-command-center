@@ -1,42 +1,24 @@
-"""hotkeys - CC7: the Hotkey cheat sheet's data model.
+"""hotkeys: the data behind the Hotkey cheat sheet.
 
-PC-only research task (device offline, read-only rule anyway): every combo
-below is sourced from one of two places, never from memory -
+Every combo here comes from one of two places, never memory:
 
-  verified_on_device=True   confirmed by an EARLIER agent's actual read of
-                             this device (cited by the doc/row that recorded
-                             it: TASKS.md's CC7 row, research/R7-input-media.md,
-                             research/DS1-dual-screen-emulators.md, TASKS.md's
-                             DS3 device-test row). This module does not touch
-                             the device itself (PC-only, no device access).
-  verified_on_device=False  read from ROCKNIX's public GitHub source
-                             (ROCKNIX/distribution, branch "next") - cited by
-                             exact file path (+ line numbers where the file
-                             is short and stable enough for them to mean
-                             anything) and, for input_sense, the commit this
-                             was read at (dc5f51a, 2026-09-11 - the RP5's
-                             20260923 nightly is 12 days newer but nothing in
-                             TASKS.md's CC7 row conflicts with what that
-                             commit shows, and the CC7 row's own line numbers
-                             land inside the same function this read finds a
-                             few lines earlier at - a nightly-build shift, not
-                             a different mechanism).
+  verified_on_device=True   seen on this device (TASKS.md's CC7 and DS3 rows,
+                            research/R7-input-media.md, research/DS1-dual-screen-emulators.md)
+  verified_on_device=False  read from ROCKNIX's GitHub source (ROCKNIX/distribution, branch
+                            "next"), cited by file path, and for input_sense the commit it was
+                            read at (dc5f51a). The RP5's nightly is newer but nothing on the
+                            device disagrees with it.
 
-A combo this module could not source with confidence is left OUT of
-CONTEXTS entirely and named instead in UNCONFIRMED at the bottom - "never
-invent a binding" (owner's rule). Two physical-button facts in particular
-are NOT verified_on_device (TASKS.md says so explicitly) even though the
-GitHub source points at an answer with unusual unanimity across five
-independently-shipped config files (input_sense's own SM8250 platform
-default, melonDS, Azahar and Flycast's shipped InputPlumber profiles all use
-the same numeric/named modifier, and Dolphin's Hotkeys.ini spells it out in
-English) - see UNCONFIRMED for exactly what would need a real button press
-on the device to close the loop.
+A combo that couldnt be sourced with confidence stays out of CONTEXTS and gets named in
+UNCONFIRMED at the bottom instead, never make up a binding. Two button facts in particular
+arent confirmed on the device even though five separate config files agree (input_sense's
+SM8250 default, and melonDS, Azahar and Flycast's InputPlumber profiles all use the same
+modifier, and Dolphin's Hotkeys.ini spells it out). UNCONFIRMED says which button press on
+the device would settle it.
 
-Runtime override (see read_overrides()/load()): retroarch.cfg and
-system.cfg's key.* lines are parsed with a small ALLOW-LIST, never a
-general-purpose ini reader - system.cfg also holds Wi-Fi credentials, and
-this module must never read or log anything from it outside SYSTEM_CFG_KEYS.
+Live overrides (read_overrides()/load()): retroarch.cfg and system.cfg's key.* lines are read
+with a small allow list, never a general ini reader. system.cfg also holds the Wi-Fi password,
+so nothing outside SYSTEM_CFG_KEYS is ever read or logged from it.
 """
 import collections
 import os
@@ -83,12 +65,8 @@ BTN_GLYPH = {
     "BTN_THUMBL": "L3", "BTN_THUMBR": "R3",
     "BTN_DPAD_UP": "D-pad Up", "BTN_DPAD_DOWN": "D-pad Down",
     "BTN_DPAD_LEFT": "D-pad Left", "BTN_DPAD_RIGHT": "D-pad Right",
-    # face buttons: Nintendo layout, CONFIRMED by the owner directly on this
-    # device (test day, 2026-09-24): bottom=B, right=A, left=Y, top=X. This
-    # supersedes R7-input-media.md's own read of retroid_mcu.yaml, which only
-    # called the physical-to-Sony-glyph mapping "Circle/X depending on
-    # layout" (its words, i.e. NOT confidently one glyph at the time) - the
-    # owner's on-device press-and-look closes that gap for THIS device.
+    # Face buttons are Nintendo layout, checked by pressing them on this device: bottom=B,
+    # right=A, left=Y, top=X.
     "BTN_NORTH": "X", "BTN_SOUTH": "B",
     "BTN_EAST": "A", "BTN_WEST": "Y",
     "BTN_BACK": "Back", "BTN_TOUCH": "Touch screen",
@@ -99,18 +77,17 @@ def btn_glyph(name):
     return BTN_GLYPH.get(name, name)
 
 
-# Role -> the BTN_* name input_sense/SM8250 fall back to when system.cfg has
-# no override (input_sense lines 53-60 for hotkey.a/b/c; SM8250's
-# projects/ROCKNIX/packages/hardware/quirks/platforms/SM8250/070-modifiers
-# for function.a/b - the "Retroid Pocket 5" device quirks dir has no
-# 050-modifiers/070-modifiers of its own, so it inherits the platform
-# default unchanged).
+# Role -> the BTN_* name input_sense and SM8250 fall back to when system.cfg has no override
+# (input_sense lines 53-60 for hotkey.a/b/c, and SM8250's
+# projects/ROCKNIX/packages/hardware/quirks/platforms/SM8250/070-modifiers for function.a/b.
+# The Retroid Pocket 5 quirks folder has no modifiers file of its own so it gets the platform
+# default).
 ROLE_DEFAULT_BTN = {
     "hotkey_a": "BTN_TL", "hotkey_b": "BTN_SELECT", "hotkey_c": "BTN_START",
     "function_a": "BTN_MODE", "function_b": "BTN_START",
 }
-# Role -> the system.cfg key that overrides it (input_sense lines 44, 47, 53,
-# 56, 59: get_setting key.function.a / key.function.b / key.hotkey.a/b/c).
+# Role -> the system.cfg key that overrides it (input_sense lines 44, 47, 53, 56, 59:
+# key.function.a / key.function.b / key.hotkey.a/b/c).
 ROLE_SYSTEM_CFG_KEY = {
     "hotkey_a": "key.hotkey.a", "hotkey_b": "key.hotkey.b", "hotkey_c": "key.hotkey.c",
     "function_a": "key.function.a", "function_b": "key.function.b",
@@ -122,15 +99,20 @@ def _roles(*names):
 
 
 # ---------------------------------------------------------------------------
-# GLOBAL - ROCKNIX's own input_sense (every ROCKNIX device, this build read
-# at ROCKNIX/distribution commit dc5f51a,
-# projects/ROCKNIX/packages/sysutils/system-utils/sources/scripts/input_sense)
+# GLOBAL: ROCKNIX's own input_sense (every ROCKNIX device), read at ROCKNIX/distribution
+# commit dc5f51a, projects/ROCKNIX/packages/sysutils/system-utils/sources/scripts/input_sense
 # ---------------------------------------------------------------------------
 _KILL_BTN, _KILL_ROLES = _roles("hotkey_a", "hotkey_b", "hotkey_c")
 _FNVOL_BTN, _FNVOL_ROLES = _roles("function_a")
 
+# The notes shown for the two ROCKNIX-gated groups. apply_overrides() swaps them by identity,
+# never by searching the text, so the text can read plainly.
+DPAD_NOTE = "off on this device (ROCKNIX has D-pad hotkeys turned off)"
+TOUCH_NOTE = "only when ROCKNIX's touch-screen hotkeys are on"
+TOUCH_OFF_NOTE = "off on this device (ROCKNIX has touch-screen hotkeys turned off)"
+
 GLOBAL_COMBOS = [
-    combo(tuple(btn_glyph(b) for b in _KILL_BTN), "Kill the running app (input_sense execute_kill)",
+    combo(tuple(btn_glyph(b) for b in _KILL_BTN), "Close the running game or app",
          True, "TASKS.md CC7 row + DS3 row (device-verified: 'Exit = L1+SELECT+START "
                "(input_sense kill combo)'); input_sense:406-441 (dc5f51a) shows the same "
                "three-modifier AND, expressed as HOTKEY_A+HOTKEY_B+HOTKEY_C all held",
@@ -138,55 +120,52 @@ GLOBAL_COMBOS = [
     combo((btn_glyph(_FNVOL_BTN[0]), "D-pad Up"), "Volume up",
          True, "TASKS.md CC7 row ('FN + D-pad up/down = volume'); "
                "input_sense:442-447 (dc5f51a): FN_A held + BTN_DPAD_UP, gated on key.dpad.events",
-         note="OFF on this device (the ROCKNIX setting key.dpad.events is not enabled)", role_buttons=(_FNVOL_ROLES[0], None)),
+         note=DPAD_NOTE, role_buttons=(_FNVOL_ROLES[0], None)),
     combo((btn_glyph(_FNVOL_BTN[0]), "D-pad Down"), "Volume down",
          True, "TASKS.md CC7 row; input_sense:448-453 (dc5f51a)",
-         note="OFF on this device (the ROCKNIX setting key.dpad.events is not enabled)", role_buttons=(_FNVOL_ROLES[0], None)),
+         note=DPAD_NOTE, role_buttons=(_FNVOL_ROLES[0], None)),
     combo((btn_glyph(_FNVOL_BTN[0]), "D-pad Right"), "Brightness up",
          True, "TASKS.md CC7 row ('FN + D-pad left/right = brightness'); "
                "input_sense:454-460 (dc5f51a)",
-         note="OFF on this device (the ROCKNIX setting key.dpad.events is not enabled)", role_buttons=(_FNVOL_ROLES[0], None)),
+         note=DPAD_NOTE, role_buttons=(_FNVOL_ROLES[0], None)),
     combo((btn_glyph(_FNVOL_BTN[0]), "D-pad Left"), "Brightness down",
          True, "TASKS.md CC7 row; input_sense:462-468 (dc5f51a)",
-         note="OFF on this device (the ROCKNIX setting key.dpad.events is not enabled)", role_buttons=(_FNVOL_ROLES[0], None)),
-    combo(("VOL+ (hold)",), "Brightness up (FN_A held while pressing the hardware volume-up key)",
+         note=DPAD_NOTE, role_buttons=(_FNVOL_ROLES[0], None)),
+    combo((btn_glyph(_FNVOL_BTN[0]), "Volume +"), "Brightness up",
          True, "TASKS.md CC7 row ('FN_A/FN_B/FN_AB actions = brightness/LED/Wi-Fi'); "
                "input_sense:125,133,187-220 (dc5f51a): FN_A_ACTION_UP default 'brightness up'"),
-    combo(("VOL- (hold)",), "Brightness down (FN_A held while pressing the hardware volume-down key)",
+    combo((btn_glyph(_FNVOL_BTN[0]), "Volume -"), "Brightness down",
          True, "TASKS.md CC7 row; input_sense:126,134,187-220 (dc5f51a)"),
-    combo((btn_glyph(_FNVOL_BTN[0]) + " (FN_B)", "VOL+ (hold)"), "LED control",
+    combo((btn_glyph("BTN_START"), "Volume +"), "Light control",
          True, "TASKS.md CC7 row ('FN_B = LED'); input_sense:127,135,221-232 (dc5f51a): "
                "FN_B_ACTION_UP default 'ledcontrol'. FN_B's own modifier is a SEPARATE "
                "button (key.function.b, default BTN_START on SM8250) from FN_A - held "
                "together with the volume key, not with FN_A"),
-    combo(("FN_B", "VOL- (hold)"), "LED off / power off (ledcontrol poweroff)",
+    combo((btn_glyph("BTN_START"), "Volume -"), "Lights off",
          True, "TASKS.md CC7 row; input_sense:128,136 (dc5f51a)"),
-    combo(("FN_A", "FN_B", "VOL+ (hold)"), "Wi-Fi enable",
+    combo((btn_glyph(_FNVOL_BTN[0]), btn_glyph("BTN_START"), "Volume +"), "Wi-Fi on",
          True, "TASKS.md CC7 row ('FN_AB = Wi-Fi'); input_sense:129,137,189-200 (dc5f51a)"),
-    combo(("FN_A", "FN_B", "VOL- (hold)"), "Wi-Fi disable",
+    combo((btn_glyph(_FNVOL_BTN[0]), btn_glyph("BTN_START"), "Volume -"), "Wi-Fi off",
          True, "TASKS.md CC7 row; input_sense:130,138 (dc5f51a)"),
-    # Bonus finds while reading input_sense in full - NOT in the TASKS row,
-    # so from_source only, and they use HOTKEY_A (L1), not FUNCTION_A (the
-    # "FN" this module cannot yet name for certain - see UNCONFIRMED).
-    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_EAST")), "Screenshot (rocknix-screenshot)",
+    # Extra finds from reading all of input_sense. Source only, and they use HOTKEY_A (L1), not
+    # FUNCTION_A (the "FN" that isnt named for sure yet, see UNCONFIRMED).
+    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_EAST")), "Screenshot",
          False, "input_sense:476-484 (dc5f51a): HOTKEY_A_PRESSED + BTN_EAST"),
-    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_WEST")), "Toggle MangoHud overlay",
+    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_WEST")), "Show or hide the performance overlay",
          False, "input_sense:485-490 (dc5f51a): HOTKEY_A_PRESSED + BTN_WEST"),
-    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_NORTH")), "Open the game-guides tool",
+    combo((btn_glyph("BTN_TL"), btn_glyph("BTN_NORTH")), "Open game guides",
          False, "input_sense:491-496 (dc5f51a): HOTKEY_A_PRESSED + BTN_NORTH"),
-    combo((btn_glyph(_FNVOL_BTN[0]), btn_glyph("BTN_TOUCH")), "Toggle the on-screen keyboard (wvkbd)",
+    combo((btn_glyph(_FNVOL_BTN[0]), btn_glyph("BTN_TOUCH")), "Show or hide the on-screen keyboard",
          False, "input_sense:470-475 (dc5f51a); gated on key.touchscreen.events",
-         note="only if the ROCKNIX setting key.touchscreen.events is on (not yet confirmed here)",
+         note=TOUCH_NOTE,
          role_buttons=(_FNVOL_ROLES[0], None)),
 ]
 
 # ---------------------------------------------------------------------------
-# RETROARCH - derived at boot by setsettings.sh's configure_hotkeys() from
-# whichever joypad autoconfig matches the connected pad; on this device that
-# is InputPlumber's virtual DualSense (R7-input-media.md), so the values
-# below come from that autoconfig file. system.autohotkeys defaults to "1"
-# (rocknix/config/system/configs/system.cfg:178) - i.e. this whole scheme is
-# ON out of the box.
+# RETROARCH: set at boot by setsettings.sh's configure_hotkeys() from the joypad autoconfig
+# that matches the connected pad. Here that's InputPlumber's virtual DualSense, so the values
+# come from that file. system.autohotkeys defaults to "1"
+# (rocknix/config/system/configs/system.cfg:178), so this is on out of the box.
 # ---------------------------------------------------------------------------
 _RA_SOURCE = ("ROCKNIX/distribution: projects/ROCKNIX/packages/rocknix/sources/scripts/"
              "setsettings.sh:347-417 (configure_hotkeys) reading "
@@ -206,9 +185,8 @@ RETROARCH_COMBOS = [
     combo(("Select (hold)", "R2 (hold)"), "Fast-forward toggle", False, _RA_SOURCE),
     combo(("Select (hold)", "L2 (hold)"), "Rewind (hold)", False, _RA_SOURCE),
 ]
-# The exact numeric default for each key, so an override can be recognised
-# (see apply_retroarch_overrides) without this module inventing a glyph for
-# an unfamiliar raw joypad-button index.
+# The exact default for each key, so an override can be spotted (see
+# apply_retroarch_overrides) without making up a glyph for an unknown raw button index.
 RETROARCH_DEFAULT_RAW = {
     "input_enable_hotkey_btn": "8", "input_exit_emulator_btn": "9",
     "input_fps_toggle_btn": "3", "input_menu_toggle_btn": "2",
@@ -217,12 +195,10 @@ RETROARCH_DEFAULT_RAW = {
 }
 
 # ---------------------------------------------------------------------------
-# Standalone emulators - each Combo's `buttons` already says "Guide" in
-# English wherever the SOURCE itself says so (Dolphin, dsperate); melonDS,
-# Azahar and Flycast's own files use a numeric/named modifier this module
-# has NOT independently confirmed maps to the same physical button as
-# "Guide" - see UNCONFIRMED. None of these six have a live-override path
-# (task scope: only retroarch.cfg + system.cfg key.*, see module docstring).
+# Standalone emulators. A combo's `buttons` says "Guide" wherever the source itself does
+# (Dolphin, dsperate). melonDS, Azahar and Flycast use a numeric or named modifier that isnt
+# confirmed to be the same button as Guide, see UNCONFIRMED. None of these have live
+# overrides, only retroarch.cfg and system.cfg key.* do.
 # ---------------------------------------------------------------------------
 _MELONDS_SRC = ("ROCKNIX/distribution: projects/ROCKNIX/packages/emulators/standalone/"
                "melonds-sa/config/InputPlumber/melonDS.ini (HKJoy_HotkeyEnable=10, "
@@ -330,7 +306,7 @@ CONTEXT_TITLES = {
     "cemu": "Cemu (Wii U)",
 }
 
-# Default paging / context order when no game is running.
+# default page order when no game is running
 CONTEXTS_ORDER = ["global", "retroarch", "melonds", "azahar", "dsperate", "dolphin",
                   "aethersx2", "flycast", "cemu"]
 
@@ -340,27 +316,20 @@ _COMBOS_BY_ID = {
     "aethersx2": AETHERSX2_COMBOS, "flycast": FLYCAST_COMBOS, "cemu": CEMU_COMBOS,
 }
 
-# Best-effort ES system short name -> the context to show FIRST while that
-# system's game is running. This mapping itself is NOT device-verified (this
-# module never saw ES's real es_systems.cfg on this device) - it follows the
-# short names research/DS1-dual-screen-emulators.md's own default-core table
-# uses (melonds-sa default for nds, azahar-sa default for 3ds) plus the
-# conventional ES/ROCKNIX short names for the rest. A miss here only means
-# the sheet opens on Global first instead of the right emulator page - never
-# a wrong or invented combo.
+# ES system short name -> the page to show first while that system's game runs. Not checked
+# against ES's real es_systems.cfg, it follows the short names in
+# research/DS1-dual-screen-emulators.md's default core table plus the usual ROCKNIX names. A
+# miss just opens the sheet on Global instead of the right emulator, never a wrong combo.
 SYSTEM_TO_CONTEXT = {
     "nds": "melonds", "n3ds": "azahar", "3ds": "azahar",
     "gc": "dolphin", "gamecube": "dolphin", "wii": "dolphin", "wiiu": "cemu",
     "ps2": "aethersx2", "dreamcast": "flycast", "dc": "flycast",
 }
 
-# Systems ROCKNIX runs on a STANDALONE emulator this module could not source
-# any hotkey file for (see UNCONFIRMED: PPSSPP, mupen64plus-sa - both "-sa"
-# builds, same family as melonds-sa/azahar-sa/etc., just without a controls
-# file this module found). These must be EXCLUDED from the "default to
-# RetroArch" fallback below: RetroArch's hotkeys do not apply to a standalone
-# emulator, and showing them would be actively wrong, not just incomplete -
-# never invent a binding by implying the wrong emulator owns it.
+# Systems ROCKNIX runs on a standalone emulator with no hotkey file found (PPSSPP,
+# mupen64plus-sa, see UNCONFIRMED). They stay out of the RetroArch fallback below, since
+# RetroArch's hotkeys dont apply to a standalone emulator and showing them would be wrong, not
+# just incomplete.
 SYSTEM_NOT_RETROARCH = frozenset(["psp", "n64"])
 
 UNCONFIRMED = [
@@ -415,34 +384,27 @@ UNCONFIRMED = [
 
 
 # ---------------------------------------------------------------------------
-# Public: contexts + ordering (pure)
+# Public: pages and ordering (pure)
 # ---------------------------------------------------------------------------
 def default_contexts():
-    """id -> Context, straight from the static tables above (no I/O)."""
+    """id -> Context, straight from the tables above (no I/O)."""
     return {cid: Context(cid, CONTEXT_TITLES[cid], list(_COMBOS_BY_ID[cid]))
             for cid in CONTEXTS_ORDER}
 
 
 def ordered_context_ids(running_system=None):
-    """CONTEXTS_ORDER, reordered so the running game's emulator page comes
-    first, then Global, then everything else in the default order (the
-    owner's rule: 'while a game runs, that emulator's hotkeys first').
+    """CONTEXTS_ORDER with the running game's emulator first, then Global, then the rest in the
+    default order.
 
-    Nothing running (running_system falsy) -> the plain default order,
-    unchanged (Global first, everything else reachable by paging).
+    Nothing running (running_system falsy) gives the plain default order.
 
-    A system with its own standalone-emulator context in SYSTEM_TO_CONTEXT
-    (nds/3ds/gc/wii/wiiu/ps2/dreamcast) -> that context first.
+    A system with its own standalone page in SYSTEM_TO_CONTEXT (nds/3ds/gc/wii/wiiu/ps2/dreamcast)
+    puts that page first.
 
-    Any OTHER running system -> "retroarch" first. ROCKNIX puts the large
-    majority of systems (Genesis/Mega Drive, SNES, NES, PS1, GBA, arcade,
-    ...) on a libretro core via RetroArch (setsettings.sh's
-    configure_hotkeys - see the RETROARCH_COMBOS module comment); a game IS
-    running, and RetroArch is what ROCKNIX puts it under unless this module
-    already knows a more specific standalone emulator owns it (the mapping
-    above) or the system is explicitly excluded because it's a standalone
-    build this module could not source hotkeys for (SYSTEM_NOT_RETROARCH) -
-    showing RetroArch's hotkeys there would be wrong, not just incomplete."""
+    Any other running system puts "retroarch" first, since ROCKNIX runs most systems (Genesis,
+    SNES, NES, PS1, GBA, arcade, ...) on a libretro core, unless it's in SYSTEM_NOT_RETROARCH (a
+    standalone build with no known hotkeys), where RetroArch's page would be wrong.
+    """
     ids = list(CONTEXTS_ORDER)
     system = (running_system or "").strip().lower()
     if not system:
@@ -463,10 +425,9 @@ def format_combo(c):
 # ---------------------------------------------------------------------------
 # Live override loader
 # ---------------------------------------------------------------------------
-# ONLY these key.* names (plus system.autohotkeys, read for completeness but
-# not currently surfaced) are ever extracted from system.cfg - it also holds
-# Wi-Fi passwords and other credentials, and this module must never read or
-# log anything else out of it.
+# Only these key.* names (plus system.autohotkeys, read but not shown yet) ever get pulled
+# from system.cfg. It also holds the Wi-Fi password and other secrets, and nothing else in it
+# is ever read or logged.
 SYSTEM_CFG_KEYS = frozenset([
     "key.hotkey.a", "key.hotkey.b", "key.hotkey.c",
     "key.function.a", "key.function.b",
@@ -474,21 +435,15 @@ SYSTEM_CFG_KEYS = frozenset([
 ])
 RETROARCH_CFG_KEYS = frozenset(RETROARCH_DEFAULT_RAW)
 
-# RetroArch joypad index -> the RP5's printed label, ONLY for indices with
-# evidence: 2/3/4/5/8/9 from the DualSense autoconfig _RA_SOURCE cites
-# (x=2 Triangle = top = X, y=3 Square = left = Y, l=4, r=5, select=8,
-# start=9), and 10 = Home from the device on test day (retroarch.cfg has
-# input_enable_hotkey_btn = 10 and the owner found Home + Start closes
-# RetroArch). Anything else stays "not decoded".
-# Test day button log (tests/fixtures/device/buttons-real-capture-2026-09-24.txt):
-# every button pressed once on the device, with the index RetroArch's udev
-# driver assigns - A=1, B=0, X=2, Y=3, L1=4, R1=5, Select=8, Start=9,
-# Home=10, L3=11, R3=12 (L2/R2 are analog-only; Back is KEY_F1 on the
-# InputPlumber keyboard, not the pad).
+# RetroArch joypad index -> the RP5's printed label, only for indices with evidence, from
+# pressing every button once on the device (tests/fixtures/device/buttons-real-capture-2026-09-24.txt):
+# A=1, B=0, X=2, Y=3, L1=4, R1=5, Select=8, Start=9, Home=10, L3=11, R3=12. L2/R2 are analog
+# only, and Back is KEY_F1 on the InputPlumber keyboard, not the pad. Home + Start closes
+# RetroArch (input_enable_hotkey_btn = 10). Anything else stays not decoded.
 RA_INDEX_LABEL = {"0": "B", "1": "A", "2": "X", "3": "Y", "4": "L1", "5": "R1",
                   "8": "Select", "9": "Start", "10": "Home", "11": "L3", "12": "R3"}
-# RETROARCH_COMBOS row -> the retroarch.cfg key of its second button (None:
-# an axis row, left as written).
+# RETROARCH_COMBOS row -> the retroarch.cfg key of its second button (None for an axis row,
+# left as written)
 RETROARCH_ROW_KEYS = ["input_exit_emulator_btn", "input_fps_toggle_btn",
                       "input_menu_toggle_btn", "input_save_state_btn",
                       "input_load_state_btn", None, None]
@@ -497,8 +452,9 @@ _LINE_RE = re.compile(r'^([A-Za-z0-9_.]+)\s*=\s*"?([^"#]*?)"?\s*(?:#.*)?$')
 
 
 def _read_text(path):
-    """None if the file cannot be read (wrong OS, not this device, missing,
-    permission) - never raises."""
+    """None if the file cant be read (wrong OS, not this device, missing, permissions). Never
+    raises.
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return f.read()
@@ -507,11 +463,10 @@ def _read_text(path):
 
 
 def parse_allowlisted(text, allowed_keys):
-    """Line-oriented 'key = value' / 'key=value' parser that returns ONLY
-    keys in `allowed_keys` - a key not on the list is never even looked at
-    long enough to be logged. Comments (# or ;) and blank lines are skipped;
-    a malformed line is skipped, never raised on (a corrupt file must not
-    crash the sheet)."""
+    """A line by line 'key = value' / 'key=value' parser that only returns keys in `allowed_keys`,
+    a key not on the list isnt looked at long enough to get logged. Comments (# or ;), blank lines
+    and broken lines are skipped, a corrupt file cant crash the sheet.
+    """
     out = {}
     if not text:
         return out
@@ -533,10 +488,10 @@ def parse_allowlisted(text, allowed_keys):
 
 
 def read_overrides(read_fn=None):
-    """{'system_cfg': {...}, 'retroarch_cfg': {...}} - each dict holds only
-    the keys this module allow-lists, and is empty (never missing) when its
-    file could not be read. `read_fn` (path -> text|None) is injected for
-    tests; defaults to a real, exception-safe file read."""
+    """{'system_cfg': {...}, 'retroarch_cfg': {...}}, each holding only allow-listed keys and empty
+    (never missing) when the file couldnt be read. read_fn (path -> text|None) is for tests and
+    defaults to a real file read that never raises.
+    """
     read_fn = read_fn or _read_text
     return {
         "system_cfg": parse_allowlisted(read_fn(SYSTEM_CFG_PATH), SYSTEM_CFG_KEYS),
@@ -547,7 +502,7 @@ def read_overrides(read_fn=None):
 def _dpad_events_state(system_cfg):
     v = system_cfg.get("key.dpad.events")
     if v is None:
-        return None                 # unread (no file) - unknown, not "off"
+        return None  # unread (no file), unknown, not off
     return v not in ("", "0")
 
 
@@ -559,12 +514,11 @@ def _touch_events_state(system_cfg):
 
 
 def apply_overrides(contexts, overrides):
-    """Returns a NEW contexts dict with GLOBAL's role-based buttons
-    recomputed from system.cfg's live key.* values (falling back to the
-    ROCKNIX-source default role button when a role has no override), and
-    RetroArch's raw *_btn/*_axis values flagged (not translated - see
-    UNCONFIRMED) when they differ from the shipped default. Every other
-    context is returned unchanged (no live-override source for those)."""
+    """Returns a new pages dict with GLOBAL's role buttons worked out from system.cfg's live key.*
+    values (the ROCKNIX default when a role has no override), and RetroArch's raw *_btn/*_axis
+    values flagged, not translated (see UNCONFIRMED), when they differ from the default. Every
+    other page comes back unchanged.
+    """
     system_cfg = (overrides or {}).get("system_cfg") or {}
     retroarch_cfg = (overrides or {}).get("retroarch_cfg") or {}
     out = dict(contexts)
@@ -587,10 +541,10 @@ def apply_overrides(contexts, overrides):
                     raw = system_cfg.get(key) if key else None
                     resolved.append(btn_glyph(raw) if raw else default_glyph)
                 buttons = tuple(resolved)
-            if "key.dpad.events" in (note or "") and dpad_on is not None:
-                note = "" if dpad_on else "OFF on this device (key.dpad.events=0)"
-            if "key.touchscreen.events" in (note or "") and touch_on is not None:
-                note = "" if touch_on else "OFF on this device (key.touchscreen.events=0)"
+            if note == DPAD_NOTE and dpad_on is not None:
+                note = "" if dpad_on else DPAD_NOTE
+            if note == TOUCH_NOTE and touch_on is not None:
+                note = "" if touch_on else TOUCH_OFF_NOTE
             new_combos.append(c._replace(buttons=buttons, note=note))
         out["global"] = g._replace(combos=new_combos)
 
@@ -613,10 +567,9 @@ def apply_overrides(contexts, overrides):
             new_combos.append(c)
         if hk is None:
             undecoded.add("input_enable_hotkey_btn")
-        # Only annotate if we can tie a combo to a specific overridden key;
-        # RETROARCH_COMBOS don't carry role_buttons (see module docstring),
-        # so this loop only adds a device-wide note once, on the first combo,
-        # rather than mis-attribute an override to the wrong row.
+        # Only note it if a combo can be tied to a specific overridden key. RETROARCH_COMBOS dont
+        # carry role_buttons, so this adds one device-wide note on the first combo instead of pinning
+        # an override on the wrong row.
         changed = [k for k, v in retroarch_cfg.items()
                   if v and v != RETROARCH_DEFAULT_RAW.get(k) and k in undecoded]
         if changed and new_combos:
@@ -630,11 +583,10 @@ def apply_overrides(contexts, overrides):
 
 
 def load(running_system=None, read_fn=None):
-    """The one call main.py/hotkeys_view.py need: (contexts, order) with
-    live overrides applied where this module has a source for them, and
-    ordering biased toward `running_system`'s emulator (see
-    ordered_context_ids). Never raises - a device read failure just means
-    the ROCKNIX-source defaults are shown, per the task's fallback rule."""
+    """The one call main.py and hotkeys_view.py need: (contexts, order) with live overrides applied
+    where there's a source, ordered toward `running_system`'s emulator. Never raises, a failed
+    read just shows the ROCKNIX defaults.
+    """
     contexts = apply_overrides(default_contexts(), read_overrides(read_fn))
     order = ordered_context_ids(running_system)
     return contexts, order

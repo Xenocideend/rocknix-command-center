@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """sw1_sway_sim - a small, stateful stand-in for sway, driven through a fake
-`swaymsg`, so the REAL 092-dual-screen-persist main loop can be run under dash
+`swaymsg`, so the REAL dual-screen-layout-and-power main loop can be run under dash
 on a PC (tests/test_sw1_092.py). SYNTHETIC: it models only what 092 touches.
 
 World state lives in a JSON file ($SIM_STATE); every swaymsg call loads it,
@@ -34,6 +34,7 @@ applied by `sw1_sway_sim.py --tick`, which the fake `sleep 5` calls:
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -150,8 +151,9 @@ def es_where(st):
 # replies
 # ---------------------------------------------------------------------------
 def get_outputs(st):
+    # a disabled output stays listed (active: false), like real sway
     return [{"name": o, "active": True, "current_workspace": st["visible"].get(o)}
-            for o in st["outputs"]]
+            for o in st["outputs"]] +         [{"name": o, "active": False, "current_workspace": None} for o in st.get("inactive", [])]
 
 
 def get_workspaces(st):
@@ -272,6 +274,19 @@ def command(st, text):
     if text.startswith("for_window ") or text.startswith("no_focus "):
         st["rules"].append(text)
         return 0
+    m = re.match(r"^output (\S+) (disable|enable)$", text)
+    if m:
+        # top-screen-off (092): disable evacuates the output like an unplug but
+        # keeps it listed; enable brings it back like a replug.
+        o, what = m.groups()
+        st.setdefault("inactive", [])
+        if what == "disable" and o in st["outputs"]:
+            act(st, "undock", None)
+            st["inactive"].append(o)
+        elif what == "enable" and o in st["inactive"]:
+            st["inactive"].remove(o)
+            act(st, "dock", None)
+        return 0
     if text.startswith("output ") or text.startswith("input "):
         return 0
     m = re.match(r"^focus output (\S+)$", text)
@@ -379,13 +394,32 @@ def act(st, action, arg):
         map_window(st, dict(arg))
     elif action == "stop":
         open(st["disable_path"], "w").close()
+    elif action == "unplug":
+        # the add-on physically removed: no output, and no Type-C partner
+        act(st, "undock", None)
+        if "DP-1" in st.get("inactive", []):
+            st["inactive"].remove("DP-1")
+        p = st.get("partner_path")
+        if p and os.path.isdir(p):
+            shutil.rmtree(p)
+    elif action == "flag_on":
+        open(arg, "w").close()
+    elif action == "flag_off":
+        if os.path.exists(arg):
+            os.remove(arg)
 
 
 def tick():
     st = load()
     st["tick"] += 1
-    for action, arg in st["timeline"].get(str(st["tick"]), []):
-        act(st, action, arg)
+    try:
+        for action, arg in st["timeline"].get(str(st["tick"]), []):
+            act(st, action, arg)
+    except Exception:
+        # a broken timeline must end the run, not leave 092 polling forever
+        open(st["disable_path"], "w").close()
+        save(st)
+        raise
     snapshot(st, "tick")
     if st["tick"] >= st["stop_at"]:
         open(st["disable_path"], "w").close()

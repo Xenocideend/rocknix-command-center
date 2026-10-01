@@ -1,71 +1,60 @@
 #!/usr/bin/env python3
-"""es_health - is EmulationStation running, and is it frozen? (CC1)
+"""es_health: is EmulationStation running, and is it frozen?
 
-Read-only. Nothing in this module signals a process, runs a command that
-changes anything, or sends ES a mutating request: it LOOKS, and judge()
-turns what it saw into a verdict the Command Center can show the owner. The
-one thing that acts on the verdict (`systemctl restart essway.service`,
-behind a confirm) lives in cleanstate.py.
+Read only. Nothing here signals a process, runs a command that changes anything or sends ES
+a mutating request. It looks, and judge() turns what it saw into a verdict the Command
+Center can show. The one thing that acts on it (`systemctl restart essway.service`, behind a
+confirm) is in cleanstate.py.
 
-Owner's definitions (TASKS.md CC1, 24 Sep 01:15):
-  running  = the ES process exists AND its window is in the sway tree (when
-             no game is running: ES closes its window while a game runs and
-             maps a new one afterwards, FOC1).
-  frozen   = several signals combined, because ES's HTTP API runs on its own
-             thread (HttpServerThread) and can answer while the UI is stuck.
+Running means the ES process exists and its window is in the sway tree (when no game runs,
+since ES closes its window during a game and maps a new one after). Frozen needs several
+signals together, because ES's HTTP API runs on its own thread and can answer while the UI
+is stuck.
 
-What the evidence is, and why (sources read for this task: ROCKNIX/
-emulationstation-next 9d664e2 - the commit ROCKNIX distribution dc5f51a
-pins in packages/ui/emulationstation/package.mk):
+The evidence (from emulationstation-next at the commit ROCKNIX pins):
 
-  * main-thread progress. ES's UI runs on the process's MAIN thread (tid ==
-    pid; the HTTP server is another thread). es-app/src/main.cpp's loop is
-        ps_standby ? SDL_WaitEventTimeout(&ev, PowerSaver::getTimeout())
-                   : SDL_PollEvent(&ev)  ...  window.render(); swapBuffers();
-    and es-core/src/PowerSaver.cpp getTimeout() is 40 ms in the "default"
-    PowerSaverMode (Settings.cpp: mStringMap["PowerSaverMode"] = "default"),
-    so a live ES blocks and wakes at least ~25 times a second (the wait, the
-    vsync'd swap, or SDL_Delay while sleeping) - every one of those is a
-    VOLUNTARY context switch of the main thread
-    (/proc/<pid>/task/<pid>/status). A deadlocked main thread makes none; a
-    main thread spinning in a loop makes none either (it never blocks). So
-    "0 voluntary switches in the whole window" is the stall signal. It does
-    NOT count when PowerSaverMode is "instant"/"enhanced" (getTimeout() is
-    then the screensaver timeout - minutes of legitimate blocking), when ES's
-    screen is off (no frame callbacks: the swap can block for as long as the
-    output is off), or while a game runs (ES sits in waitpid).
-  * the HTTP API: GET /caps within 2 s (read-only; two attempts, start and
-    end of the window, both must fail). Alone it proves nothing about the UI.
-  * the process state from /proc/<pid>/stat: Z = dead; D (stuck in the
-    kernel) or T (stopped by a signal) in EVERY sample of the window. Note:
-    ROCKNIX's rocknix-fake-suspend SIGSTOPs the /tmp/.process-kill-data
-    target, which is "emulationstation" while no game runs - but it also
-    blanks the screens, so the "screen is on" precondition excludes it.
-  * the window: app_id "emulationstation" in GET_TREE on the ES output.
-  * vetoes: an ES event hook firing during the window (esevents: ES fires
-    them from the UI thread, so the UI was alive), any main-thread progress.
+Main thread progress. ES's UI runs on the main thread (tid == pid, the HTTP server is another
+thread). es-app/src/main.cpp's loop is
+    ps_standby ? SDL_WaitEventTimeout(&ev, PowerSaver::getTimeout())
+               : SDL_PollEvent(&ev)  ...  window.render(); swapBuffers();
+and PowerSaver getTimeout() is 40 ms in the "default" PowerSaverMode, so a live ES blocks and
+wakes at least ~25 times a second, and each one is a voluntary context switch of the main
+thread (/proc/<pid>/task/<pid>/status). A deadlocked main thread makes none and neither does
+one spinning in a loop, so 0 voluntary switches in the whole window is the stall signal. It
+doesnt count with PowerSaverMode "instant"/"enhanced" (the timeout is then the screensaver's,
+minutes of normal blocking), when ES's screen is off (the swap can block as long as the
+output is off), or while a game runs (ES sits in waitpid).
 
-Researched and rejected as a liveness signal: sway's GET_TREE has no
-per-surface commit/frame counter (fields read from the real capture
-tests/fixtures/sway-tree-FULL-real-capture-2026-09-23.json: id, name, rect,
-focused, visible, inhibit_idle, pid, app_id...); `inhibit_idle` is SDL's
-idle inhibitor (true for a live AND a frozen ES) and the title is static
-("EmulationStation"). ES has no heartbeat event: Scripting::fireEvent only
-fires on state changes (game-selected, screensaver-start, sleep, ...).
+The HTTP API: GET /caps within 2 s, read only, two tries at the start and end of the window,
+and both have to fail. On its own it says nothing about the UI.
+
+Process state from /proc/<pid>/stat: Z is dead, and D (stuck in the kernel) or T (stopped by a
+signal) in every sample of the window. ROCKNIX's rocknix-fake-suspend SIGSTOPs the kill file's
+target, which is "emulationstation" when no game runs, but it also blanks the screens, so the
+screen on precondition rules it out.
+
+The window: app_id "emulationstation" in GET_TREE on the ES output.
+
+Vetoes: an ES event hook firing during the window (ES fires them from the UI thread, so the
+UI was alive), or any main thread progress.
+
+Looked at and not usable: sway's GET_TREE has no per-surface commit or frame counter,
+`inhibit_idle` is SDL's idle inhibitor (true whether ES is live or frozen), and the title
+never changes. ES has no heartbeat event either, Scripting::fireEvent only fires on state
+changes.
 
 Verdicts (judge()):
   OK           everything answered.
-  GAME         a game is running: health is not judged (ES is supposed to be
-               windowless and blocked); the kill-emulator action is the tool.
+  GAME         a game is running so health isnt judged (ES is meant to be windowless and
+               blocked), kill-emulator is the tool for that.
   STARTING     the ES process is younger than STARTUP_GRACE_S.
   NOT_RUNNING  no ES process for the whole (extended) window, or a zombie.
-  NO_WINDOW    process alive, no game, but no ES window for >= NO_WINDOW_S.
-  FROZEN       >= 2 of: HTTP down, main thread stalled, stuck/stopped state,
-               window missing - under the preconditions (process alive, past
-               the grace period, no game, ES's screen on, sway readable).
-  SUSPECT      exactly one such signal: shown with its evidence, restart is
-               only offered as "Restart anyway" (the owner, who can see the
-               top screen, is the second signal).
+  NO_WINDOW    process alive, no game, but no ES window for NO_WINDOW_S or more.
+  FROZEN       2 or more of: HTTP down, main thread stalled, stuck or stopped state, window
+               missing, with the preconditions met (process alive, past the grace period,
+               no game, ES's screen on, sway readable).
+  SUSPECT      exactly one of those, shown with its evidence, and restart is only offered as
+               "Restart anyway" (you can see the top screen, so you're the second signal).
   UNKNOWN      preconditions not met (screen off, sway unreadable, ...).
 Restart is offered for NOT_RUNNING, NO_WINDOW and FROZEN.
 """
@@ -79,6 +68,8 @@ import time
 import urllib.error
 import urllib.request
 
+import screen_map
+
 log = logging.getLogger("rp5deck.es_health")
 
 ES_COMM = "emulationstation"
@@ -86,15 +77,15 @@ ES_APP_ID = "emulationstation"
 OWN_APP_PREFIX = "rp5deck-"
 HTTP_BASE = "http://127.0.0.1:1234"
 HTTP_TIMEOUT = 2.0
-# The ONLY paths this module ever requests (both read-only GETs; see
-# es_api.ES_HTTP_ENDPOINTS for the full route table and the mutating ones).
+# The only paths this ever requests, both read-only GETs (es_api.ES_HTTP_ENDPOINTS has the full
+# route table, mutating ones included).
 ALLOWED_HTTP_PATHS = frozenset({"/caps", "/runningGame"})
 
 WINDOW_S = 5.0              # observation window for one check
 SAMPLES = 6                 # samples across it (first at t=0, last at WINDOW_S)
-STARTUP_GRACE_S = 60.0      # ES loads gamelists/themes after start: never judged frozen
-NO_WINDOW_S = 30.0          # the owner's "window missing for 30 s"
-ABSENT_S = 10.0             # essway has Restart=always RestartSec=2: wait out that gap
+STARTUP_GRACE_S = 60.0  # ES loads gamelists and themes after start, never judged frozen during it
+NO_WINDOW_S = 30.0  # window missing for 30 s
+ABSENT_S = 10.0  # essway has Restart=always RestartSec=2, wait out that gap
 
 KILL_DATA = "/tmp/.process-kill-data"
 ES_SETTINGS = "/storage/.config/emulationstation/es_settings.cfg"
@@ -115,8 +106,9 @@ class HttpRefused(Exception):
 # Pure parsers
 # ---------------------------------------------------------------------------
 def parse_stat(text):
-    """/proc/<pid>/stat -> {state, utime, stime, starttime} (clock ticks).
-    comm may contain spaces and ')' - split at the LAST ')'."""
+    """/proc/<pid>/stat -> {state, utime, stime, starttime} (clock ticks). comm can have spaces and
+    ')' in it, so split at the last ')'.
+    """
     try:
         rest = text[text.rindex(")") + 2:].split()
         return {"state": rest[0], "utime": int(rest[11]), "stime": int(rest[12]),
@@ -142,17 +134,18 @@ _PS_RE = re.compile(r'<string\s+name="PowerSaverMode"\s+value="([^"]*)"')
 
 
 def parse_powersaver(text):
-    """PowerSaverMode from es_settings.cfg, or None when the file does not
-    set it (ES's default is then "default", Settings.cpp)."""
+    """PowerSaverMode from es_settings.cfg, or None when the file doesnt set it (ES's default is
+    "default" then).
+    """
     m = _PS_RE.search(text or "")
     return m.group(1) if m else None
 
 
 def parse_kill_data(text):
-    """ROCKNIX set_kill file -> (signal token or None, [process names]).
-    input_sense does `killall ${TO_KILL}` (word-split), so the file holds an
-    optional killall signal flag and one or more names: "retroarch
-    retroarch32", "-9 melonDS", "-HUP gmu.bin", "emulationstation"."""
+    """ROCKNIX set_kill file -> (signal token or None, [process names]). input_sense runs
+    `killall ${TO_KILL}` word split, so the file has an optional killall signal flag and one or
+    more names: "retroarch retroarch32", "-9 melonDS", "-HUP gmu.bin", "emulationstation".
+    """
     toks = (text or "").split()
     sig = None
     if toks and toks[0].startswith("-"):
@@ -184,11 +177,11 @@ def _label(v):
     return v.get("app_id") or props.get("class") or v.get("name") or "con#%s" % v.get("id")
 
 
-def tree_facts(tree, es_output="DP-1"):
-    """What a check needs from one GET_TREE reply:
-    es_window (bool), es_visible, es_focused, es_pid, es_output (where ES is,
-    else the configured one), output_on (that output active, powered, DPMS
-    on; None if absent), foreign (labels of other real windows on it)."""
+def tree_facts(tree, es_output=screen_map.CURRENT.top):
+    """What a check needs from one GET_TREE reply: es_window (bool), es_visible, es_focused, es_pid,
+    es_output (where ES is, else the configured one), output_on (that output active, powered,
+    DPMS on, None if missing), foreign (labels of other real windows on it).
+    """
     f = {"es_window": False, "es_visible": None, "es_focused": False, "es_pid": None,
          "es_output": es_output, "output_on": None, "foreign": []}
     outputs = {}
@@ -248,13 +241,12 @@ def _fmt_s(v):
 
 
 def judge(ev):
-    """Turn a check's evidence into a Health. `ev` keys (all optional; a
-    missing/None value is "unknown", never "fine" or "broken"):
-      pid, zombie, age_s, states [per sample], vol_delta, invol_delta,
-      cpu_delta_s, window_s, http_fail (both attempts failed), http_note,
-      windows [per sample bool], window_missing_s, visible, output_on,
-      sway_ok, game (bool), game_why, powersaver, events_during (int),
-      absent_s, essway."""
+    """Turns a check's evidence into a Health. `ev` keys are all optional, and a missing or None
+    value means unknown, never fine or broken: pid, zombie, age_s, states [per sample],
+    vol_delta, invol_delta, cpu_delta_s, window_s, http_fail (both tries failed), http_note,
+    windows [per sample bool], window_missing_s, visible, output_on, sway_ok, game (bool),
+    game_why, powersaver, events_during (int), absent_s, essway.
+    """
     pid = ev.get("pid")
     notes = []
     if pid is None:
@@ -417,8 +409,8 @@ class Probe:
             return None
 
     def es_pids(self):
-        # /proc/<pid>/comm holds at most 15 bytes: ES reads "emulationstatio"
-        # on the device (seen on test day), so match the way killall does.
+        # /proc/<pid>/comm holds at most 15 bytes, so ES reads "emulationstatio" on the device. Match
+        # the way killall does.
         return self.pids_named(ES_COMM)
 
     def stat(self, pid):
@@ -437,8 +429,9 @@ class Probe:
             return None
 
     def runemu_pids(self):
-        """ROCKNIX's game launcher: `bash /usr/bin/runemu.sh ...` (ES runs it
-        through sh -c for every game, ports included, and waits for it)."""
+        """ROCKNIX's game launcher, `bash /usr/bin/runemu.sh ...` (ES runs it through sh -c for every
+        game, ports too, and waits for it).
+        """
         out = []
         for p in self.pids():
             cl = self.cmdline(p) or []
@@ -447,16 +440,17 @@ class Probe:
         return out
 
     def pids_named(self, name):
-        """killall's match: comm is the first 15 bytes of the name; a longer
-        name must also be argv[0]'s basename. Zombies do not count (found on
-        WSL: a SIGTERMed child stays in /proc as Z until its parent reaps it)."""
+        """killall's match: comm is the first 15 bytes of the name, and a longer name also has to be
+        argv[0]'s basename. Zombies dont count (a SIGTERMed child stays in /proc as Z until its
+        parent reaps it).
+        """
         out = []
         for p in self.pids():
             if self.comm(p) != name[:15]:
                 continue
             st = self.stat(p)
             if st and st["state"] in ("Z", "X"):
-                continue            # exited, not yet reaped: already gone
+                continue  # exited, not reaped yet, already gone
             if len(name) > 15:
                 cl = self.cmdline(p) or []
                 if not cl or os.path.basename(cl[0]) != name:
@@ -495,8 +489,9 @@ class Probe:
 
     # -- the HTTP API ---------------------------------------------------------
     def http(self, path):
-        """GET one allowed path. Returns (status, seconds, body): status is
-        "ok", "timeout", "refused", "http <code>" or "error <text>"."""
+        """GETs one allowed path. Returns (status, seconds, body), status is "ok", "timeout", "refused",
+        "http <code>" or "error <text>".
+        """
         if path not in ALLOWED_HTTP_PATHS:
             raise HttpRefused("es_health only requests %s, not %r"
                               % (sorted(ALLOWED_HTTP_PATHS), path))
@@ -528,9 +523,9 @@ class Probe:
 # One check
 # ---------------------------------------------------------------------------
 def game_running(probe, es_game=None, tree_f=None):
-    """(running: True/False, why). ES's own answer when it has one, plus
-    ROCKNIX's state: runemu.sh alive, a live /tmp/.process-kill-data target
-    other than ES, or another window on ES's screen."""
+    """(running: True/False, why). ES's own answer when it has one, plus ROCKNIX's state: runemu.sh
+    alive, a live kill file target other than ES, or another window on ES's screen.
+    """
     why = []
     if es_game:
         why.append("ES reports %s" % es_game)
@@ -545,13 +540,13 @@ def game_running(probe, es_game=None, tree_f=None):
     return bool(why), "; ".join(why)
 
 
-def check(probe=None, es_output="DP-1", window_s=WINDOW_S, samples=SAMPLES,
+def check(probe=None, es_output=screen_map.CURRENT.top, window_s=WINDOW_S, samples=SAMPLES,
           no_window_s=NO_WINDOW_S, absent_s=ABSENT_S, events_seen=None,
           progress=None, clock=time.monotonic, sleep=time.sleep):
-    """Observe ES for window_s (longer when its process or window is missing,
-    up to absent_s / no_window_s, stopping early when it comes back) and
-    judge. events_seen: callable -> int (esevents' counter) or None.
-    progress: callable(text) for the sheet while it waits."""
+    """Watches ES for window_s (longer when its process or window is missing, up to absent_s /
+    no_window_s, stopping early when it comes back) and judges. events_seen is a callable -> int
+    (esevents' counter) or None, and progress(text) updates the sheet while it waits.
+    """
     probe = probe or Probe()
     ev = {"window_s": window_s}
     ev0 = events_seen() if events_seen else None
@@ -575,7 +570,7 @@ def check(probe=None, es_output="DP-1", window_s=WINDOW_S, samples=SAMPLES,
         if pids:
             if pid not in pids:
                 pid = pids[0]
-                first = None            # a new ES process: restart the measurement
+                first = None  # a new ES process, start measuring again
             st = probe.stat(pid)
             cx = probe.ctxt(pid)
             if st:
@@ -657,7 +652,7 @@ def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="Is EmulationStation running / frozen? (read-only)")
     ap.add_argument("--window", type=float, default=WINDOW_S)
-    ap.add_argument("--es-output", default="DP-1")
+    ap.add_argument("--es-output", default=screen_map.CURRENT.top)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""SW1: the screen swap in rocknix-config/092-dual-screen-persist.
+"""SW1: the screen swap in rocknix-config/dual-screen-layout-and-power.
 
 Four kinds of check, all on the REAL script text (never a reimplementation):
 
  1. Byte-identity (pure Python, any platform): every function of the pre-SW1
-    092 (tests/fixtures/092-dual-screen-persist-pre-SW1-copy-2026-09-24 - since
+    092 (tests/fixtures/dual-screen-layout-and-power-pre-SW1-copy-2026-09-24 - since
     test day this is the INSTALLED a1d2f772 = main d519672c + the prefix-tolerant
     second-window pattern (wip/092-title-prefix) + the rp5deck-ytapp
     placement rule in ensure_rp5deck_rules (24 Sep evening, owner-approved;
@@ -46,12 +46,28 @@ import config  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(APP))
 # SW1_092_PATH: run the suite against another copy (the break-restore proofs
 # mutate a scratch copy, never the working file)
-NEW_092 = os.environ.get("SW1_092_PATH") or os.path.join(os.path.dirname(APP), "scripts", "092-dual-screen-persist")
-OLD_092 = os.path.join(HERE, "fixtures", "092-dual-screen-persist-pre-SW1-copy-2026-09-24")
+NEW_092 = os.environ.get("SW1_092_PATH") or os.path.join(os.path.dirname(APP), "scripts", "dual-screen-layout-and-power")
+OLD_092 = os.path.join(HERE, "fixtures", "dual-screen-layout-and-power-pre-SW1-copy-2026-09-24")
 # 24 Sep evening: re-pinned after the rp5deck-ytapp rule was folded in (was 7d0bf8ff...)
 # 25 Sep: re-pinned after the Azahar game-window rule in ensure_rp5deck_rules
 # was folded in (was 4c5d0df6..., owner-approved: "do 2")
-OLD_SHA = "10d6b4237eddb89335e50d7450c8f9b67e298e8858ab29e3ae0c57dd29d88b0c"   # a1d2f772 (main + the prefix-tolerant pattern) + ytapp rule + Azahar rule
+# 25 Sep ~16:40: re-pinned after W1 was folded in - the second-window pattern
+# now allows Cemu's " - FPS: n" suffix, plus the WINFIX block and its two
+# one-argument fix_game_windows calls in the loop (was 10d6b423..., owner:
+# "lets do the screen fix"). W1 is shared text in both copies, so these
+# checks still isolate SW1; W1 itself is tested in test_092_winfix.py.
+# 25 Sep ~20:10: re-pinned after top-screen-off was folded in (TOPOFF flag,
+# external_active/enforce_top_off, the dual->single mapping, the no-nudge
+# guard, detach clears; was 98c08826..., owner: "lets do 1"). Shared text in
+# both copies; top-off itself is tested in test_092_topoff.py.
+# ~20:40: re-pinned again for the top-off power cut (was b913c81f...).
+# ~21:00: re-pinned for the daemon renames (was aed3e6e4...).
+# batch 1: re-pinned for the cut-boot re-attach nudge (was 41e20cae...).
+# 26 Sep: re-pinned for the names without numbers (was 3d5561ab...).
+# 26 Sep: re-pinned for the sway-restart re-layout (was fd3d4104...).
+# 26 Sep: re-pinned for the touchscreen watch (was 9d3a12b0...).
+# 26 Sep: re-pinned for the keyboard-screen rule (was f7c9840f...).
+OLD_SHA = "fc859a1f2ffc7a5d08fb0cf7787883e0b80b37d3dbdaf5bd3861b1d5c31a0db2"   # ... + touch watch + keyboard on the Command Center screen + add-on replug notice + keyboard service restart
 SIM = os.path.join(HERE, "sw1_sway_sim.py")
 LINUX = sys.platform.startswith("linux")
 
@@ -63,12 +79,19 @@ PROTECTED = ["power_present", "role_is", "try_wake_dp", "settle_to_sink",
              "neutralise_output_monitor", "rotate_log", "log", "ensure_rp5deck_rules"]
 ALLOWED_CHANGED = {"dominant_for", "park_es", "apply_layout"}
 SW1_NEW = {"rp5_es_screen", "place_cc_windows", "ensure_swap_rules", "read_es_swap",
-           "cc_output_for", "ws1_follow", "ws1_output"}
+           "cc_output_for", "ws1_follow", "ws1_output", "ensure_undocked_web_rules"}
 
 
 def read(p):
     with open(p, encoding="utf-8", newline="") as f:
         return f.read()
+
+
+def code_only(text):
+    """The script without its full-line comments (the shebang stays), so comments can be
+    reworded while every code line is still compared."""
+    lines = text.split("\n")
+    return "\n".join(ln for i, ln in enumerate(lines) if i == 0 or not ln.lstrip().startswith("#"))
 
 
 def functions(text):
@@ -95,7 +118,8 @@ def functions(text):
 
 
 def swap_retry_block(text):
-    a = text.index("        # A re-attach inside one poll")
+    a = text.index('        if [ "$state" = "dual" ]; then\n'
+                   '            if role_is source && [ "$sink_settled" = "yes" ]; then\n')
     b = text.index("            settle_to_sink\n        fi\n", a)
     return text[a:b + len("            settle_to_sink\n        fi\n")]
 
@@ -104,13 +128,13 @@ def main_loop(text):
     return text[text.index("\nwhile true; do\n"):]
 
 
-SW1_LOOP_BLOCK_START = "    # SW1: which panel ES belongs on"
+SW1_LOOP_BLOCK_START = '\n    read_es_swap\n    if [ "$state" = "dual" ]; then\n'
 
 
 def strip_sw1_loop_block(loop):
     a = loop.index(SW1_LOOP_BLOCK_START)
-    b = loop.index("    # A partner is attached but no external output exists", a)
-    return loop[:a] + loop[b:]
+    b = loop.index('    if [ "$state" = "single" ]; then\n', a)
+    return loop[:a + 1] + loop[b:]
 
 
 # ---------------------------------------------------------------------------
@@ -187,13 +211,14 @@ class TestChargingCodeByteIdentical(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.old = read(OLD_092)
-        cls.new = read(NEW_092)
+        cls.raw_old = read(OLD_092)
+        cls.old = code_only(cls.raw_old)
+        cls.new = code_only(read(NEW_092))
         cls.fo = functions(cls.old)
         cls.fn = functions(cls.new)
 
     def test_baseline_is_the_pinned_pre_sw1_file(self):
-        self.assertEqual(hashlib.sha256(self.old.encode()).hexdigest(), OLD_SHA)
+        self.assertEqual(hashlib.sha256(self.raw_old.encode()).hexdigest(), OLD_SHA)
 
     def test_protected_functions_are_byte_identical(self):
         for name in PROTECTED:
@@ -224,18 +249,21 @@ class TestChargingCodeByteIdentical(unittest.TestCase):
             '    if [ "$dual" = "yes" ]; then dom="$EXTERNAL"; else dom="$INTERNAL"; fi',
             '    if [ "$dual" = "yes" ]; then dom=$(dominant_for dual); else dom="$INTERNAL"; fi')])
 
-    def test_park_es_change_is_two_gated_calls_and_a_comment(self):
+    def test_park_es_change_is_two_gated_calls_the_web_workspace_guard_and_comments(self):
         o = self.fo["park_es"].split("\n")
         added = [ln for ln in self.fn["park_es"].split("\n") if ln not in o]
         code = [ln.strip() for ln in added if not ln.strip().startswith("#")]
-        self.assertEqual(code, ['[ "$es_swapped_seen" = "yes" ] && ws1_follow "$target"'] * 2)
+        gated = '[ "$es_swapped_seen" = "yes" ] && ws1_follow "$target"'
+        # the guard lets a web app shown undocked on its own workspace stay on screen
+        guard = 'case "$vis" in rp5deck-undocked-*) return 1 ;; esac'
+        self.assertEqual(code, [gated, guard, gated])
         # nothing of the old body was removed
         self.assertEqual([ln for ln in self.fn["park_es"].split("\n") if ln in o], o)
 
-    def test_the_whole_file_is_insertions_except_four_lines(self):
+    def test_the_whole_file_is_insertions_except_two_lines(self):
         """Line diff of the whole script: every pre-SW1 line survives in
-        order, except exactly these four (two code lines that now consult
-        es_swap, two comment lines reworded around them)."""
+        order, except exactly these two code lines that now consult es_swap
+        (comments are left out of the comparison)."""
         import difflib
         o, n = self.old.split("\n"), self.new.split("\n")
         removed = []
@@ -245,8 +273,6 @@ class TestChargingCodeByteIdentical(unittest.TestCase):
                 removed += o[i1:i2]
         self.assertEqual(removed, [
             '    if [ "$dual" = "yes" ]; then dom="$EXTERNAL"; else dom="$INTERNAL"; fi',
-            "# dominant: EmulationStation lives there and workspace 1 is assigned to it.",
-            "# Undocked, the built-in panel takes over. This matches ROCKNIX's own",
             '    if [ "$1" = "dual" ]; then echo "$EXTERNAL"; else echo "$INTERNAL"; fi',
         ])
 
@@ -398,8 +424,8 @@ class TestFunctionsUnderDash(TmpDir):
 # 4. the whole loop against the sway stand-in
 # ---------------------------------------------------------------------------
 SUBS = [
-    ("LOG=/storage/.config/autostart/092-dual-screen-persist.log", "LOG=@T@/092.log"),
-    ("LOCK=/run/092-dual-screen-persist.pid", "LOCK=@T@/092.pid"),
+    ("LOG=/storage/.config/autostart/dual-screen-layout-and-power.log", "LOG=@T@/092.log"),
+    ("LOCK=/run/dual-screen-layout-and-power.pid", "LOCK=@T@/092.pid"),
     ("DISABLE=/storage/.disable-dualscreen", "DISABLE=@T@/disable"),
     ("NOOP=/storage/.config/noop-output-monitor", "NOOP=@T@/noop"),
     ("MODEFILE=/storage/dual-screen-mode", "MODEFILE=@T@/mode"),
@@ -409,6 +435,7 @@ SUBS = [
 ]
 SUB_NEW_ONLY = [("RP5_CONFIG=/storage/rp5deck/config.json", "RP5_CONFIG=@T@/config.json")]
 
+ES_HOME_PAIR = '[app_id="^emulationstation$"] move container to workspace number 1\nworkspace number 1\n'
 ROCKNIX_ES_RULE = 'for_window [app_id="emulationstation"] move output DP-1'
 
 
@@ -512,7 +539,15 @@ class TestLoopUnswappedIsUnchanged(LoopSim):
         old = self.simulate(st, read(OLD_092), new=False, config_obj=config_obj)
         new = self.simulate(st, read(NEW_092), new=True, config_obj=config_obj)
         self.assertTrue(old[1].strip(), "the simulation sent no commands at all")
-        self.assertEqual(new[1], old[1])
+        # the two rules that send a newly mapped web window to its own workspace when undocked are
+        # the only commands the new script adds with the swap off
+        new_cmds = "".join(l for l in new[1].splitlines(True)
+                           if "--show-undocked-window" not in l and "--home-es-window" not in l)
+        # what that ES rule's handler sends when ES maps: its outputs query (a form nothing else uses), and
+        # undocked the move to workspace 1 and the switch to it, as one pair
+        new_cmds = new_cmds.replace(ES_HOME_PAIR, "")
+        new_cmds = "".join(l for l in new_cmds.splitlines(True) if l != "-r -t get_outputs\n")
+        self.assertEqual(new_cmds, old[1])
         self.assertEqual(new[0]["history"], old[0]["history"])
         return old, new
 
@@ -587,7 +622,7 @@ class TestLoopSwap(LoopSim):
     def test_swap_and_back_assignment_does_not_move(self):
         final, cmds, log = self.run_swap(assign_moves=False)
         self.check_swap(final, log)
-        self.assertEqual(sum(1 for r in final["rules"] if "emulationstation" in r), 2)
+        self.assertEqual(sum(1 for r in final["rules"] if "emulationstation" in r and "--home-es-window" not in r), 2)
 
     def test_swap_and_back_assignment_moves(self):
         final, cmds, log = self.run_swap(assign_moves=True)

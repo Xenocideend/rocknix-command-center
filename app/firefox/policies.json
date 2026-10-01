@@ -8,6 +8,8 @@
         "Locked": false
       }
     },
+    "PasswordManagerEnabled": false,
+    "OfferToSaveLogins": false,
     "DisableAppUpdate": true,
     "DisableTelemetry": true
   }

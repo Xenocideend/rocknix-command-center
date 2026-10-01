@@ -1,25 +1,18 @@
-"""hotkeys_view - CC7: the Hotkey cheat sheet's UI.
+"""hotkeys_view: the Hotkey cheat sheet's UI.
 
-HotkeysSheet is a screens.Sheet (Back + title, same shape as HudSheet /
-MixerSheet in screens.py) that this module owns; main.py/screens.py only get
-a small patch (patches/CC7-*.patch) to build one and hand it to
-screens.CommandCenter as an extra sheet, the same way settings_view's
-SettingsSheet is threaded through today.
+HotkeysSheet is a screens.Sheet (Back plus a title, like HudSheet and MixerSheet) that
+main.py hands to screens.CommandCenter as an extra sheet, the same way settings_view's
+SettingsSheet is.
 
-Touch-first per DESIGN.md and the CC7 brief: body text 36-44 px, paging
-(Prev/Next) instead of scrolling - same widgets and the same Prev/Next
-pattern as screens.MixerSheet/YouTubeSheet, so no new interaction idiom is
-introduced. Rows are not tappable (there is nothing to tap them INTO - this
-is a reference sheet, not a settings editor), so MIN_TARGET only binds the
-Back/Prev/Next controls, which screens.Sheet/this module already size at
->=120 px tall.
+Touch first, body text 36-44 px, and paging (Prev/Next) instead of scrolling with the same
+widgets as the other sheets. Rows arent tappable since it's a reference sheet, so MIN_TARGET
+only applies to Back/Prev/Next, which are already at least 120 px tall.
 
-Paging model: every (context, page-within-context) pair the context's combo
-list needs becomes one PAGE in a single flat sequence; Prev/Next walk that
-sequence like a book, and the header shows "melonDS (NDS)  2/3" (the
-per-context page) plus set_data()'s caller controls which context comes
-first (hotkeys.ordered_context_ids - context-aware ordering when a game is
-running)."""
+Every (context, page within context) pair becomes one page in a flat sequence that Prev/Next
+walk like a book. The header shows "melonDS (NDS)  2/3" (the page within that context), and the
+caller of set_data() decides which context comes first (hotkeys.ordered_context_ids puts the
+running game's emulator first).
+"""
 import ui
 from ui import Button, Label, Sheet
 
@@ -47,9 +40,9 @@ class HotkeysSheet(Sheet):
 
     # -- data --------------------------------------------------------------
     def set_data(self, contexts, order):
-        """contexts: id -> hotkeys.Context. order: id sequence, already
-        reordered for context-awareness by the caller (main.py passes
-        hotkeys.load(running_system) straight through)."""
+        """contexts: id -> hotkeys.Context. order: the id sequence, already ordered by the caller (main.py
+        passes hotkeys.load(running_system) straight through).
+        """
         self.contexts = contexts
         self.order = list(order)
         self._build_pages()
@@ -92,14 +85,14 @@ class HotkeysSheet(Sheet):
                 self.layout(self.rect)
             return
         ctx, combos, i, n = self.pages[self.page]
-        self.title.set_text(ctx.title if n == 1 else "%s  (%d/%d)" % (ctx.title, i + 1, n))
+        self.title.set_text(ctx.title if n == 1 else "%s  (page %d of %d)" % (ctx.title, i + 1, n))
         self.msg.set_text("")
         for c in combos:
-            tag = "device" if c.verified_on_device else "source"
             action_text = c.action
             if c.note:
                 action_text += "  -  " + c.note
-            action_text += "   · " + tag
+            if not c.verified_on_device:
+                action_text += "  (not yet tried on this device)"
             combo_lbl = self.body.add(Label(hotkeys.format_combo(c), size=40, bold=True))
             action_lbl = self.body.add(Label(action_text, size=36, color="dim"))
             self.rows.append((combo_lbl, action_lbl))

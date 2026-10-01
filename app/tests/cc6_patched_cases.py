@@ -161,14 +161,14 @@ class TestStripInTheCommandCenter(Case):
         app = self.make(s, avail={"web": False, "yt": False})
         app.tabs.refresh()
         app.post.drain()
-        self.assertEqual(list(self.tabs(app)), ["companion", "emu:%d" % w2, "hud"])
+        self.assertEqual(list(self.tabs(app)), ["companion", "emu:%d" % w2, "hud", "notes"])
         self.assertEqual(self.tabs(app)["emu:%d" % w2]["label"], "DS screen")
         s.close(w2)
         app.tabs.refresh()
         app.post.drain()
-        self.assertEqual(list(self.tabs(app)), ["companion", "hud"])
+        self.assertEqual(list(self.tabs(app)), ["companion", "hud", "notes"])
         app2 = self.make(Sim(), avail={"web": True, "yt": False})
-        self.assertEqual(list(self.tabs(app2)), ["companion", "hud", "browser", "discord", "ytapp"])
+        self.assertEqual(list(self.tabs(app2)), ["companion", "hud", "notes", "browser", "discord", "ytapp"])
 
 
 class TestEmulatorSecondWindow(Case):
@@ -327,7 +327,7 @@ class TestFirefoxAndMpv(Case):
         self.tap(app, "bar.tabs")                        # W: inline picker (no switch yet)
         self.tap(app, "tabs.cc")                          # W: the Home pill - the escape hatch
         self.assertEqual(self.sync(app), FULL)
-        self.assertEqual(set(self.tabs(app)), {"companion", "emu:%d" % w2, "hud", "browser",
+        self.assertEqual(set(self.tabs(app)), {"companion", "emu:%d" % w2, "hud", "notes", "browser",
                                                "discord", "ytapp"})
         self.tap(app, "tabs.emu:%d" % w2)
         self.assertEqual(self.sync(app), HIDDEN)
@@ -441,7 +441,8 @@ class TestBarTabsInlinePicker(Case):
         t = app.ui.targets()
         rows = {n: r for n, r in t.items() if n.startswith("tabs.")}
         self.assertEqual(set(rows), {"tabs.companion", "tabs.emu:%d" % w2, "tabs.hud",
-                                     "tabs.browser", "tabs.discord", "tabs.ytapp", "tabs.cc"})
+                                     "tabs.notes", "tabs.browser", "tabs.discord", "tabs.ytapp",
+                                     "tabs.cc"})
         for name, r in rows.items():
             self.assertGreaterEqual(r[2], 120, name)
             self.assertGreaterEqual(r[3], 120, name)

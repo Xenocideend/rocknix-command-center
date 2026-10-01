@@ -1,21 +1,21 @@
-"""device - the handheld's human name, read from the hardware at runtime.
+"""device: the handheld's human name, read from the hardware at runtime.
 
     device_name()  -> "Retroid Pocket 5" on the RP5
     app_title()    -> "Retroid Pocket 5 Command Center"
 
-Source order: /proc/device-tree/model (ARM boards; a NUL-terminated string),
-then /sys/class/dmi/id/product_name (x86 handhelds), then "Handheld".
+Tries /proc/device-tree/model (ARM boards, a NUL-terminated string), then
+/sys/class/dmi/id/product_name (x86 handhelds), then "Handheld".
 
-The title is only ever drawn inside the panel. The Wayland app_id / layer
-namespace stays "rp5deck". No window title carries it either: ROCKNIX's sway
-rule [title=".*(Secondary|Sub|Bottom|Screen 2|GamePad).*"] would capture a
-window whose title happened to contain one of those words.
+The title only ever gets drawn inside the panel. The Wayland app_id and layer namespace stay
+"rp5deck", and no window title carries it either, since ROCKNIX's sway rule
+[title=".*(Secondary|Sub|Bottom|Screen 2|GamePad).*"] would grab a window whose title happened
+to have one of those words.
 """
 MODEL_PATH = "/proc/device-tree/model"
 DMI_PATH = "/sys/class/dmi/id/product_name"
 FALLBACK = "Handheld"
 
-# Placeholder strings firmware vendors leave in DMI; not a name.
+# placeholder strings firmware vendors leave in DMI, not a name
 _DMI_JUNK = {"", "to be filled by o.e.m.", "default string", "system product name",
              "none", "not applicable", "unknown", "o.e.m."}
 
@@ -26,8 +26,8 @@ def _read_name(path):
             raw = f.read(512)
     except OSError:
         return None
-    # device-tree strings are NUL-terminated (a list property would hold
-    # several NUL-separated strings; the first is the one that names it).
+    # device-tree strings are NUL-terminated (a list property holds several NUL-separated strings,
+    # and the first is the one that names it)
     text = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
     name = " ".join(text.split())
     if name.lower() in _DMI_JUNK:

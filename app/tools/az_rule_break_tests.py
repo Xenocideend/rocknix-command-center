@@ -9,7 +9,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.dirname(HERE)
-SRC = os.path.join(os.path.dirname(os.path.dirname(APP)), "rocknix-config", "092-dual-screen-persist")
+SRC = os.path.join(os.path.dirname(os.path.dirname(APP)), "rocknix-config", "dual-screen-layout-and-power")
 
 BREAKS = {
     "static rule removed": lambda t: "\n".join(

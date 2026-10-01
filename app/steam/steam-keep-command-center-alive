@@ -1,0 +1,9 @@
+#!/bin/sh
+# ROCKNIX's Steam launcher stops sway for the whole session, which takes the Command Center with it.
+# Run Steam's gamescope nested inside sway instead, by bind-mounting our launcher over the stock one.
+# Undo: remove this file and `umount /usr/bin/start_steam_arm64.sh`.
+SRC=/storage/rp5deck/steam/start_steam_nested.sh
+DST=/usr/bin/start_steam_arm64.sh
+[ -f "$SRC" ] && [ -f "$DST" ] || exit 0
+grep -q " $DST " /proc/mounts && exit 0
+mount --bind "$SRC" "$DST"

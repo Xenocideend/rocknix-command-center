@@ -1,23 +1,21 @@
-"""sway_ipc - decide FULL / BAR / HIDDEN from sway's window tree.
+"""sway_ipc: works out FULL / BAR / HIDDEN from sway's window tree.
 
-Speaks the i3/sway IPC protocol on the socket directly (stdlib only). The
-client is READ-ONLY by construction: Ipc.send() refuses every message type
-except GET_WORKSPACES, SUBSCRIBE, GET_OUTPUTS, GET_TREE and GET_VERSION, so
-this app cannot issue an output, input, workspace or focus command even by
-mistake (092 owns layout; EmulationStation is never moved by us).
+Talks the i3/sway IPC protocol on the socket directly (stdlib only). The client is read only
+by construction, Ipc.send() refuses every message type except GET_WORKSPACES, SUBSCRIBE,
+GET_OUTPUTS, GET_TREE and GET_VERSION, so this app cant send an output, input, workspace or
+focus command even by mistake (the layout daemon owns layout, and we never move ES).
 
-Mode rules (DESIGN.md, "Three display modes"):
-  HIDDEN  DSI-1 is absent, or DP-1 is absent (undocked: ES moves to DSI-1)
+Mode rules:
+  HIDDEN  DSI-1 is missing, or DP-1 is missing (undocked, ES moves to DSI-1)
   FULL    no toplevel window on DSI-1's visible workspace
-  BAR     every window there has an app_id starting "rp5deck-" (ours;
-          "rp5deck-test-other" is reserved to mean foreign, for tests)
-  HIDDEN  any other window there (an emulator's second screen, for DS/3DS
-          the game's own touchscreen - we must get out of its way entirely)
+  BAR     every window there has an app_id starting "rp5deck-" (ours, "rp5deck-test-other"
+          is saved to mean foreign in tests)
+  HIDDEN  any other window there (an emulator's second screen, for DS/3DS the game's own
+          touchscreen, we have to get out of its way completely)
 
-compute_mode() is pure and unit-tested against get_tree fixtures.
-ModeWatcher is the thread: it subscribes to window/output/workspace events,
-re-reads the tree after a quiet period, and reports a new mode only after it
-has been computed twice in a row DEBOUNCE apart.
+compute_mode() is pure and tested against get_tree fixtures. ModeWatcher is the thread: it
+subscribes to window/output/workspace events, rereads the tree after a quiet spell, and only
+reports a new mode once it's come out the same twice DEBOUNCE apart.
 """
 import json
 import logging
@@ -28,12 +26,14 @@ import struct
 import threading
 import time
 
+import screen_map
+
 FULL, BAR, HIDDEN = "FULL", "BAR", "HIDDEN"
-INTERNAL = "DSI-1"
-EXTERNAL = "DP-1"
-# Explicit allow-list of app_ids that belong to rp5deck. Any other id,
-# including rp5deck-test-other and other rp5deck-* ids, is considered foreign.
-OWN_APP_IDS = {"rp5deck-web", "rp5deck-yt", "rp5deck-ytapp"}  # W2b: the YouTube TV tile
+INTERNAL = screen_map.CURRENT.bottom
+EXTERNAL = screen_map.CURRENT.top
+# The app_ids that belong to rp5deck. Any other id, rp5deck-test-other and other rp5deck-* ids
+# included, counts as foreign.
+OWN_APP_IDS = {"rp5deck-web", "rp5deck-yt", "rp5deck-ytapp"}  # the YouTube TV tile
 
 MAGIC = b"i3-ipc"
 _HDR = struct.Struct("=6sII")
@@ -74,8 +74,9 @@ def _views(node):
 
 
 def visible_views(output_node):
-    """Windows on the output's visible workspace (all workspaces if the
-    node does not say which one is current)."""
+    """Windows on the output's visible workspace (all of them if the node doesnt say which one is
+    current).
+    """
     cur = output_node.get("current_workspace")
     for ws in output_node.get("nodes") or []:
         if ws.get("type") != "workspace":
@@ -96,13 +97,18 @@ def is_own_window(v):
 
 
 def compute_mode(tree, internal=INTERNAL, external=EXTERNAL):
-    """Return (mode, reason) for a sway get_tree reply."""
+    """Returns (mode, reason) for a get_tree reply."""
     outs = outputs_in_tree(tree)
     if internal not in outs:
         return HIDDEN, "%s absent" % internal
-    if external not in outs:
-        return HIDDEN, "undocked: %s absent" % external
     views = list(visible_views(outs[internal]))
+    if external not in outs:
+        # one screen with ES fullscreen on it: one of our own windows on top (a web app on a
+        # workspace of its own) turns the Command Center into the bar, anything else hides it
+        if views and all(is_own_window(v) for v in views):
+            return BAR, "rp5deck window on %s (undocked): %s" % (
+                internal, ", ".join(window_label(v) for v in views))
+        return HIDDEN, "undocked: %s absent" % external
     if not views:
         return FULL, "no window on %s" % internal
     foreign = [v for v in views if not is_own_window(v)]
@@ -186,12 +192,11 @@ class Ipc:
             t, data = self.recv()
             if t == mtype:
                 return json.loads(data.decode("utf-8", "replace"))
-            # an event interleaved on a subscribed socket: skip it
+            # an event mixed in on a subscribed socket, skip it
 
 
 def query_mode(timeout=2.0, internal=INTERNAL, external=EXTERNAL):
-    """One-shot synchronous evaluation. Returns (mode, reason) or
-    (None, error text)."""
+    """One-shot check. Returns (mode, reason) or (None, error text)."""
     path = find_socket()
     if not path:
         return None, "no sway IPC socket"
@@ -206,20 +211,15 @@ def query_mode(timeout=2.0, internal=INTERNAL, external=EXTERNAL):
 
 
 class ModeWatcher:
-    """Background thread; calls callback(mode, reason) when the debounced
-    mode changes (and once at start with the initial mode).
+    """Background thread, calls callback(mode, reason) when the debounced mode changes (and once at
+    start with the first mode).
 
-    RV2-m2 (review/RV2-findings.md): the quiet-period deadline used to be
-    the ONLY thing that ever triggered a re-check, and every subscribed sway
-    event restarted it - so a burst of events arriving faster than
-    `debounce` apart (an FPS readout or a page title updating a few times a
-    second) meant the deadline was pushed back forever and compute_mode()
-    was never called again, even though rp5deck could be sitting FULL over
-    a DS/3DS emulator's own touchscreen the whole time. `max_delay` is a
-    hard ceiling, independent of the quiet-period deadline and never pushed
-    back by later events in the same burst: a forced recompute happens at
-    least once every `max_delay` seconds regardless of how fast events
-    keep arriving."""
+    Every event restarts the quiet period, so a steady stream of events (an FPS readout or a page
+    title changing a few times a second) could push the recheck back forever and leave rp5deck
+    FULL over a DS/3DS emulator's touchscreen. `max_delay` is a hard ceiling that later events
+    dont push back, so a recompute happens at least every `max_delay` seconds however fast events
+    come.
+    """
 
     def __init__(self, callback, debounce=0.3, resync=60.0, initial=None,
                  internal=INTERNAL, external=EXTERNAL, max_delay=1.0):
@@ -230,6 +230,7 @@ class ModeWatcher:
         self.max_delay = max_delay
         self.resync = resync
         self.current = initial
+        self.last_reason = None
         self.events_seen = 0
         self._stop = threading.Event()
         self._rp, self._wp = os.pipe()
@@ -265,13 +266,19 @@ class ModeWatcher:
                 backoff = min(backoff * 2, 30.0)
 
     def _emit(self, mode, reason):
-        if mode != self.current:
+        # BAR to BAR with a different reason is another of our windows coming on screen (YouTube picked from
+        # the Discord strip, one screen): the strip has to follow it, so that is announced too.
+        same_bar = mode == BAR and mode == self.current and reason != self.last_reason
+        if mode != self.current or same_bar:
             log.info("mode %s -> %s (%s)", self.current, mode, reason)
             self.current = mode
+            self.last_reason = reason
             try:
                 self.callback(mode, reason)
             except Exception:       # noqa: BLE001
                 log.exception("mode callback failed")
+        else:
+            self.last_reason = reason
 
     def _session(self):
         path = find_socket()
@@ -286,17 +293,11 @@ class ModeWatcher:
             log.info("subscribed to sway %s events on %s", SUBSCRIBE_EVENTS, path)
             mode, reason = compute_mode(cmd.request(GET_TREE), self.internal, self.external)
             self._emit(mode, reason)
-            deadline = None         # when to evaluate next (quiet-period)
-            # RV2-m2: a hard ceiling on how long a sustained burst can delay
-            # a recheck. Armed on the FIRST event of a burst and never
-            # pushed back by later events in that same burst (unlike
-            # `deadline` above, which every event restarts) - so a burst
-            # faster than `debounce` still gets re-evaluated at least every
-            # `max_delay` seconds. Checked explicitly after draining an
-            # event (not only via the select() timeout below), because a
-            # continuously-readable socket would otherwise always win the
-            # select() race against a timeout and the deadline would never
-            # get a chance to fire.
+            deadline = None  # when to check next (quiet period)
+            # The hard ceiling on how long a burst can hold off a recheck. Armed on the first event of a
+            # burst and never pushed back by the rest (unlike `deadline`, which every event restarts). It gets
+            # checked after draining an event as well as by the select() timeout, since a socket
+            # that's always readable would always win select() and the deadline would never fire.
             force_deadline = None
             candidate = None
             while not self._stop.is_set():
@@ -324,14 +325,17 @@ class ModeWatcher:
                 deadline = None
                 force_deadline = None
                 mode, reason = compute_mode(cmd.request(GET_TREE), self.internal, self.external)
-                if mode == self.current:
+                # BAR counts together with whose window it is: another of our windows on screen is news
+                key = (mode, reason) if mode == BAR else mode
+                shown = (self.current, self.last_reason) if self.current == BAR else self.current
+                if key == shown:
                     candidate = None
-                elif candidate == mode:
+                elif candidate == key:
                     self._emit(mode, reason)
                     candidate = None
                 else:
-                    # first sighting: confirm one debounce later
-                    candidate = mode
+                    # first sighting, confirm one debounce later
+                    candidate = key
                     deadline = time.monotonic() + self.debounce
                     force_deadline = time.monotonic() + self.max_delay
         finally:

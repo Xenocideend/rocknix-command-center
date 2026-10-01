@@ -1,39 +1,24 @@
-"""web_tiles - the Browser and Discord tiles of the Command Center (HF1).
+"""The Browser and Discord tiles, plus the YouTube TV tile.
 
-One app (Firefox, browser.py, app_id rp5deck-web) runs on the bottom screen
-at a time: the Browser tile opens the start page, the Discord tile opens
-https://discord.com/app in the SAME Firefox and profile (login by QR code on
-the owner's phone; nothing here ever sees a credential).
+Browser and Discord share one Firefox (browser.py, app_id rp5deck-web) and one profile.
+Browser opens the start page, Discord opens https://discord.com/app, and login is by QR code
+on your phone so nothing here ever sees a password. YouTube TV is its own Firefox
+(YtAppSession below).
 
-YT3: the old mpv-based "YouTube" quick-search tile (search sheet, mpv
-Player, app_id rp5deck-yt) was removed outright - not a label under this
-class, its own separate `YT` app kind used to be. The YouTube TV (leanback)
-tile is unrelated and never was part of this class either: it is its own
-`YtAppSession` / Firefox instance (see that class's own doc).
+Display modes: the dual-screen daemon's for_window rules put the window on DSI-1, sway_ipc
+reports BAR, the layer surface shrinks to the strip and the strip shows this app's controls.
+When the window goes (FULL after BAR) the session ends and the processes stop. HIDDEN only
+hides the on-screen keyboard. The app tabs can park the window on a workspace that's never
+shown, and `parked` keeps the FULL that follows from ending the session, so the app keeps
+running and its tab brings it back.
 
-How it fits the display modes (DESIGN.md): the app's window is placed on
-DSI-1 by 092's live for_window rules (B15), which makes sway_ipc report BAR;
-the layer surface shrinks to the strip and the strip shows this app's
-controls. When the window goes away (FULL after BAR) the session ends and
-the processes are stopped; HIDDEN (a foreign window joined it) only hides
-the on-screen keyboard.
+Nothing here sends a sway command. It only reads the tree to see if Firefox has focus and
+where its window is. You focus Firefox by tapping it, and when it closes focus_guard hands
+focus back to ES.
 
-CC6 (app_tabs.py): the app tabs can PARK the window (window_switcher.py
-moves it to a workspace that is never displayed) to show something else;
-`parked` then keeps the FULL that follows from ending the session - the app
-keeps running, and the tab brings the window back (BAR clears the flag).
-
-Focus: nothing here sends a sway command - sway_ipc is read-only and only
-GET_TREE is used, to learn whether Firefox has focus and where its window
-is. The owner gives Firefox focus by tapping it (sway does that); when
-Firefox closes, focus_guard.py hands focus back to EmulationStation (the
-emptied DSI-1 workspace is exactly its "empty workspace focused" case). The
-YouTube window is no_focus (092) and mpv takes no input of its own.
-
-Threads: every Browser / Player / keyboard call runs on ONE worker (FIFO),
-so a stop queued after a start always runs after it; search and thumbnails
-use a second worker. Results come back on the UI thread with a generation
-number, so a late answer from an ended session is dropped.
+Every Browser and keyboard call runs on one FIFO worker, so a stop queued after a start
+always runs after it. Results come back on the UI thread with a generation number, so a late
+answer from a finished session gets dropped.
 """
 import json
 import logging
@@ -51,20 +36,16 @@ STARTING, RUNNING = "starting", "running"
 
 
 def _reason_mentions(app_id, reason):
-    """W2b: does main.App.on_mode's mode-change `reason`
-    ("rp5deck window on DSI-1: rp5deck-web, rp5deck-ytapp" - sway_ipc.
-    compute_mode()'s own format, a comma-joined list of app_ids/labels after
-    the LAST ": ") name `app_id` as one of the actually-visible windows?
-    `reason is None` means "no reason given, act as before W2b" (every
-    pre-W2b caller). A plain `app_id in reason` substring test is NOT
-    enough: YT_APP_ID "rp5deck-yt" is a PREFIX of TV_APP_ID "rp5deck-ytapp",
-    so it would also match a reason that only actually names the OTHER one -
-    exactly the bug this was written to avoid."""
+    """Does the mode-change reason ("rp5deck window on DSI-1: rp5deck-web, rp5deck-ytapp", the
+    comma list after the last ": ") name app_id as one of the visible windows? None means no
+    reason was given, act like before. A plain substring test isnt enough since "rp5deck-yt" is
+    a prefix of "rp5deck-ytapp".
+    """
     if reason is None:
         return True
     return app_id in reason.rsplit(": ", 1)[-1].split(", ")
-WEB_POLL = 0.7          # s: Firefox alive? focused? text field? (drives the keyboard)
-MAP_TIMEOUT = 15.0      # s after a successful start with no window on DSI-1
+WEB_POLL = 0.7  # Firefox alive? focused? text field? (drives the keyboard)
+MAP_TIMEOUT = 15.0  # after a successful start with no window on DSI-1
 HINT_SECONDS = 2.5
 
 log = logging.getLogger("rp5deck.web")
@@ -86,9 +67,10 @@ def _walk_views(node, output=None):
 
 
 def window_facts(tree, app_id):
-    """What the web worker needs from sway's tree, read-only:
-    present (a window with app_id exists), output (the output it is on),
-    focused (it has keyboard focus), focused_app (app_id of whatever has)."""
+    """What the web worker needs from sway's tree, read only: present (a window with app_id
+    exists), output (which output it's on), focused (it has keyboard focus), focused_app (the
+    app_id of whatever has focus).
+    """
     facts = {"present": False, "output": None, "focused": False, "focused_app": None}
     for v, out in _walk_views(tree):
         aid = str(v.get("app_id") or "")
@@ -102,7 +84,7 @@ def window_facts(tree, app_id):
 
 
 def read_window_facts(app_id, timeout=1.0):
-    """window_facts() of the live tree, or None if sway could not be read."""
+    """window_facts() of the live tree, or None if sway couldnt be read."""
     path = sway_ipc.find_socket()
     if not path:
         return None
@@ -117,17 +99,13 @@ def read_window_facts(app_id, timeout=1.0):
 
 
 class ChildRegistry:
-    """Remembers the pids of the processes rp5deck starts (Firefox, mpv,
-    wvkbd) in a small JSON file, so that after a hard crash (SIGKILL,
-    segfault: no shutdown ran) the next start can stop the orphans. An
-    orphaned wvkbd would sit over the panel eating taps; an orphaned Firefox
-    would hold DSI-1 in BAR mode with no controls. A pid is only signalled
-    if /proc/<pid>/cmdline still contains the marker recorded with it, so a
-    reused pid is never touched."""
+    """Keeps the pids rp5deck starts (Firefox, wvkbd) in a small JSON file so after a hard crash the
+    next start can stop the orphans. A leftover wvkbd sits over the panel eating taps, a leftover
+    Firefox holds DSI-1 in BAR with no controls. A pid only gets signalled if its cmdline still
+    has the marker saved with it, so a reused pid is never touched.
+    """
 
-    # YT3: the "yt" (mpv) marker is gone with the old player - nothing ever
-    # records that kind again, so nothing is left to reap for it.
-    MARKERS = {WEB: "rp5deck-web", "osk": "wvkbd"}
+    MARKERS = {WEB: "rp5deck-web", "osk": "wvkbd", "ytapp": "rp5deck-ytapp"}
 
     def __init__(self, path, read_cmdline=None, kill=os.kill if hasattr(os, "kill") else None):
         self.path = path
@@ -177,8 +155,9 @@ class ChildRegistry:
         return self._load()
 
     def reap_stale(self):
-        """Stop every recorded process whose cmdline still carries its
-        marker; forget all entries. Returns [(kind, pid)] signalled."""
+        """Stops every saved process whose cmdline still has its marker and forgets them all. Returns
+        [(kind, pid)] signalled.
+        """
         done = []
         for kind, e in sorted(self._load().items()):
             try:
@@ -200,14 +179,10 @@ class ChildRegistry:
 # The controller
 # ---------------------------------------------------------------------------
 class WebApps:
-    """Drives the Browser/Discord tiles (one shared Firefox, HF1). `host` is
-    main.App: it provides ui (DeckUI), mode, master, call_later / cancel and
-    state_dirty. submit runs a callable on a worker and posts `done(result)`
-    back to the UI thread. Everything else is injectable for tests.
-
-    YT3: this used to also drive a second "yt" app kind (mpv, the old
-    search-and-play tile) - removed outright along with the tile/sheet/tab
-    that were its only callers. `self.app` is now always None or WEB."""
+    """Drives the Browser/Discord tiles (one shared Firefox). host is main.App: ui, mode, master,
+    call_later/cancel and state_dirty. submit runs a callable on a worker and posts done(result)
+    back to the UI thread. Everything else can be swapped for tests. self.app is None or WEB.
+    """
 
     def __init__(self, host, submit, submit_search=None, browser=None, keyboard=None,
                  osk_mode=osk.DEFAULT_MODE, facts=read_window_facts,
@@ -215,7 +190,7 @@ class WebApps:
                  clock=time.monotonic):
         self.host = host
         self.submit = submit
-        self.submit_search = submit_search   # YT3: unused now (no search worker call left)
+        self.submit_search = submit_search  # unused now, no search worker call left
         self.browser = browser if browser is not None else browser_mod.Browser()
         self.keyboard = keyboard if keyboard is not None else osk.Wvkbd(output=internal)
         self.policy = osk.OskPolicy(osk_mode)
@@ -236,7 +211,7 @@ class WebApps:
         self.last_focused = False
         self.osk_on = False
         self.osk_error = None
-        self.parked = False         # CC6: the app tabs parked the window (still running)
+        self.parked = False  # the app tabs parked the window, still running
         self.poll_timer = self.map_timer = self.hint_timer = None
         self.poll_inflight = False
         self.polls = 0
@@ -250,11 +225,10 @@ class WebApps:
         self.host.state_dirty = True
 
     def _call(self, fn, *args, done=None, fail=None, search=False):
-        """Run fn(*args) on the web worker (or the search worker) and hand
-        its result to done() on the UI thread. If fn raises, the exception
-        is logged and done() gets `fail` instead, so an in-flight flag or a
-        "starting" state is always resolved (a worker that swallowed the
-        call would otherwise leave the poll stuck for the session)."""
+        """Runs fn(*args) on the web worker (or the search worker) and hands the result to done() on the
+        UI thread. If fn raises it's logged and done() gets `fail`, so a starting state always
+        resolves instead of leaving the poll stuck for the session.
+        """
         name = getattr(fn, "__name__", repr(fn))
 
         def safe(*a):
@@ -308,8 +282,9 @@ class WebApps:
         self._dirty()
 
     def end_session(self, reason, stop=True, keep_sheet=False):
-        """Forget the running app; queue its process stop (after anything
-        already queued for it, so a start in flight is stopped too)."""
+        """Forgets the running app and queues its process stop after anything already queued for it,
+        so a start in flight gets stopped too.
+        """
         app = self.app
         if app is None:
             return
@@ -478,13 +453,9 @@ class WebApps:
     # -- the on-screen keyboard -----------------------------------------------------
     def _set_osk(self, on):
         on = bool(on) and self.app == WEB and self.host.mode == sway_ipc.BAR
-        # W (heads-up from Main): ROCKNIX's own touchscreen-keyboard service
-        # `killall`s the shared wvkbd-mobintl binary on its own poll loop,
-        # which can take ours with it without osk_on ever changing (Firefox
-        # stays focused on the same editable field throughout). Re-run
-        # _w_osk whenever we THINK it is on but the process is not actually
-        # visible any more, instead of waiting for a fresh False -> True
-        # focus transition to notice.
+        # ROCKNIX's own touch keyboard service killalls the shared wvkbd-mobintl binary on its own
+        # poll, which can take ours with it while osk_on never changes. So rerun _w_osk whenever we
+        # think it's on but the process isnt visible anymore.
         if on == self.osk_on and (not on or self.keyboard.visible()):
             self.ui.bar.set_keys_lit(on)
             return
@@ -561,33 +532,28 @@ class WebApps:
 
     # -- display modes ----------------------------------------------------------------
     def on_mode(self, old, new, reason=None):
-        """W2b: `reason` (main.App.on_mode's own mode-change reason string,
-        now forwarded - optional/None keeps every pre-W2b caller working
-        unchanged) disambiguates WHICH recognised window caused BAR, now
-        that the YouTube TV tile (YtAppSession) is a fully independent
-        window kind that can be parked here (self.app stays WEB, session
-        alive) while ITS window is the one actually shown - without this,
-        self.app is not None used to be a safe enough proxy for "my window
-        is what's on screen"; it no longer is."""
+        """`reason` (main.App.on_mode's mode-change reason, None for older callers) tells which
+        recognised window caused BAR. YouTube TV is its own window that can be shown while this one
+        sits parked with self.app still WEB, so self.app alone doesnt say whose window is on screen.
+        """
         if new == sway_ipc.BAR:
             mine = _reason_mentions(WEB_APP_ID, reason)
             if self.app is not None and mine:
                 self.seen_bar = True
-                self.parked = False         # CC6: its window is on screen again
+                self.parked = False  # its window is on screen again
                 self.host.cancel(self.map_timer)
                 self.map_timer = None
                 self.ui.cc.set_bar_app(self.app, keys_offered=self.policy.enabled())
                 self._arm_poll(0.0)
             elif self.app is None:
                 self.ui.cc.set_bar_app(None)
-            # else: some OTHER recognised window (the YouTube TV tile) is
-            # what is shown - YtAppSession.on_mode() sets the bar app; this
-            # session's own parked/seen_bar state must not be touched.
+            # else some other recognised window (YouTube TV) is shown. YtAppSession.on_mode() sets the bar
+            # app, and this session's parked/seen_bar state stays as it is.
             return
         if self.osk_on:
             self._set_osk(False)            # never over ES's panel or an emulator's screen
         if self.parked:
-            return                          # CC6: parked by the app tabs, not closed
+            return  # parked by the app tabs, not closed
         if new == sway_ipc.FULL and self.app is not None and self.seen_bar:
             self.end_session("its window closed")
 
@@ -601,9 +567,9 @@ class WebApps:
         return done
 
     def shutdown(self):
-        """Stop every child now, from the UI thread (the worker may be stuck
-        in a 30 s page load; these calls are safe to make concurrently at
-        exit - each has a bounded wait and a SIGKILL fallback)."""
+        """Stops every child now from the UI thread, since the worker may be stuck in a 30 s page load.
+        Each call has a bounded wait and a SIGKILL fallback, so running them together at exit is safe.
+        """
         self._cancel_timers()
         for name, fn in (("keyboard", self.keyboard.hide), ("firefox", self.browser.close)):
             try:
@@ -632,8 +598,8 @@ class WebApps:
             self._forget("osk")
             self.browser.close()
         finally:
-            # even if stopping raised: a stale children.json entry would name
-            # a dead (later reused) pid for the orphan sweep (test day 24 Sep)
+            # even if stopping raised, a stale children.json entry would name a dead (and later reused)
+            # pid for the orphan sweep
             self._forget(app)
 
 
@@ -642,25 +608,18 @@ YTAPP_APP_ID = browser_mod.TV_APP_ID
 
 
 class YtAppSession:
-    """W2b: the YouTube TV (leanback) tile - its OWN Firefox instance/
-    profile/Marionette port (browser.TV_PROFILE_DIR/TV_APP_ID/
-    TV_MARIONETTE_PORT), never WebApps' shared "web" Firefox: a global
-    user-agent override (the only kind Firefox still honours - see
-    browser.py's own comment, Mozilla bug 1513574) cannot share a profile
-    with Browser/Discord without also changing their UA.
+    """The YouTube TV (leanback) tile. It has its own Firefox, profile and Marionette port
+    (browser.TV_PROFILE_DIR / TV_APP_ID / TV_MARIONETTE_PORT) because the user agent override it
+    needs is global and would change Browser/Discord's too (Mozilla bug 1513574).
 
-    Deliberately much smaller than WebApps: no OSK (leanback has no text
-    field this needs to drive), no orphan-registry-integrated multi-app
-    juggling - one process, `self.browser.is_running()` is the only state
-    that matters. `host` is main.App (ui / mode / io_worker-style submit /
-    state_dirty); `browser` is injectable (tests never launch a real
-    Firefox)."""
+    Much smaller than WebApps: no keyboard (leanback has no text field), one process, and
+    self.browser.is_running() is the only state that matters. host is main.App, browser can be
+    swapped so tests never start a real Firefox.
+    """
 
-    # YT4: how often the web worker polls window.__rp5swipes while this
-    # tile's window is shown (BAR, "mine" - see on_mode()) - never while
-    # parked/hidden/closed. "up"/"down"/"left"/"right" is the raw finger
-    # direction the injected script reports; swipe_natural decides the SIGN
-    # each maps to (see _direction_to_key's own doc).
+    # How often the web worker polls window.__rp5swipes while this tile's window is shown, never
+    # while parked, hidden or closed. up/down/left/right is the raw finger direction, and
+    # swipe_natural decides which key each one sends (see _direction_to_key).
     SWIPE_POLL_S = 0.15
     _NATURAL_INVERT = {"up": "down", "down": "up", "left": "right", "right": "left"}
 
@@ -675,7 +634,7 @@ class YtAppSession:
         self.registry = registry
         self.starting = False
         self.error = None
-        self.swipe_natural = bool(swipe_natural)   # youtube.tv_swipe_natural, live-updatable
+        self.swipe_natural = bool(swipe_natural)  # youtube.tv_swipe_natural, can change live
         self.swipe_timer = None
 
     @property
@@ -687,10 +646,9 @@ class YtAppSession:
 
     # -- lifecycle ------------------------------------------------------------------
     def open(self):
-        """Idempotent: a cold start launches Firefox; if it is already
-        running (parked or shown), window_switcher's own switch already
-        did the only other thing needed (park whatever else was shown, show
-        this window if it was parked) - nothing more to do here."""
+        """Safe to call twice. A cold start launches Firefox. If it's already running, parked or shown,
+        window_switcher's switch already did everything else.
+        """
         if self.browser.is_running() or self.starting:
             return
         self.starting = True
@@ -707,15 +665,10 @@ class YtAppSession:
         self.host.state_dirty = True
 
     def close(self):
-        """YT3: the tv strip's own Close button (main.App.on_tv_close) - the
-        old W2-era design had no Close on this tile at all (no width budget);
-        the strip is narrower now (Home replaces the Tabs button) so there is
-        room for one. Sets the bar app back to None right away, the same
-        immediate feedback WebApps.end_session() gives Browser/Discord's own
-        Close - the real window may take a moment longer to actually go
-        (Marionette:Quit, then the SIGTERM/SIGKILL fallback in browser.py),
-        but the strip's D-pad must not sit there a moment longer than the tap
-        that ended the session."""
+        """The tv strip's Close (main.App.on_tv_close). Clears the bar app right away like
+        WebApps.end_session() does, the window can take a moment longer to go (Marionette:Quit then
+        the SIGTERM/SIGKILL fallback) but the strip's D-pad shouldnt hang around after the tap.
+        """
         if not self.browser.is_running():
             return
         self.ui.cc.set_bar_app(None)
@@ -727,30 +680,39 @@ class YtAppSession:
             self.registry.forget(YTAPP)
         self.host.state_dirty = True
 
+    def shutdown(self):
+        """Stops the tile's Firefox from the UI thread at app exit, like WebApps.shutdown(): the web
+        worker may be stopping or stuck in a slow page load, so browser.close() runs here with its
+        bounded waits and SIGKILL fallback instead of being queued on the worker. Without this a
+        running ytapp is orphaned on a clean exit and holds DSI-1 in BAR until the next start's
+        reap_stale finds it.
+        """
+        self._cancel_swipe_poll()
+        try:
+            self.browser.close()
+        finally:
+            if self.registry is not None:
+                self.registry.forget(YTAPP)
+
     # -- the strip's D-pad --------------------------------------------------------------
     def action(self, name):
-        """Every "tv.<key>" app-action (screens.Bar's tv_* buttons, patches/
-        W2-screens.patch) - a bare key press, never a page script (leanback
-        takes key events, not clicks; browser.Browser.send_key() is the only
-        thing that ever touches this tile's page). YT3: "tv.close"/"tv.home"
-        are handled by main.App (on_tv_close/on_tv_home) before this is ever
-        called - guarded here too so a direct call (a test, a future caller)
-        can never send them to the page as bogus key names."""
+        """Every "tv.<key>" action from the strip's tv buttons, sent as a bare key press (leanback takes
+        keys, not clicks, and send_key() is the only thing that touches this page). tv.close and
+        tv.home are handled by main.App first, the guard here keeps a direct call from sending them
+        to the page as bogus keys.
+        """
         if not name.startswith("tv.") or name in ("tv.close", "tv.home"):
             return
         key = name[len("tv."):]
         self.submit(self.browser.send_key, key, done=None)
 
-    # -- YT4: swipe-to-navigate ---------------------------------------------------------
+    # -- swipe to navigate ---------------------------------------------------------
     def _direction_to_key(self, direction):
-        """The raw finger direction (browser.SWIPE_POLL_SCRIPT's own report)
-        to a WEBDRIVER_KEYS name. "Natural" (default, phone-scroll
-        convention - content follows the finger): a swipe left drags the
-        next item into view from the right, so it sends "right"; a swipe up
-        reveals what is below, so it sends "down". Off: the swipe's own raw
-        compass direction is sent literally. Both are a judgement call,
-        unverified with a real finger on the real leanback UI - see
-        patches/YT4-NOTES.md."""
+        """The raw finger direction (from browser.SWIPE_POLL_SCRIPT) to a WEBDRIVER_KEYS name. Natural
+        (the default, like scrolling a phone): swipe left brings the next item in from the right so
+        it sends "right", swipe up shows what's below so it sends "down". Off sends the raw direction
+        as is. Neither has been tried with a real finger on leanback yet (patches/YT4-NOTES.md).
+        """
         if self.swipe_natural:
             direction = self._NATURAL_INVERT.get(direction, direction)
         return direction if direction in ("up", "down", "left", "right") else None
@@ -771,9 +733,8 @@ class YtAppSession:
         self.submit(self.browser.poll_swipes, done=self._swiped)
 
     def _swiped(self, directions):
-        # Re-arm first and unconditionally: a None (page did not answer -
-        # mid-navigation, a crashed content process) is not a reason to stop
-        # polling, only to skip this round's key presses.
+        # Rearm first no matter what. A None (the page didnt answer, mid navigation or a crashed
+        # content process) just skips this round's key presses.
         self._arm_swipe_poll()
         if not directions:
             return
@@ -784,15 +745,11 @@ class YtAppSession:
 
     # -- display modes ----------------------------------------------------------------
     def on_mode(self, old, new, reason=None):
-        """See WebApps.on_mode()'s own doc for why `reason` (main.App.
-        on_mode's mode-change reason, forwarded) is what disambiguates
-        "MY window is what BAR means right now" from "some OTHER recognised
-        window (Browser/Discord) is shown while mine sits parked". YT4: the
-        swipe poll follows the exact same "mine" test - armed only while
-        this tile's own window is what BAR actually shows, cancelled the
-        moment anything else is true (a different app shown, parked,
-        hidden, FULL) so it can never run against a page rp5deck is not
-        looking at."""
+        """Same reason check as WebApps.on_mode(): it tells "my window is what BAR shows" apart from
+        "Browser/Discord is shown while mine is parked". The swipe poll runs only while this tile's
+        own window is what BAR shows and stops the moment anything else is true, so it never runs
+        against a page nobody is looking at.
+        """
         mine = new == sway_ipc.BAR and self.browser.is_running() and \
             _reason_mentions(YTAPP_APP_ID, reason)
         if mine:
@@ -800,10 +757,8 @@ class YtAppSession:
             self._arm_swipe_poll()
             return
         self._cancel_swipe_poll()
-        # leaving BAR because of THIS tile specifically closes nothing by
-        # itself - parking (CC6's app tabs) keeps it running in the
-        # background exactly like Browser/Discord already do; Close (above)
-        # is a deliberate tap, never implied by a mode change alone.
+        # leaving BAR because of this tile closes nothing by itself. Parking keeps it running like
+        # Browser/Discord, and Close is always a tap, never a mode change.
 
     def state(self):
         return {"running": self.browser.is_running(), "pid": self.browser.pid(),

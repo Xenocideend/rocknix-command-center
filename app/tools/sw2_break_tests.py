@@ -12,12 +12,12 @@ stale cached .pyc - see memory/mutation-test-stale-pyc.md).
      the surface from ever chasing a transient blip in the first place).
   3. main.py's _reconcile: the in-app mode watchdog (a backstop for
      "stuck" - Main's follow-up request, 24 Sep).
-  4. 094-rp5deck's heartbeat_monitor: the hang detector (a pid alive with a
+  4. command-center-app's heartbeat_monitor: the hang detector (a pid alive with a
      stale heartbeat gets SIGTERM'd/SIGKILL'd and restarted).
 
 Run: python -B tools/sw2_break_tests.py (also under WSL: python3 -B
 tools/sw2_break_tests.py - break 4 needs wsl.exe/Linux either way, since its
-test shells out to run 094-rp5deck as a real process; break 1-3 are pure
+test shells out to run command-center-app as a real process; break 1-3 are pure
 Python and run identically on both platforms).
 """
 import os
@@ -53,7 +53,7 @@ BREAKS = [
         self.reconcile_corrections += 1
         self.state_dirty = True''',
      "tests.sw1_patched_cases.TestReconcileWatchdog.test_the_stuck_bug_self_heals_via_the_watchdog_alone"),
-    ("094-rp5deck",
+    ("command-center-app",
      '        if [ "$age" -gt "$HB_STALE_SECS" ]; then',
      '        if false; then',
      "tests.test_supervisor.TestHeartbeatHangDetector.test_a_hung_but_alive_child_is_restarted"),
@@ -61,7 +61,7 @@ BREAKS = [
 
 
 def _match_eol(anchor, text):
-    """main.py is CRLF; screen_swap.py and 094-rp5deck are LF (mixed line
+    """main.py is CRLF; screen_swap.py and command-center-app are LF (mixed line
     endings across this repo - memory: CRLF breaks a literal-\\n anchor).
     Anchors above are written with plain \\n; adapt them to whichever the
     target file actually uses before searching/replacing."""

@@ -288,7 +288,7 @@ class TestCommandCenterSeam(unittest.TestCase):
         self.assertIsNone(d.root.hit(960, 1010))     # the strip is part of it
         self.assertIsNone(d.root.hit(300, 300))
         d.show_command_center(True)
-        self.assertIn("home.hud", d.targets())
+        self.assertIn("home.mixer", d.targets())     # batch 1: HUD is a tab, not a tile
 
 
 class TestNavigationV2Views(unittest.TestCase):
@@ -383,8 +383,8 @@ class TestDamageAndLayout(unittest.TestCase):
         self.assertLessEqual(tx + tw, sx)               # title and sink label do not overlap
         self.assertGreaterEqual(tw, 31 * 30)             # room for the full title at 52 px
         t = d.targets()
-        for name in ("bar.mute", "bar.slider", "bar.battery", "home.mixer", "home.hud",
-                     "home.browser", "home.discord"):
+        for name in ("bar.mute", "bar.slider", "bar.battery", "home.mixer", "home.hotkeys",
+                     "home.lights", "home.topscreen", "home.perf"):
             self.assertIn(name, t)
             x, y, w, h = t[name]
             self.assertGreaterEqual(min(w, h), 110, name)

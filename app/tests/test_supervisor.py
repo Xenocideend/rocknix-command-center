@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""094-rp5deck: the restart/backoff decision (pure, cross-platform - runs
+"""command-center-app: the restart/backoff decision (pure, cross-platform - runs
 under plain bash on Windows AND under WSL/Linux with no sway/python/device
 at all), and full integration scenarios (real process signals, /proc, `kill
 -TERM` - these need a real POSIX process model, so on native Windows they
@@ -32,7 +32,7 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.dirname(HERE)
 FIX = os.path.join(HERE, "fixtures")
-SUPERVISOR = os.path.join(APP, "094-rp5deck")
+SUPERVISOR = os.path.join(APP, "command-center-app")
 
 LINUX = sys.platform.startswith("linux")
 
@@ -65,13 +65,13 @@ def _which_wsl():
 # the WSL shim re-execs into WSL, which does NOT translate a Windows-style
 # path given as a bare argv script name (no `/mnt/` rewrite happens for a
 # positional arg) - backslashes are simply consumed, so
-# `D:\Tools\...\094-rp5deck` arrives as `D:ToolsRP5-DualScreen-Setup...` and
+# `D:\Tools\...\command-center-app` arrives as `D:ToolsRP5-DualScreen-Setup...` and
 # every TestBackoffDecisionPure test failed with exit 127 ("No such file or
 # directory"), never a real assertion failure. Confirmed directly:
-#     "/c/Users/.../WindowsApps/bash.exe" "D:\Tools\...\094-rp5deck" ...
+#     "/c/Users/.../WindowsApps/bash.exe" "D:\Tools\...\command-center-app" ...
 #     -> /bin/bash: D:ToolsRP5-DualScreen-Setupbottom-screen-app...: No such
 #        file or directory (exit 127)
-#     "/c/Program Files/Git/bin/bash.exe" "D:\Tools\...\094-rp5deck" ...
+#     "/c/Program Files/Git/bin/bash.exe" "D:\Tools\...\command-center-app" ...
 #     -> works (Git Bash/MSYS opens a Windows-style path argv unchanged).
 # Fix: look for a real Git Bash binary by known install location FIRST, and
 # explicitly refuse a WindowsApps-shim `bash` even if that is all PATH offers
@@ -107,7 +107,7 @@ def wslify(p):
 # ---------------------------------------------------------------------------
 # Harness process lifetime (25 Sep 2026 leak). The harnesses below used to
 # clean up with `pkill -f "$D"`, which matches only the stub children: the
-# supervisor's argv is `bash .../094-rp5deck --fg` and the stubs' sleeps are
+# supervisor's argv is `bash .../command-center-app --fg` and the stubs' sleeps are
 # `sleep 3600`, neither mentions $D. Worse, `rm -rf "$D"` then removed the fake
 # sway socket, which 094 treats as "sway gone" and waits out forever by
 # design. One run of this module plus test_sw1_merged left 12 supervisors and
@@ -300,7 +300,7 @@ def _sweep_live_harnesses():
 # The pure restart/backoff decision - no process management at all
 # ---------------------------------------------------------------------------
 class TestBackoffDecisionPure(unittest.TestCase):
-    """Drives the REAL function inside 094-rp5deck via its hidden
+    """Drives the REAL function inside command-center-app via its hidden
     `--print-backoff-decision` CLI mode - not a reimplementation. Runs under
     plain bash, cross-platform (Windows git-bash or WSL/Linux bash); no
     sway, python, or device involved at all."""
@@ -411,7 +411,7 @@ class TestSupervisorIntegration(unittest.TestCase):
           $LOCK / $LOG    the supervisor's own pid-lock and log file
           launch          function: starts a fresh supervisor in the
                           background and sets $SUPPID to its REAL pid (read
-                          from $LOCK, NOT the launcher's own $! - 094-rp5deck
+                          from $LOCK, NOT the launcher's own $! - command-center-app
                           always re-execs itself once via `nohup ... --fg &`,
                           so the direct child pid is a short-lived wrapper)
           starts NAME     function: prints NAME's restart counter
@@ -454,7 +454,7 @@ export RP5DECK_GUARD_BACKOFF_MAX=1
 APP_STUB="$D/home/app_stub.sh"
 GUARD_STUB="$D/home/guard_stub.sh"
 LOCK="$RP5DECK_LOCK"
-LOG="$D/log/094-rp5deck.log"
+LOG="$D/log/command-center-app.log"
 starts() { cat "$1.starts" 2>/dev/null || echo 0; }
 wait_for() {
     # wait_for CONDITION_CMD TIMEOUT_TENTHS
@@ -494,6 +494,19 @@ echo "GUARD_STARTS=$(starts "$GUARD_STUB")"
         self.assertNotIn("LAUNCH_FAILED", r.stdout, r.stdout + r.stderr)
         self.assertIn("APP_STARTS=1", r.stdout)
         self.assertIn("GUARD_STARTS=1", r.stdout)
+
+    def test_starts_the_app_without_the_add_on(self):
+        script = "export SWAYMSG_NO_DP1=1\n" + self._script(r"""
+wait_for '[ "$(starts "$APP_STUB")" -ge 1 ]' 100
+echo "APP_STARTS=$(starts "$APP_STUB")"
+grep -c 'absent (undocked)' "$LOG" | sed 's/^/UNDOCKED_LOG=/'
+""")
+        r = run_harness(self, script, timeout=25)
+        if r is None:
+            self.skipTest("no WSL available")
+        self.assertNotIn("LAUNCH_FAILED", r.stdout, r.stdout + r.stderr)
+        self.assertIn("APP_STARTS=1", r.stdout, r.stdout + r.stderr)
+        self.assertIn("UNDOCKED_LOG=1", r.stdout, r.stdout + r.stderr)
 
     def test_app_restarts_after_unexpected_exit(self):
         r = self._harness(r"""
@@ -633,7 +646,7 @@ kill_stub_now "$APP_STUB"
 # and, with BACKOFF_MAX=1 in this harness, retry within ~1s - so if a second
 # start appears within this window at all, the fix is not re-resolving/
 # pausing (this is the RED condition; verified by hand against the pre-fix
-# 094-rp5deck during development - see the ST2 report).
+# command-center-app during development - see the ST2 report).
 wait_for '[ "$(starts "$APP_STUB")" -ge 2 ]' 20 && echo "PREMATURE_RESPAWN=yes" || echo "PREMATURE_RESPAWN=no"
 NEW_SOCK="$D/sway-ipc.4242.sock"
 touch "$NEW_SOCK"
@@ -718,7 +731,7 @@ echo "NEW_SOCK_USED=$([ "$last_seen" = "$D/sway-ipc.5252.sock" ] && echo yes || 
 
 # ---------------------------------------------------------------------------
 # SW2: the hang detector - a child whose PID stays alive but stops touching
-# its heartbeat file must be restarted (094-rp5deck's heartbeat_monitor),
+# its heartbeat file must be restarted (command-center-app's heartbeat_monitor),
 # distinct from every test above (which all exercise the child actually
 # EXITING). Its own harness (not TestSupervisorIntegration._harness): a
 # different main-app stub (one that writes heartbeats) and short HB_* knobs
@@ -762,7 +775,7 @@ export RP5DECK_HB_CHECK_INTERVAL=1 RP5DECK_HB_GRACE_SECS=1 RP5DECK_HB_STALE_SECS
 export RP5DECK_HB_KILL_GRACE=2
 APP_STUB="$D/home/app_stub.sh"
 LOCK="$RP5DECK_LOCK"
-LOG="$D/log/094-rp5deck.log"
+LOG="$D/log/command-center-app.log"
 HEARTBEAT="$D/run/heartbeat"
 starts() { cat "$1.starts" 2>/dev/null || echo 0; }
 wait_for() { i=0; while [ "$i" -lt "$2" ]; do if eval "$1"; then return 0; fi; i=$((i + 1)); sleep 0.1; done; return 1; }

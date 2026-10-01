@@ -1,10 +1,6 @@
-"""swap_ui - SW1 widgets: the "Swap screens" tile icon, a confirm sheet, and
-the pull tab the Command Center overlay shows on the game/ES screen.
-
-Kept out of screens.py (HF1 owns it this wave) so the screens.py side of SW1
-is a few lines: patches/SW1-screens.patch imports this module, adds the tile
-and registers the confirm sheet. ConfirmSheet is generic (title, message,
-two buttons) so CC1's "Clean state" can reuse it.
+"""swap_ui: the Swap screens tile icon, a confirm sheet, and the pull tab the Command Center
+overlay shows on the game/ES screen. ConfirmSheet is generic (title, message, two buttons) so
+other sheets can reuse it.
 """
 import ui
 from ui import THEME, BODY_TEXT, Button, Container, Label, Sheet
@@ -14,8 +10,9 @@ CONFIRM_SHEET = "confirm"
 
 
 def icon_swap(g, r, color):
-    """Two stacked panels with arrows between them (up on the right, down on
-    the left): "the two screens trade places"."""
+    """Two stacked panels with arrows between them (up on the right, down on the left), the two
+    screens trading places.
+    """
     x, y, w, h = r
     t = max(3, w * 0.07)
     pw, ph = w * 0.62, h * 0.26
@@ -46,8 +43,9 @@ def swap_tile(h):
 
 
 def swap_prompt(es_screen, docked=True):
-    """(title, message, yes label) for the confirm sheet, from the CURRENT
-    es_screen value ("addon_top" = not swapped)."""
+    """(title, message, yes label) for the confirm sheet, from the current es_screen value
+    ("addon_top" = not swapped).
+    """
     if not docked:
         return ("Swap screens", "The add-on screen is not attached, so there is nothing to "
                 "swap.", None)
@@ -65,9 +63,10 @@ def swap_prompt(es_screen, docked=True):
 
 
 class ConfirmSheet(Sheet):
-    """Title, a message, and two big buttons. ask() arms the callbacks; each
-    button fires its callback once. A None yes-label shows only the message
-    and the No/Close button. The header's Back button is the same as No."""
+    """A title, a message and two big buttons. ask() arms the callbacks and each button fires its
+    callback once. A None yes label shows only the message and the No/Close button, and the
+    header's Back is the same as No.
+    """
 
     def __init__(self, h, name=CONFIRM_SHEET):
         Sheet.__init__(self, "", on_close=self._no, name=name)
@@ -113,7 +112,7 @@ class ConfirmSheet(Sheet):
 
     def draw(self, g):
         Sheet.draw(self, g)
-        # the message may be long: draw it wrapped instead of the Label's one line
+        # the message can be long, draw it wrapped instead of the Label's one line
         if self.msg.visible and self.msg.text:
             x, y, w, h = self.msg.rect
             g.fill_rect(self.msg.rect, THEME["bg"])
@@ -121,9 +120,9 @@ class ConfirmSheet(Sheet):
 
 
 class PullTab(Container):
-    """The Command Center overlay's closed state on the game/ES screen: one
-    button, the whole surface (the overlay surface is only this big while
-    closed, so nothing else of the game screen is covered)."""
+    """The overlay's closed state on the game/ES screen: one button filling the surface (the surface
+    is only this big while closed, so nothing else of the game screen is covered).
+    """
 
     def __init__(self, on_open, name="overlay.tab"):
         Container.__init__(self, name=name + ".box", bg="bar")

@@ -18,7 +18,9 @@ What is pinned down here:
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -46,7 +48,11 @@ logging.getLogger("rp5deck.web").addHandler(logging.NullHandler())
 
 
 def load_fixture(name):
-    with open(os.path.join(FIX, name), encoding="utf-8") as f:
+    path = os.path.join(FIX, name)
+    if not os.path.exists(path):
+        import unittest
+        raise unittest.SkipTest("fixture %s is a capture from the developer's device, not published" % name)
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -208,9 +214,11 @@ class TestWindowFacts(unittest.TestCase):
         self.assertFalse(f["focused"])
         self.assertEqual(f["focused_app"], "emulationstation")
 
-    # test_absent removed: depended on
-    # tests/fixtures/sway-tree-FULL-real-capture-2026-09-23.json, dropped
-    # from the public release (see DROPPED-FIXTURES-list.txt).
+    def test_absent(self):
+        f = web_tiles.window_facts(load_fixture("sway-tree-FULL-real-capture-2026-09-23.json"),
+                                   "rp5deck-web")
+        self.assertFalse(f["present"])
+        self.assertIsNone(f["output"])
 
     def test_live_read_sends_only_get_tree(self):
         sent = []
@@ -364,11 +372,12 @@ class TilesCase(AppCase):
 
 
 class TestBrowserTile(TilesCase):
-    def test_tiles_are_no_longer_coming_soon(self):
+    def test_browser_and_discord_are_tabs_not_tiles(self):
+        """Batch 1 (owner: "remove tiles that have tabs")."""
         app = self.make_web_app()
-        subs = {t.name: t.subtitle for t in app.ui.home.tiles}
-        for name in ("home.browser", "home.discord"):
-            self.assertNotIn("soon", subs[name].lower())
+        names = {t.name for t in app.ui.home.tiles}
+        self.assertNotIn("home.browser", names)
+        self.assertNotIn("home.discord", names)
 
     def test_browser_opens_firefox_and_the_strip_gets_its_controls(self):
         app = self.make_web_app()
@@ -695,6 +704,46 @@ class TestYouTubeTvTile(unittest.TestCase):
         session.open()
         session.close()
         self.assertEqual(fb.calls[-1], ("close",))
+
+    def test_the_registry_knows_the_ytapp_firefox_by_its_name(self):
+        marker = web_tiles.ChildRegistry.MARKERS["ytapp"]
+        self.assertEqual(marker, "rp5deck-ytapp")
+        self.assertIn(marker, "/storage/rp5deck-firefox/firefox/firefox --profile /x/tvprofile --name rp5deck-ytapp")
+
+    def shutdown_session(self, running=True):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        registry = web_tiles.ChildRegistry(os.path.join(d, "children.json"))
+        host = FakeYtAppHost()
+        fb = FakeBrowser()
+
+        def worker_not_allowed(*a, **k):
+            raise AssertionError("shutdown must not queue on the worker, it may be stuck or stopping")
+        session = web_tiles.YtAppSession(host, submit=sync_submit, browser=fb, registry=registry)
+        if running:
+            session.open()
+            registry.record(web_tiles.YTAPP, fb.pid())
+        session.submit = worker_not_allowed
+        return host, fb, registry, session
+
+    def test_shutdown_stops_the_browser_itself_and_forgets_it(self):
+        host, fb, registry, session = self.shutdown_session()
+        self.assertIn(web_tiles.YTAPP, registry.entries())
+        session.shutdown()
+        self.assertEqual(fb.calls[-1], ("close",))
+        self.assertNotIn(web_tiles.YTAPP, registry.entries())
+
+    def test_shutdown_cancels_the_swipe_poll(self):
+        host, fb, registry, session = self.shutdown_session()
+        session.on_mode("FULL", sway_ipc.BAR, reason="rp5deck window on DSI-1: rp5deck-ytapp")
+        self.assertEqual(len(self._live_timers(host)), 1)
+        session.shutdown()
+        self.assertEqual(self._live_timers(host), [])
+
+    def test_shutdown_with_nothing_running_is_quiet(self):
+        host, fb, registry, session = self.shutdown_session(running=False)
+        session.shutdown()
+        self.assertNotIn(web_tiles.YTAPP, registry.entries())
 
     def test_dpad_sends_every_documented_key(self):
         host, fb, session = self.make()

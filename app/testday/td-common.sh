@@ -23,6 +23,10 @@ td_sanity() {
     esac
     st=$(cat /sys/class/drm/card0-DP-1/status 2>/dev/null)
     mode=$(cat /storage/dual-screen-mode 2>/dev/null)
+    if [ "$st" != "connected" ] && [ "${TD_ALLOW_UNDOCKED:-}" = 1 ]; then
+        echo "sanity OK: $model; DP-1 $st (undocked install asked for); dual-screen-mode $mode"
+        return 0
+    fi
     if [ "$st" != "connected" ]; then
         echo "HARD STOP: DP-1 is '$st' (dual-screen-mode '$mode'; 'charge' = off by design)."
         echo "Attach the Dual Screen add-on in display mode (showing a picture) and try again."

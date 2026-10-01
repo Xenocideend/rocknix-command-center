@@ -48,11 +48,11 @@ BREAKS = [
      "        if False:",
      [T_CS + "TestKillEmulator.test_a_reused_pid_is_not_hit"]),
     ("cleanstate.py", "port subtree scan keeps protected names (ra_proxy)",
-     "                if comm in _SHELLS or comm in PROTECTED_NAMES:",
+     "                if comm in _SHELLS or comm[:15] in _PROTECTED_COMM:",
      "                if comm in _SHELLS:",
      [T_CS + "TestKillEmulator.test_port_processes_lists_only_the_ports_programs"]),
     ("cleanstate.py", "port signal gate lets protected names through",
-     "        if not _NAME_RE.match(comm or \"\") or comm in PROTECTED_NAMES or comm in _SHELLS:",
+     "        if not _NAME_RE.match(comm or \"\") or (comm or \"\")[:15] in _PROTECTED_COMM or comm in _SHELLS:",
      "        if not _NAME_RE.match(comm or \"\") or comm in _SHELLS:",
      [T_CS + "TestKillEmulator.test_port_signal_gate_refuses_protected_names"]),
     # --- cleanstate: confirmation, dry run ---------------------------------

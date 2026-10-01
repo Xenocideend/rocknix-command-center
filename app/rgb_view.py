@@ -1,28 +1,22 @@
-"""rgb_view - the "Stick lights" Command Center sheet's UI + controller.
+"""rgb_view: the Stick lights sheet and its controller.
 
-RGBSheet (a screens.Sheet, same shape as hotkeys_view.HotkeysSheet /
-cleanstate_view.CleanStateSheet - Back + title, screens.py untouched;
-patches/RG-screens.patch adds the home tile that opens it and
-patches/RG-main.patch wires an RGBController into main.App, both applied
-later) is widgets only. RGBController drives it and talks to
-rgb_leds.Controller (the actual device side) and to config.py's "lights"
-group (patches/RG-config.patch) for persistence, the same split
-cleanstate_view.py uses between CleanStateSheet and CleanStateController.
+RGBSheet (a screens.Sheet like hotkeys_view.HotkeysSheet, Back plus a title) is widgets only.
+RGBController drives it, talks to rgb_leds.Controller (the device side), and saves through
+config.py's "lights" group, the same split as cleanstate_view.py.
 
-Layout, 1920x1080 panel, every interactive row >= 120 px tall:
-  mode selector      Follow ROCKNIX / Off / Colour (3 LitButtons, exclusive)
-  same-colour toggle + Left/Right stick selector (only shown when unlinked)
-  preset swatch row  9 named colours (rgb_leds.PRESETS), tap to apply
-  hue slider         custom colour, full saturation (rgb_leds.hue_to_rgb)
+Layout at 1920x1080, every row you touch at least 120 px tall:
+  mode               Follow ROCKNIX / Off / Colour (3 LitButtons, one at a time)
+  same colour toggle plus a Left/Right stick picker (only when not linked)
+  preset swatches    9 named colours (rgb_leds.PRESETS), tap to apply
+  hue slider         custom colour at full saturation (rgb_leds.hue_to_rgb)
   brightness slider  the single 0-255 ledcontrol brightness argument
-  live preview       two circles, left/right stick's actual colour
+  live preview       two circles, each stick's actual colour
 
-Every slider drag is rate-limited by rgb_leds.Controller.drag() (at most
-once every 80 ms) and always applies its last value on release
-(drag_flush()); every commit (mode, linked, a preset tap, a slider
-release) is persisted through RGBController.save_fn (config.save_changes
-by default) - a value that only ever got dragged, never released, is
-never written to disk."""
+Slider drags are rate limited by rgb_leds.Controller.drag() (at most every 80 ms) and always
+apply the last value on release (drag_flush()). Every commit (mode, linked, a preset tap, a
+slider release) gets saved through RGBController.save_fn (config.save_changes by default), and
+a value that was only dragged and never released is never written.
+"""
 import ui
 from ui import THEME, Button, Label, LitButton, Sheet, Slider, Toggle, Widget
 
@@ -37,12 +31,10 @@ MODE_LABELS = (("rocknix", "Follow ROCKNIX"), ("off", "Off"), ("colour", "Colour
 
 
 # ---------------------------------------------------------------------------
-# Small local widgets (Button/Widget subclasses - ui.py itself is not ours
-# to change)
+# Small local widgets (Button/Widget subclasses)
 # ---------------------------------------------------------------------------
 class Swatch(Button):
-    """A preset colour tile: filled with its own colour, a ring when it is
-    the stick's current colour."""
+    """A preset colour tile, filled with its colour and ringed when it's the stick's current colour."""
 
     def __init__(self, rgb_val, rect=(0, 0, 0, 0), on_click=None, name=None):
         Button.__init__(self, "", rect, on_click, name, 0, None, 24)
@@ -68,8 +60,7 @@ class Swatch(Button):
 
 
 class PreviewCircle(Widget):
-    """A read-only circle showing one stick's actual colour - not tappable,
-    just a live readout."""
+    """A circle showing one stick's actual colour, not tappable, just a live readout."""
 
     def __init__(self, rect=(0, 0, 0, 0), name=None):
         Widget.__init__(self, rect, name)
@@ -95,8 +86,7 @@ class PreviewCircle(Widget):
 # Sheet
 # ---------------------------------------------------------------------------
 class RGBSheet(Sheet):
-    """Widgets only; RGBController fills/reads them and receives every
-    on_action(name, payload):
+    """Widgets only. RGBController fills and reads them and gets every on_action(name, payload):
       "lights.mode"                payload: "rocknix" | "off" | "colour"
       "lights.linked"              payload: bool
       "lights.stick"               payload: "left" | "right" (unlinked only)
@@ -203,12 +193,12 @@ class RGBSheet(Sheet):
 # Controller
 # ---------------------------------------------------------------------------
 class RGBController:
-    """host: main.App-like object (`close_sheet`, `state_dirty`, `ui.open`).
-    lights: a rgb_leds.Controller - the actual device-facing state + apply
-    machinery; this class only turns sheet events into calls on it, plus
-    persistence. save_fn(changes) defaults to config.save_changes; tests
-    inject a fake so no real file is touched (and the "config round-trip"
-    test uses the real function against a temp RP5DECK_CONFIG instead)."""
+    """host is main.App-like (`close_sheet`, `state_dirty`, `ui.open`). lights is an
+    rgb_leds.Controller, the real device state and apply logic, and this class only turns sheet
+    events into calls on it, plus saving. save_fn(changes) defaults to config.save_changes, tests
+    pass a fake so no real file gets touched (the config round-trip test uses the real one against
+    a temp RP5DECK_CONFIG).
+    """
 
     def __init__(self, host, lights, save_fn=None):
         self.host = host

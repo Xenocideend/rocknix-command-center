@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """charge_limit.py - Safe Charge's device I/O, mirroring rocknix-config/
-095-charge-limit's own file/sysfs contract (read only, never edited here -
+battery-charge-limit's own file/sysfs contract (read only, never edited here -
 see patches/YT4-NOTES.md). Every path is a tempfile, never real sysfs."""
 import os
 import sys

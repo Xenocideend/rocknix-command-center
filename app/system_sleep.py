@@ -1,37 +1,30 @@
-"""system_sleep - the Command Center's Sleep tile (owner-approved).
+"""system_sleep: the Command Center's Sleep tile.
 
-`systemctl suspend` off the UI thread (main.App.open_sleep, on the io
-worker) - rp5deck runs as root on the device (094-rp5deck), so no polkit/
-sudo dance is needed. This call BLOCKS the calling thread for as long as
-the device is actually asleep (systemd's own `suspend.target` job is
-synchronous) - expected and harmless here since it always runs on a worker
-thread, never the UI thread, and the whole process (indeed the whole
-kernel scheduler) is frozen alongside it during a real suspend, not spinning.
+`systemctl suspend` off the UI thread (main.App.open_sleep, on the io worker). rp5deck runs as
+root on the device, so theres no polkit or sudo step. The call blocks its thread for as long as
+the device sleeps (systemd's suspend.target job is synchronous), which is fine on a worker since
+the whole system is frozen during a real suspend anyway.
 
-dp-sleep-guard.service (Before=sleep.target, installed separately - not
-this repo) already disables the add-on screen's DP-1 output before suspend
-and re-enables it on resume; this module must NEVER touch DP-1 itself,
-only ask systemd to suspend and let that guard do its own job - see
-rp5-dock-power-plug-loses-dp / rp5-suspend-resets-with-dp-active for the
-exact class of bug that already followed from racing it once."""
+dp-sleep-guard.service (Before=sleep.target, installed separately) already turns off the
+add-on's DP-1 before suspend and back on at resume. This must never touch DP-1 itself, only ask
+systemd to suspend and let that guard do its job, racing it caused resets before.
+"""
 import logging
 import subprocess
 
 log = logging.getLogger("rp5deck.system_sleep")
 
 SUSPEND_CMD = ("systemctl", "suspend")
-# Generous on purpose: a normal suspend freezes this call (and everything
-# else) along with the rest of the OS, so the timeout only ever "counts"
-# real wall-clock time in the brief windows before suspend engages and
-# after resume - a hung/inhibited systemctl that never actually suspends is
-# what this guards against, not a slow-but-real suspend cycle.
+# Long on purpose. A normal suspend freezes this call along with everything else, so the timeout
+# only counts the moments before suspend starts and after resume. It's for a hung or inhibited
+# systemctl that never suspends, not a slow real one.
 SUSPEND_TIMEOUT_S = 30.0
 
 
 def suspend(run=None):
-    """Ask systemd to suspend. Returns (ok, detail): ok False on a non-zero
-    exit, a missing systemctl, a timeout, or any OSError - detail is a
-    short string for an error toast. Never raises."""
+    """Asks systemd to suspend. Returns (ok, detail), ok False on a bad exit, a missing systemctl, a
+    timeout or any OSError, and detail is a short string for an error toast. Never raises.
+    """
     run = run or subprocess.run
     try:
         r = run(SUSPEND_CMD, capture_output=True, text=True, timeout=SUSPEND_TIMEOUT_S)

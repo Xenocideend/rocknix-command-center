@@ -33,11 +33,11 @@ def active(tabs):
 class TestWhichTabsExist(unittest.TestCase):
     def test_nothing_running_nothing_installed(self):
         tabs = app_tabs.build_tabs(snap_of(Sim()), {}, NONE, {"mode": "FULL"})
-        self.assertEqual(ids(tabs), ["companion", "hud"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes"])
 
     def test_installed_apps_can_start(self):
         tabs = app_tabs.build_tabs(snap_of(Sim()), {}, ALL, {"mode": "FULL"})
-        self.assertEqual(ids(tabs), ["companion", "hud", "browser", "discord", "ytapp"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes", "browser", "discord", "ytapp"])
         self.assertFalse(any(t["running"] for t in tabs if t["id"] in ("browser", "ytapp")))
 
     def test_a_running_app_has_its_tab_even_when_the_binary_check_says_no(self):
@@ -45,7 +45,7 @@ class TestWhichTabsExist(unittest.TestCase):
         s.map("DSI-1", app_id="rp5deck-web")
         tabs = app_tabs.build_tabs(snap_of(s), {"app": "web", "label": "Discord"}, NONE,
                                    {"mode": "BAR"})
-        self.assertEqual(ids(tabs), ["companion", "hud", "browser", "discord"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes", "browser", "discord"])
         by = {t["id"]: t for t in tabs}
         self.assertTrue(by["discord"]["running"])
         self.assertFalse(by["browser"]["running"])
@@ -58,7 +58,7 @@ class TestWhichTabsExist(unittest.TestCase):
         s = Sim()
         s.map("DSI-1", app_id="rp5deck-ytapp")
         tabs = app_tabs.build_tabs(snap_of(s), {}, NONE, {"mode": "BAR"})
-        self.assertEqual(ids(tabs), ["companion", "hud", "ytapp"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes", "ytapp"])
         by = {t["id"]: t for t in tabs}
         self.assertTrue(by["ytapp"]["running"])
         self.assertEqual(active(tabs), ["ytapp"])
@@ -74,7 +74,7 @@ class TestWhichTabsExist(unittest.TestCase):
         s.map("DP-1", title="[w1] melonDS", fullscreen=True, focus=True)
         w2 = s.map("DSI-1", title="[w2] melonDS")
         tabs = app_tabs.build_tabs(snap_of(s), {}, NONE, {"mode": "HIDDEN"})
-        self.assertEqual(ids(tabs), ["companion", "emu:%d" % w2, "hud"])
+        self.assertEqual(ids(tabs), ["companion", "emu:%d" % w2, "hud", "notes"])
         self.assertEqual(active(tabs), ["emu:%d" % w2])
         s.command(wsw.build_park(w2))
         tabs = app_tabs.build_tabs(snap_of(s), {}, NONE, {"mode": "FULL", "cc_open": True})
@@ -82,14 +82,14 @@ class TestWhichTabsExist(unittest.TestCase):
         self.assertEqual(active(tabs), [])
         s.close(w2)
         tabs = app_tabs.build_tabs(snap_of(s), {}, NONE, {"mode": "FULL"})
-        self.assertEqual(ids(tabs), ["companion", "hud"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes"])
 
     def test_an_unknown_window_never_gets_a_tab(self):
         s = Sim()
         s.map("DSI-1", app_id="rp5deck-test-other", title="foot")
         s.map("DSI-1", app_id="emulationstation")
         tabs = app_tabs.build_tabs(snap_of(s), {}, NONE, {"mode": "HIDDEN"})
-        self.assertEqual(ids(tabs), ["companion", "hud"])
+        self.assertEqual(ids(tabs), ["companion", "hud", "notes"])
 
 
 class TestActiveTab(unittest.TestCase):

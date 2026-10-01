@@ -1,95 +1,62 @@
-"""hidden_overlay - CC5: the Command Center over an emulator's second screen.
+"""hidden_overlay: the Command Center over an emulator's second screen, or over ES undocked.
 
-The owner (24 Sep, 01:48): "I need to be able to open the command center
-still to adjust volume since the RP5 DS blocks the physical buttons." The
-Retroid Dual Screen Add-on's shell covers the RP5's volume keys, and when a
-DS / 3DS / Wii U game puts its second window on the panel's screen the main
-panel goes HIDDEN (unmapped) so the game gets every touch (DESIGN.md "Three
-display modes"). This module adds a fourth mode, OVERLAY, entered only from
-HIDDEN:
+The Dual Screen add-on's shell covers the RP5's volume keys, and when a DS, 3DS or Wii U game
+puts its second window on the panel's screen the panel goes HIDDEN so the game gets every
+touch. You still need to get at volume, so this adds a fourth mode, OVERLAY, only entered
+from HIDDEN:
 
-  HIDDEN  --summon (Back / F1) or a tap on the corner handle-->  OVERLAY
-  OVERLAY --Close / Back again / swipe up / auto-close timeout-->  HIDDEN
+  HIDDEN  --Back (F1) or a tap on the corner handle-->  OVERLAY
+  OVERLAY --Close / Back again / swipe up / auto-close-->  HIDDEN
 
-OVERLAY maps the panel's OWN layer surface (the one HIDDEN unmapped) full
-panel over the emulator's window, on the wlr-layer-shell OVERLAY layer, with
-keyboard interactivity NONE:
+OVERLAY maps the panel's own layer surface full panel on the wlr-layer-shell OVERLAY layer
+with keyboard interactivity NONE:
 
-  * OVERLAY layer, not TOP: sway 1.11 stacks shell_top BELOW the fullscreen
-    tree and shell_overlay ABOVE it (sway/tree/root.c:43-56); an emulator
-    that fullscreens its second window would hide a TOP surface entirely.
-    The layer is switched at runtime with zwlr_layer_surface_v1.set_layer
-    (since v2; sway 1.11 advertises v4, server.c:73, and reparents the scene
-    node on commit, desktop/layer_shell.c:273-277) - wl_layer.set_layer().
-    Every other mode stays on the layer it had (TOP for the panel).
-  * No focus steal: sway only moves keyboard focus to a layer surface whose
-    keyboard_interactive is not NONE (seatop_default.c:383-386), and a
-    touch-down never focuses a layer surface at all (seatop_default.c:659-
-    684) - the same rule E1 verified for the panel, on either layer. The
-    game keeps keyboard/controller focus and keeps running.
-  * While it is up the emulator's bottom screen is covered (accepted by the
-    owner); dismissing unmaps it through the same HIDDEN path DS3 verified,
-    so the emulator gets its touch area back.
+OVERLAY, not TOP: sway stacks shell_top below the fullscreen tree and shell_overlay above
+it (sway/tree/root.c:43-56), so a fullscreen second window would hide a TOP surface. The
+layer is switched live with wl_layer.set_layer(). Every other mode stays on TOP.
 
-What it shows: the panel's own Command Center, "volume first" (the strip:
-mute, master slider, %), restricted to tiles that make sense over a game
-(Mixer - per-app volume, HUD) plus a big Close tile. The slider is the
-FX-A slider (no jump on touch-down, a swipe cancels and restores, commit on
-release only) and every change goes through main.App's existing audio path.
+No focus steal: sway only gives keyboard focus to a layer surface whose interactivity
+isnt NONE, and a touch never focuses a layer surface (seatop_default.c), so the game
+keeps the controller and keeps running.
 
-Why in-process, and not SW1's cc_overlay.py (Main asked for ONE overlay
-mechanism): cc_overlay is a second process whose surface lives on the ES /
-game screen. Showing it over the emulator's window on the OTHER screen
-would mean rebinding its surface there and back on every open, deciding
-from the panel's state.json (written up to 0.1 s late) whether the panel is
-HIDDEN because of a game, and racing the panel on the same key press. The
-panel already owns that decision (its ModeWatcher), already has an idle
-surface on exactly that screen, and "dismiss" is literally its verified
-HIDDEN transition. So: the panel handles Back while it is HIDDEN because of
-an emulator window (and publishes "cc5": {"takes_summon": true} in its
-state.json); cc_overlay defers in that case (patches/CC5-cc_overlay.patch)
-and keeps everything else it does (its game-screen pull tab, Back while the
-panel is in BAR or not running). With command_center.overlay_on_hidden off,
-the panel does not take the press and SW1's behaviour (Command Center on
-the game screen) comes back unchanged.
+The emulator's bottom screen is covered while it's up. Closing unmaps it the same way
+HIDDEN does, so the game gets its touch area back.
 
-Only an EMULATOR WINDOW's HIDDEN counts. HIDDEN also means "undocked" and
-"the panel's output is absent"; there the overlay is refused. The watcher
-only reports mode CHANGES, so its reason can be stale (undocking while a
-game runs stays HIDDEN): a summon re-reads the tree once (read-only,
-sway_ipc.query_mode, on the io worker) before opening.
+It shows the volume strip (mute, master slider, %) and the tiles that make sense over a game
+plus a big Close. Every change goes through main.App's normal audio path.
+
+Why in this process and not cc_overlay.py: cc_overlay is a second process on the game
+screen. Showing it here would mean moving its surface over and back on every open, guessing
+from state.json (up to 0.1 s late) whether the panel is HIDDEN for a game, and racing the
+panel on the same key press. The panel already knows why it's HIDDEN, already has a surface
+on that screen, and closing is just its normal HIDDEN transition. So the panel takes Back
+while HIDDEN for an emulator window and says so in state.json ("cc5": {"takes_summon":
+true}), and cc_overlay stands aside then. With command_center.overlay_on_hidden off the panel
+leaves the press alone and cc_overlay shows the Command Center on the game screen like before.
+
+HIDDEN has three causes: an emulator window, undocked, or the panel's output missing. The
+overlay opens for the first two. The watcher only reports mode changes so its reason can be
+stale (undocking mid game stays HIDDEN), so a summon rereads the tree once on the io worker
+before opening.
 
 The trigger
 -----------
-1. Back (KEY_F1 on "InputPlumber Keyboard", command_center.hardware_button
-   = btn_back_f1; summon.py reads it non-grabbing), now also in HIDDEN.
-   The same press still reaches the focused emulator window - see
-   F1_NOTES below: on ROCKNIX's builds none of melonDS / Azahar / Cemu /
-   DSperate acts on a plain F1 (DraStic unverified).
-2. Optional corner handle (command_center.corner_handle, default off): a
-   HANDLE_PX x HANDLE_PX layer surface in one corner of the panel's screen,
-   mapped only while the panel is HIDDEN because of an emulator window. A
-   tap on it opens the overlay. It is a SECOND wl_surface (a second SDL
-   window with a custom role, so SDL still decodes its touches and tags
-   them with its windowID) given its own zwlr_layer_surface_v1 via
-   wl_layer.LayerSurface: layer OVERLAY (it must sit above a fullscreen
-   emulator window too), anchored to the two edges of its corner, size
-   HANDLE_PX x HANDLE_PX, exclusive zone 0 (it never pushes the emulator's
-   window aside), keyboard interactivity NONE (no focus, like the panel).
-   Touch-area cost: its pixels stop reaching the game - 96 x 96 = 9,216 of
-   the panel's 2,073,600 (0.44 %). A 4:3 DS / 3DS bottom screen scaled to
-   1080 px high is 1440 px wide, leaving 240 px pillarbox bars each side,
-   so when the emulator keeps the aspect ratio a corner handle sits entirely
-   in black bar and costs the game nothing; a 16:9 Wii U GamePad view loses
-   that corner. While the handle is mapped and the volume changes (the
-   add-on shell leaves FN + D-pad volume usable), the handle briefly shows
-   the new level instead of its icon - the cheap version of the HIDDEN
-   volume OSD (no extra surface over the game).
+1. Back (KEY_F1 on "InputPlumber Keyboard", read without grabbing by summon.py). The same
+   press still reaches the emulator, but none of melonDS, Azahar, Cemu or DSperate on
+   ROCKNIX do anything with a plain F1 (see F1_NOTES, DraStic not checked).
+2. The corner handle (command_center.corner_handle, off by default): a HANDLE_PX square layer
+   surface in one corner, mapped only while HIDDEN for an emulator window. Tap it to open
+   the overlay. It's a second SDL window with a custom role so SDL still decodes its touches,
+   on the OVERLAY layer, exclusive zone 0 and keyboard NONE like the panel. It costs
+   96 x 96 of the panel's 2,073,600 pixels (0.44 %). A 4:3 DS/3DS screen scaled to 1080 high
+   leaves 240 px black bars each side, so with the aspect ratio kept the handle sits in the
+   bar and costs nothing. A 16:9 Wii U GamePad view loses that corner. When the volume
+   changes (FN + D-pad still works through the shell) the handle shows the new level for a
+   moment instead of its icon.
 
-The volume OSD over HIDDEN without the handle is not done: it would need a
-surface over the game's touch screen for 1.5 s on every key press (stealing
-the taps under it), or a second, OSD-only widget tree for the panel's
-surface. With the handle on, the handle is that OSD.
+There's no volume popup over HIDDEN without the handle. It would need a surface over the
+game's touch screen on every key press, eating the taps under it. With the handle on, the
+handle is that popup.
 """
 import logging
 import os
@@ -109,12 +76,12 @@ KEY_OVERLAY_ON_HIDDEN = ("command_center", "overlay_on_hidden")
 KEY_CORNER_HANDLE = ("command_center", "corner_handle")
 CORNERS = ("off", "top-left", "top-right", "bottom-left", "bottom-right")
 
-OVERLAY_TIMEOUT_S = 20      # auto-close when command_center.auto_close_timeout_s is 0 ("never")
-HANDLE_PX = 96              # ~6 mm at the panel's ~15.8 px/mm
+OVERLAY_TIMEOUT_S = 20  # auto-close when command_center.auto_close_timeout_s is 0 (never)
+HANDLE_PX = 96  # about 6 mm at the panel's ~15.8 px/mm
 HANDLE_RECHECK_S = 5.0      # re-read the tree while the handle is up (undock stays HIDDEN)
 FLASH_S = 1.5               # the handle shows a changed level this long (main.OSD_SECONDS)
 
-# The home tiles shown in OVERLAY: screens.OVERLAY_TILES (Mixer, HUD) + Close.
+# the home tiles shown in OVERLAY: screens.OVERLAY_TILES plus Close
 
 PULL = summon.PullDownStateMachine
 
@@ -149,25 +116,23 @@ The hotkey-enable+Back swap in melonDS and DraStic need one device check."""
 # Pure helpers
 # ---------------------------------------------------------------------------
 def setting_overlay_on_hidden(cfg):
-    """command_center.overlay_on_hidden; True when absent or invalid (the
-    config.py schema entry arrives with patches/CC5-config.patch)."""
+    """command_center.overlay_on_hidden, True when missing or invalid."""
     v = config.get_value(cfg, KEY_OVERLAY_ON_HIDDEN)
     return v if isinstance(v, bool) else True
 
 
 def setting_corner_handle(cfg):
-    """command_center.corner_handle; "off" when absent or invalid."""
+    """command_center.corner_handle, "off" when missing or invalid."""
     v = config.get_value(cfg, KEY_CORNER_HANDLE)
     return v if v in CORNERS else "off"
 
 
 def hidden_cause(reason):
-    """Why sway_ipc.compute_mode() said HIDDEN, from its reason string:
-    "window" (a foreign window owns the panel's output - an emulator's
-    second screen), "undocked", "absent" (the panel's own output is gone),
-    or None (not a HIDDEN reason this knows). tests/test_cc5_overlay.py
-    derives the reasons from compute_mode() itself, so a changed wording
-    there turns a test red instead of silently disabling the overlay."""
+    """Why sway_ipc.compute_mode() said HIDDEN, from its reason string: "window" (an emulator's
+    second screen owns the panel's output), "undocked", "absent" (the panel's output is gone), or
+    None. test_cc5_overlay builds the reasons from compute_mode() itself, so changed wording there
+    turns a test red instead of quietly turning the overlay off.
+    """
     r = reason or ""
     if r.startswith("foreign window on "):
         return "window"
@@ -179,7 +144,7 @@ def hidden_cause(reason):
 
 
 def corner_anchor(corner, wl):
-    """Layer-shell anchor bits for a corner name (None for "off")."""
+    """layer shell anchor bits for a corner name (None for "off")"""
     return {
         "top-left": wl.ANCHOR_TOP | wl.ANCHOR_LEFT,
         "top-right": wl.ANCHOR_TOP | wl.ANCHOR_RIGHT,
@@ -189,8 +154,9 @@ def corner_anchor(corner, wl):
 
 
 def level_of(master):
-    """(volume rounded to 0.001, muted) from an audio.get_master() dict, or
-    None when it is not a real reading."""
+    """(volume rounded to 0.001, muted) from an audio.get_master() dict, or None when it isnt a
+    real reading.
+    """
     if not master or master.get("state") != "ok" or master.get("volume") is None:
         return None
     return round(master["volume"], 3), master.get("muted")
@@ -202,14 +168,14 @@ def level_changed(prev, new):
 
 
 def _read_overlay_peer(run_dir):
-    """SW1's game-screen overlay state (None if it is not running)."""
+    """the game-screen overlay's state (None if it isnt running)"""
     return screen_swap.read_peer_state(os.path.join(run_dir, "overlay", "state.json"))
 
 
 def paint_handle(g, w, h, level=None):
-    """Draw the corner handle into a Canvas-like `g` of w x h: a dark tile
-    with a speaker (the Command Center's volume), or - for FLASH_S after a
-    volume change - the new level as a percentage (level = (volume, muted))."""
+    """Draws the corner handle into a Canvas-like g of w x h: a dark tile with a speaker, or for
+    FLASH_S after a volume change the new level as a percentage (level = (volume, muted)).
+    """
     import screens
     from ui import THEME
     g.fill_rect((0, 0, w, h), THEME["bar"])
@@ -228,26 +194,27 @@ def paint_handle(g, w, h, level=None):
 
 
 # ---------------------------------------------------------------------------
-# The controller (UI thread; no SDL needed - tests drive the real one)
+# The controller (UI thread, no SDL needed, tests drive the real one)
 # ---------------------------------------------------------------------------
 class OverlayController:
     """Owns OVERLAY for one main.App. main.App calls:
 
-      intercept_mode(mode, reason) first thing in on_mode (True = swallow)
-      apply_layer(mode)            before (re)mapping the surface
-      after_mode(old, new, reason) at the end of on_mode
-      after_pull(old, new, reason) at the end of on_pull
-      on_summon(ev)                from on_summon_button (True = handled)
-      activity()                   on every touch
-      on_master(prev, m)           on every master reading
-      config_changed()             a command_center.* setting changed
-      handle_event(etype, window_id, finger_id) for SDL input (True = ours)
-      render_handle()              once per loop iteration
-      state(), shutdown()
+          intercept_mode(mode, reason) first thing in on_mode (True = swallow)
+          apply_layer(mode)            before (re)mapping the surface
+          after_mode(old, new, reason) at the end of on_mode
+          after_pull(old, new, reason) at the end of on_pull
+          on_summon(ev)                from on_summon_button (True = handled)
+          activity()                   on every touch
+          on_master(prev, m)           on every master reading
+          config_changed()             a command_center.* setting changed
+          handle_event(etype, window_id, finger_id) for SDL input (True = ours)
+          render_handle()              once per loop
+          state(), shutdown()
 
-    query() -> (mode, reason) re-reads sway's tree (read-only); tests pass
-    a fake. handle_factory(app, output) -> a handle object (see SdlHandle);
-    None means "SdlHandle when SDL is up, else no handle"."""
+    query() -> (mode, reason) rereads sway's tree read only, tests pass a fake.
+    handle_factory(app, output) makes the handle, None means SdlHandle when SDL is up, else no
+    handle.
+    """
 
     def __init__(self, app, query=None, handle_factory=None, peer_state=None):
         self.app = app
@@ -256,7 +223,7 @@ class OverlayController:
         self.peer_state = peer_state or (lambda: _read_overlay_peer(self.app.run_dir))
         self.handle = None
         self.handle_error = None
-        self.handle_blocked = None      # a recheck said "not a game window": why
+        self.handle_blocked = None  # why a recheck said it's not a game window
         self.hidden_reason = None       # the watcher's HIDDEN reason the overlay sits on
         self.leaving = False
         self.verifying = False
@@ -269,7 +236,7 @@ class OverlayController:
         self.ended = 0
         self.refusals = 0
         self.last_refusal = None
-        self.events = []                # [what, reason, t] (last 12, for state.json)
+        self.events = []  # [what, reason, t], last 12, for state.json
 
     # -- settings ----------------------------------------------------------
     def enabled(self):
@@ -277,6 +244,34 @@ class OverlayController:
 
     def corner(self):
         return setting_corner_handle(self.app.cfg)
+
+    def allowed(self, cause):
+        """May the overlay open over a panel HIDDEN for `cause`? Over an emulator's
+        window, and undocked, where the panel's screen is the only one."""
+        return cause in ("window", "undocked")
+
+    def handle_corner(self):
+        """Where the floating button goes: the corner picked in Settings, "off" by default so
+        theres no icon over the game (the Back button still opens it)."""
+        return self.corner()
+
+    def over_steam(self):
+        running = getattr(getattr(self.app, "companion", None), "running", None)
+        return getattr(running, "system", "") == "steam"
+
+    def _offer_settings_over_steam(self):
+        """Steam is a place to work from, not a game to protect, and the Steam page of Settings has to be
+        reachable while it is open."""
+        home = self.app.ui.cc.home
+        base = tuple(t for t in home.overlay_tiles if t != "home.settings")
+        home.overlay_tiles = base + ("home.settings",) if self.over_steam() else base
+
+    def over_game(self):
+        """Show the over-a-game tiles (Mixer, HUD, Hotkeys, Performance, Notes, Quit game), or
+        the full Command Center when its opened over ES itself (undocked)."""
+        if hidden_cause(self.hidden_reason) == "window":
+            return True
+        return getattr(getattr(self.app, "companion", None), "running", None) is not None
 
     def takes_summon(self):
         """The panel answers Back while HIDDEN because of an emulator window
@@ -301,13 +296,13 @@ class OverlayController:
         wl = self.app.wl
         if mode == OVERLAY:
             return getattr(wl, "LAYER_OVERLAY", 3)
-        level = getattr(self.app, "layer_level", None)      # SW1's hook, once merged
+        level = getattr(self.app, "layer_level", None)  # the game-screen overlay's hook
         return level() if level is not None else getattr(wl, "LAYER_TOP", 2)
 
     def apply_layer(self, mode):
-        """Put the panel's surface on the layer `mode` needs, before it is
-        (re)mapped: the request is double-buffered and lands with the
-        show()/set_geometry() commit that follows."""
+        """Puts the panel's surface on the layer `mode` needs before it's (re)mapped. The request lands
+        with the show()/set_geometry() commit that follows.
+        """
         set_layer = getattr(self.app.layer, "set_layer", None)
         if set_layer is not None:
             set_layer(self.layer_for(mode))
@@ -319,10 +314,10 @@ class OverlayController:
         if mode == OVERLAY:
             return True
         if mode == HIDDEN and hidden_cause(reason) == "window":
-            self.hidden_reason = reason     # the game's window is still there: stay up
+            self.hidden_reason = reason  # the game's window is still there, stay up
             return True
-        # The window went away (FULL / BAR) or the screen did (undocked):
-        # the overlay ends, and on_mode carries on to that mode.
+        # The window went away (FULL/BAR) or the screen did (undocked). The overlay ends and on_mode
+        # carries on to that mode.
         self._close_parts("overlay_end_%s" % str(mode).lower())
         self.ended += 1
         log.info("CC5 overlay ended by mode %s (%s)", mode, reason)
@@ -342,9 +337,9 @@ class OverlayController:
 
     # -- opening ------------------------------------------------------------------
     def on_summon(self, ev):
-        """The summon button. Handles it (True) in OVERLAY (closes) and in
-        HIDDEN (opens, or refuses with a logged reason); False otherwise, so
-        main.App keeps its FULL / BAR behaviour unchanged."""
+        """The summon button. Handles it (True) in OVERLAY by closing and in HIDDEN by opening or
+        refusing with a logged reason. False otherwise so main.App keeps its FULL/BAR behaviour.
+        """
         app = self.app
         if app.mode not in (HIDDEN, OVERLAY):
             return False
@@ -367,8 +362,9 @@ class OverlayController:
         self.request_open("corner_handle")
 
     def request_open(self, reason):
-        """Re-read sway's tree once (the watcher's reason may be stale), then
-        open if the panel is still HIDDEN because of an emulator window."""
+        """Rereads sway's tree once (the watcher's reason may be stale), then opens if the panel is
+        still HIDDEN for a reason the overlay allows.
+        """
         app = self.app
         if app.mode != HIDDEN:
             self._refuse("mode is %s, not HIDDEN" % app.mode)
@@ -399,10 +395,10 @@ class OverlayController:
         except (TypeError, ValueError):
             mode, why = None, "unreadable query result"
         if mode is None:
-            # sway could not be asked: fall back to the watcher's own reason
+            # couldnt ask sway, fall back to the watcher's own reason
             log.warning("CC5: tree re-read failed (%s); using the watcher's reason", why)
             mode, why = HIDDEN, app.mode_reason
-        if mode != HIDDEN or hidden_cause(why) != "window":
+        if mode != HIDDEN or not self.allowed(hidden_cause(why)):
             self._refuse("not an emulator window on the panel's screen (%s: %s)" % (mode, why))
             return
         self.open(reason, why)
@@ -415,7 +411,8 @@ class OverlayController:
         app.on_mode(OVERLAY, "CC5 overlay (%s) over: %s" % (reason, self.hidden_reason))
         if app.mode != OVERLAY:
             return False
-        app.ui.set_overlay(True)
+        self._offer_settings_over_steam()
+        app.ui.set_overlay(self.over_game())
         app.pull.open(reason)
         app._request_master()           # show the current level, not the last one seen
         self._arm_timeout()
@@ -426,13 +423,13 @@ class OverlayController:
 
     # -- closing -----------------------------------------------------------------
     def _close_parts(self, reason):
-        """Everything but the mode change: timer, fingers, pull-down, tiles."""
+        """everything but the mode change: timer, fingers, pull-down, tiles"""
         app = self.app
         self.leaving = True
         try:
             self._cancel(self.timer)
             self.timer = None
-            app.router.cancel_all()     # a finger on the slider: restored, never committed
+            app.router.cancel_all()  # a finger on the slider gets restored, never committed
             if app.pull.is_open():
                 app.pull._goto(PULL.COMPANION, reason)
             app.ui.set_overlay(False)
@@ -440,8 +437,7 @@ class OverlayController:
             self.leaving = False
 
     def dismiss(self, reason):
-        """Close the overlay: unmap (back to HIDDEN), so the emulator gets
-        its touch area back."""
+        """Closes the overlay by unmapping (back to HIDDEN) so the emulator gets its touch area back."""
         app = self.app
         if app.mode != OVERLAY or self.leaving:
             return
@@ -457,10 +453,10 @@ class OverlayController:
 
     # -- auto-close -----------------------------------------------------------------
     def timeout_s(self):
-        """The overlay's own countdown: only when the Command Center's
-        auto-close is 0 ("never") - otherwise the pull-down's countdown runs
-        (main.App._cc_tick) and closes it through after_pull. Over a game a
-        forgotten overlay would keep the touch screen away from it."""
+        """The overlay's own countdown, only when the Command Center's auto-close is 0 (never).
+        Otherwise the pull-down's countdown (main.App._cc_tick) closes it through after_pull. Over a
+        game a forgotten overlay would keep the touch screen from it.
+        """
         pull = self.app.pull
         if pull is not None and pull.auto_close_timeout_s:
             return None
@@ -478,8 +474,8 @@ class OverlayController:
         app = self.app
         if app.mode != OVERLAY:
             return
-        if app.ui.bar.slider.dragging or app.ui.mixer.dragging():
-            self._arm_timeout()         # a finger is still on a slider
+        if app.ui.bar.slider.dragging or app.ui.mixer.dragging() or getattr(app, "charge_warning_on", False):
+            self._arm_timeout()         # a finger on a slider, or the charger warning is up
             return
         self.dismiss("timeout")
 
@@ -500,8 +496,8 @@ class OverlayController:
     # -- the corner handle ----------------------------------------------------------
     def handle_wanted(self):
         app = self.app
-        return (self.corner() != "off" and app.mode == HIDDEN
-                and hidden_cause(app.mode_reason) == "window" and self.handle_blocked is None)
+        return (self.handle_corner() != "off" and app.mode == HIDDEN
+                and self.allowed(hidden_cause(app.mode_reason)) and self.handle_blocked is None)
 
     def _make_handle(self):
         if self.handle is not None or self.handle_error is not None:
@@ -524,7 +520,7 @@ class OverlayController:
             h = self._make_handle()
             if h is None:
                 return
-            h.show(self.corner(), self.app.output)
+            h.show(self.handle_corner(), self.app.output)
             self._arm_recheck()
         else:
             if self.handle is not None:
@@ -553,16 +549,17 @@ class OverlayController:
         except (TypeError, ValueError):
             return
         if mode is None:
-            return                      # unknown: keep what is there
-        if mode != HIDDEN or hidden_cause(why) != "window":
+            return  # unknown, keep what's there
+        if mode != HIDDEN or not self.allowed(hidden_cause(why)):
             self.handle_blocked = "%s: %s" % (mode, why)
             log.info("CC5: corner handle hidden (%s)", self.handle_blocked)
             self._note("handle_hidden", self.handle_blocked)
             self._apply_handle()
 
     def on_master(self, prev, m):
-        """A volume change while the handle is up (FN + D-pad: the add-on
-        shell only covers the side keys): the handle shows the level."""
+        """A volume change while the handle is up (FN + D-pad, the shell only covers the side keys)
+        makes the handle show the level.
+        """
         h = self.handle
         if h is None or not h.visible or not level_changed(prev, m):
             return
@@ -628,15 +625,15 @@ class OverlayController:
 
 
 # ---------------------------------------------------------------------------
-# The corner handle's surface (device: SDL3 + wl_layer; tests use a fake)
+# The corner handle's surface (SDL3 + wl_layer on the device, a fake in tests)
 # ---------------------------------------------------------------------------
 class SdlHandle:
-    """A second SDL window with a custom-role wl_surface, given the layer
-    role by wl_layer.LayerSurface: OVERLAY layer, corner anchor, HANDLE_PX
-    square, exclusive zone 0, keyboard NONE. Created on first use, so a
-    panel with the handle off never makes a second window. Its touches come
-    through SDL tagged with window_id; main.App hands them over via
-    OverlayController.handle_event()."""
+    """A second SDL window with a custom role wl_surface, given the layer role by
+    wl_layer.LayerSurface: OVERLAY layer, corner anchor, HANDLE_PX square, exclusive zone 0,
+    keyboard NONE. Made on first use, so with the handle off there's never a second window. Its
+    touches come through SDL tagged with window_id, and main.App passes them to
+    OverlayController.handle_event().
+    """
 
     def __init__(self, app, output):
         import ctypes
@@ -657,7 +654,7 @@ class SdlHandle:
         sdl.SetBooleanProperty(props, b"SDL.window.create.opengl", True)
         sdl.SetNumberProperty(props, b"SDL.window.create.width", HANDLE_PX)
         sdl.SetNumberProperty(props, b"SDL.window.create.height", HANDLE_PX)
-        # Never "Bottom"/"Secondary"/"Screen 2" in a title (ROCKNIX's rules).
+        # never "Bottom", "Secondary" or "Screen 2" in a title, ROCKNIX's rules match on those
         sdl.SetStringProperty(props, b"SDL.window.create.title", b"rp5deck-handle")
         self.win = sdl.CreateWindowWithProperties(props)
         sdl.DestroyProperties(props)
@@ -682,7 +679,7 @@ class SdlHandle:
                 size=(HANDLE_PX, HANDLE_PX), exclusive_zone=0, keyboard=wl.KEYBOARD_NONE,
                 log=lambda m: log.info("handle: %s", m))
             self.layer.create()
-            self.layer.hidden = True    # nothing presented yet: not mapped (wl_layer.hide docs)
+            self.layer.hidden = True  # nothing presented yet so it's not mapped (see wl_layer.hide)
         except Exception:
             self.destroy()
             raise
@@ -691,7 +688,7 @@ class SdlHandle:
     def show(self, corner, output):
         wl = self.wl
         if output != self.output:
-            self.layer.rebind(output)   # SW1 moved the panel: the handle follows
+            self.layer.rebind(output)  # the panel moved screens, the handle follows
             self.output = output
             self.dirty = True
         anchor = corner_anchor(corner, wl)
@@ -716,7 +713,7 @@ class SdlHandle:
             self.dirty = True
 
     def on_input(self, etype, finger_id):
-        """True on a completed tap (down then up on the handle)."""
+        """True on a finished tap (down then up on the handle)."""
         sdl = self.sdl
         if etype == sdl.EV_FINGER_DOWN or etype == sdl.EV_MOUSE_DOWN:
             self._down.add(finger_id)
@@ -754,7 +751,7 @@ class SdlHandle:
                 if self.layer else None}
 
     def destroy(self):
-        # the layer role goes before SDL destroys the wl_surface (main.py's order)
+        # the layer role goes before SDL destroys the wl_surface (same order as main.py)
         sdl = self.sdl
         if self.layer is not None:
             try:

@@ -1,52 +1,44 @@
 #!/usr/bin/env python3
-"""cc_overlay - SW1: the Command Center on the GAME / ES screen.
+"""cc_overlay: the Command Center on the game / ES screen.
 
     python3 cc_overlay.py [--seconds N] [--output NAME]
 
-The owner: "command center should be able to be used on both screens". The
-main panel (main.py) lives on the screen ES is not on. This second process
-puts the same Command Center on the screen ES IS on, as a pull-down over the
-game:
+The Command Center should work on both screens. The main panel (main.py) is on the screen ES
+isnt on, and this second process puts the same Command Center on the screen ES is on, as a
+pull-down over the game:
 
-  closed   a small pull tab in the top-right corner of the game screen
-           (TAB_W x TAB_H; on 4:3 games that corner is black pillarbox). The
-           rest of the game screen is not covered - the surface is only as
-           big as the tab. Off with command_center.game_screen_tab; then
-           nothing at all is mapped while closed.
-  open     tap the tab, or drag it down: the Command Center covers the whole
-           game screen - volume first, Mixer, HUD, Swap screens. Close /
-           Back / swipe up / the auto-close timeout close it.
+  closed   a small pull tab in the top right corner of the game screen (TAB_W x TAB_H, on
+           4:3 games that corner is black bar). Nothing else is covered, the surface is only
+           as big as the tab. Turn it off with command_center.game_screen_tab and nothing is
+           mapped while closed.
+  open     tap the tab or drag it down and the Command Center covers the game screen: volume
+           first, Mixer, HUD, Swap screens. Close, Back, swipe up or the auto-close timeout
+           close it.
 
-Focus: a zwlr_layer_surface_v1 on the OVERLAY layer (above fullscreen ES and
-games; the main panel's TOP layer would be hidden under them) with keyboard
-interactivity NONE - the same rule as the main panel (DESIGN.md E1): a tap
-never takes keyboard focus, so the controls stay with the game throughout.
+It's a zwlr_layer_surface_v1 on the OVERLAY layer (above fullscreen ES and games, the main
+panel's TOP layer would be under them) with keyboard interactivity NONE like the main panel,
+so a tap never takes keyboard focus and the controls stay with the game.
 
-Which screen: screen_swap.ScreenWatcher, placement.es_output - ES as sway
-shows it, so the overlay follows a swap live (wl_layer.rebind). Undocked
-it stays unmapped (DSI-1), like the main panel.
+The screen comes from screen_swap.ScreenWatcher's placement.es_output, ES as sway shows it,
+so it follows a swap live (wl_layer.rebind). Undocked it stays unmapped, like the main panel.
 
-The Back button (command_center.hardware_button) opens it here only when
-the main panel cannot show its own Command Center - the panel's state.json
-says it is not FULL (a DS game owns that screen, BAR, undocked) or the panel
-is not running - so "the Back button summons on the non-ES screen by
-default" and the Command Center is still one press away when that screen is
-taken. Back closes it again. CC5: when the panel is HIDDEN because an
-emulator's second window owns its screen, the panel opens its OWN Command
-Center over that window (hidden_overlay.py) if its state.json says
-"cc5": {"takes_summon": true}; this process then leaves the press alone
-(panel_takes_summon). With command_center.overlay_on_hidden off, it opens
-here as before.
+The Back button (command_center.hardware_button) only opens it here when the main panel cant
+show its own Command Center: the panel's state.json says it isnt FULL (a DS game owns that
+screen, BAR, undocked) or the panel isnt running. So Back opens on the non-ES screen by default
+and the Command Center is still one press away when that screen is taken, and Back closes it
+again. When the panel is HIDDEN because an emulator's second window owns its screen, the panel
+opens its own Command Center over that window (hidden_overlay.py) if its state.json says
+"cc5": {"takes_summon": true}, and this process leaves the press alone (panel_takes_summon).
+With command_center.overlay_on_hidden off it opens here like before.
 
-Not here (one writer per setting, one place per app): Settings, Browser,
-YouTube and Discord stay on the main panel; the overlay hides those tiles.
-Its one config write is "Swap screens" (config.save_changes, read-modify-
-write, so the main panel's own saves cannot undo it). It re-reads
-config.json every CONFIG_POLL seconds for the tab / timeout / swipe settings.
+One writer per setting and one place per app, so Settings, Browser, YouTube and Discord stay
+on the main panel and the overlay hides those tiles. Its one config write is Swap screens
+(config.save_changes, read-modify-write, so the main panel's saves cant undo it). It rereads
+config.json every CONFIG_POLL seconds for the tab, timeout and swipe settings.
 
-Runs under the 094 supervisor (its own restart loop, warning-only give-up,
-kill switch /storage/.disable-rp5deck-overlay). Logs to rp5deck-overlay.log,
-state to $RP5DECK_RUN_DIR/overlay/state.json.
+Runs under the launcher (its own restart loop, gives up with a warning only, kill switch
+/storage/.disable-rp5deck-overlay). Logs to rp5deck-overlay.log, state to
+$RP5DECK_RUN_DIR/overlay/state.json.
 """
 import logging
 import os
@@ -57,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import charge_stuck_view  # noqa: E402  (the charger warning sheet)
 import config       # noqa: E402
 import main         # noqa: E402
 import palettes     # noqa: E402  (Appearance)
@@ -69,44 +62,50 @@ from sway_ipc import FULL, HIDDEN   # noqa: E402
 
 log = logging.getLogger("rp5deck.overlay")
 
-TAB = "TAB"                 # overlay mode: only the pull tab is mapped
+TAB = "TAB"  # overlay mode, only the pull tab is mapped
 TAB_W, TAB_H = 260, 96
 TAB_SWIPE = {"edge": TAB_H, "distance": 36}     # a short drag on the tab opens it
 CONFIG_POLL = 2.0
-OVERLAY_TILES = ("home.mixer", "home.hud", swap_ui.SWAP_TILE_NAME)
+OVERLAY_TILES = ("home.mixer", "home.hud", "home.hotkeys", "home.perf", "home.quitgame",
+                 swap_ui.SWAP_TILE_NAME)  # plus Hotkeys, Performance, Quit game
 PULL = summon.PullDownStateMachine
 CC5_MODES = ("HIDDEN", "OVERLAY")
 
 
 def panel_takes_summon(panel):
-    """CC5 (hidden_overlay.py): the main panel answers the Back button itself
-    while an emulator's second window owns its screen - it opens its own
-    Command Center over that window (OVERLAY) and closes it again. Its
-    state.json says so with "cc5": {"takes_summon": true} (the setting
-    command_center.overlay_on_hidden, and a running button reader). Then
-    this process must not open a second Command Center on the same press.
-    The flag is static for the press (a setting), not the panel's current
-    OVERLAY/HIDDEN state, so reading state.json up to 0.1 s late cannot
-    make both open or neither. An undocked panel is HIDDEN too, but this
-    process never opens undocked anyway (on_summon_button returns first)."""
+    """The main panel answers Back itself while an emulator's second window owns its screen, opening
+    its own Command Center over that window (OVERLAY) and closing it again. Its state.json says so
+    with "cc5": {"takes_summon": true} (command_center.overlay_on_hidden plus a running button
+    reader), and then this process mustnt open a second one on the same press. The flag is a
+    setting, fixed for the press, not the panel's current OVERLAY/HIDDEN state, so reading
+    state.json up to 0.1 s late cant make both open or neither. An undocked panel is HIDDEN too,
+    but this never opens undocked anyway (on_summon_button returns first).
+    """
     if not panel or panel.get("mode") not in CC5_MODES:
         return False
     return bool((panel.get("cc5") or {}).get("takes_summon"))
 
 
 class OverlayUI(screens.DeckUI):
-    """DeckUI with the pull tab as its "companion" view (what shows while
-    closed) and only the tiles that belong on the game screen."""
+    """DeckUI with the pull tab as its "companion" view (what shows while closed) and only the tiles
+    that belong on the game screen.
+    """
 
     def __init__(self, handlers, w, h, title, tab):
         screens.DeckUI.__init__(self, handlers, w, h, title, companion=tab, settings=None)
         keep = []
-        for t in self.cc.home.tiles:
+        for t in self.cc.home.tiles + self.cc.home.overlay_only:  # the HUD lives there
             if t.name in OVERLAY_TILES:
+                t.set_visible(True)
                 keep.append(t)
             else:
                 t.set_visible(False)
         self.cc.home.tiles = keep
+        self.cc.home.overlay_only = []
+        # Home lays tiles out from its order and name map, which were built without the overlay-only HUD,
+        # so rebuild both from what this overlay keeps.
+        self.cc.home._tiles_by_name = {t.name: t for t in keep}
+        self.cc.home.order = [t.name for t in keep]
         self.set_size(w, h)
 
     def _apply_view(self):
@@ -138,10 +137,9 @@ class OverlayApp(main.App):
 
     # -- main.App hooks --------------------------------------------------------
     def heartbeat_path(self):
-        # SW2: 094-rp5deck checks this one by its OWN flat name
-        # (RP5DECK_HEARTBEAT_OVERLAY / <run>/heartbeat-overlay), never under
-        # self.run_dir's "overlay" subdirectory (that is state.json's own,
-        # separate convention - see main.App.state()/write_state()).
+        # command-center-app checks this one by its own flat name (RP5DECK_HEARTBEAT_OVERLAY /
+        # <run>/heartbeat-overlay), never under self.run_dir's "overlay" folder (that's where state.json
+        # goes, see main.App.state()/write_state()).
         return os.path.join(os.path.dirname(self.run_dir), "heartbeat-overlay")
 
     def layer_level(self):
@@ -179,6 +177,9 @@ class OverlayApp(main.App):
             self.io_worker = main.Worker("rp5deck-overlay-io", self.post)
         tab = swap_ui.PullTab(self.open_command_center)
         self.ui = OverlayUI(self, w, h, self.title, tab)
+        # the charger warning is a full-screen sheet, like on the main panel (set_charge_warning)
+        self.ui.add_sheet("charge_warning", screens.ChargeWarningSheet(
+            charge_stuck_view.HEADLINE, charge_stuck_view.LINES))
         cc = self.cfg.get("command_center") or {}
         self.pull = PULL(on_change=self.on_pull, swipe_down_enabled=True,
                          auto_close_timeout_s=int(cc.get("auto_close_timeout_s", 0) or 0),
@@ -229,6 +230,30 @@ class OverlayApp(main.App):
         self._apply_swipe_params()
         self._arm_cc_tick()
         self.state_dirty = True
+
+    def set_charge_warning(self, on):
+        """The charger warning on the game screen. The overlay never builds self.cc5 (the
+        hidden_overlay.OverlayController the main panel uses to open the Command Center over an
+        emulator's second screen), so the main panel's HIDDEN branch would crash it. The overlay
+        opens the Command Center with its own pull-down instead, over the game screen."""
+        if not on:
+            if self.charge_warning_on:
+                self.charge_warning_on = False
+                log.info("charge warning closed")
+                if self.ui.sheet == "charge_warning":
+                    self.ui.close()
+                    self.pull.close("charge warning closed")
+                    self.state_dirty = True
+            return
+        if not self.charge_warning_on:
+            log.warning("charge warning up")
+        self.charge_warning_on = True
+        if not self.pull.is_open():
+            self.pull.open("charge_warning")  # on_pull -> on_mode(FULL), over the game
+        if self.ui.sheet != "charge_warning":
+            self.ui.open("charge_warning")
+            self.ui.root.damage_all()
+            self.state_dirty = True
 
     def open_command_center(self):
         if self.docked and not self.pull.is_open():
@@ -284,12 +309,10 @@ class OverlayApp(main.App):
             return None
 
     def _config_poll(self):
-        """Settings the overlay follows live: the tab, the auto-close
-        timeout, swipe sensitivity - and now Appearance (this is a SEPARATE
-        process from main.py, with its own ui.THEME, so a theme change made
-        on the main panel only reaches this process by re-reading
-        config.json, same as everything else here). Read-only: never saves
-        the whole file."""
+        """Settings the overlay follows live: the tab, the auto-close timeout, swipe sensitivity and
+        Appearance. This is a separate process from main.py with its own ui.THEME, so a theme change on
+        the main panel only gets here by rereading config.json. Read only, never saves the whole file.
+        """
         sig = self._cfg_sig()
         if sig != self.cfg_sig:
             self.cfg_sig = sig
@@ -299,10 +322,8 @@ class OverlayApp(main.App):
                 config.get_value(self.cfg, ("command_center", "auto_close_timeout_s")) or 0)
             self._apply_swipe_params()
             palettes.apply_theme(self.cfg)
-            # See main.App.on_setting()'s "appearance" branch: mutating
-            # ui.THEME does not by itself get anything repainted - the
-            # whole surface must be marked damaged so the next frame
-            # actually redraws with the new theme.
+            # Like main.App.on_setting()'s "appearance" branch: changing ui.THEME doesnt repaint anything on
+            # its own, so the whole surface gets marked damaged and the next frame redraws in the new theme.
             if self.ui is not None:
                 self.ui.root.damage_all()
             if not self.pull.is_open() and self.mode != self._closed_mode():

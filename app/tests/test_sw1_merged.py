@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SW1 (screen swap: main.py, screens.py, 094-rp5deck), against the REAL merged files.
+"""SW1 (screen swap: main.py, screens.py, command-center-app), against the REAL merged files.
 
 I2 (24 Sep) applied patches/SW1-*.patch to the shipped files. The behaviour
 cases in tests/sw1_patched_cases.py used to run only inside a patched temp copy

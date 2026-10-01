@@ -41,12 +41,14 @@ _HDR = struct.Struct("=6sII")
 _MOVE_WS = re.compile(r"\[con_id=(\d+)\] move container to workspace (\S+)")
 _MOVE_OUT = re.compile(r"\[con_id=(\d+)\] move container to output (\S+)")
 _FOCUS = re.compile(r"\[con_id=(\d+)\] focus")
+_WORKSPACE = re.compile(r"workspace (?:number )?(\S+)")   # shows the workspace, focuses what is on it
 
 
 class Sim:
     def __init__(self, outputs=("DP-1", "DSI-1"), park_on="focused", focus_follows_source=False):
         self.order = list(outputs)
         self.current = {}               # output -> ws name
+        self.prev = {}                  # output -> the workspace it showed before (where an emptied one goes back to)
         self.ws = {}                    # ws name -> {"output", "tiling": [], "floating": []}
         self.win = {}                   # id -> dict(app_id, title, fullscreen, pid)
         self.focus = None               # ("con", id) | ("ws", name) | None
@@ -89,7 +91,22 @@ class Sim:
         del self.win[cid]
         if self.focus == ("con", cid):
             self.focus = ("ws", ws)
+        out = self.ws[ws]["output"]
+        if not (self.ws[ws]["tiling"] or self.ws[ws]["floating"]) and self.current.get(out) == ws:
+            # sway goes back to the workspace the output showed before when the one on screen empties
+            back = self.prev.get(out)
+            if back in self.ws and back != ws:
+                self._switch_to(back)
+                rest = self.ws[back]["tiling"] + self.ws[back]["floating"]
+                self.focus = ("con", rest[-1]) if rest else ("ws", back)
         self._reap()
+
+    def _switch_to(self, name):
+        out = self.ws[name]["output"]
+        old = self.current.get(out)
+        if old != name:
+            self.prev[out] = old
+            self.current[out] = name
 
     def ws_name_of(self, cid):
         for name, w in self.ws.items():
@@ -161,13 +178,23 @@ class Sim:
                 return {"success": False, "error": "Can't find output with name '%s'" % out}
             self._move(cid, self.current[out])
             return {"success": True}
+        m = _WORKSPACE.fullmatch(part)
+        if m:
+            name = m.group(1)
+            if name not in self.ws:
+                self.add_ws(name, self.focused_output())
+            self._switch_to(name)
+            rest = self.ws[name]["tiling"] + self.ws[name]["floating"]
+            self.focus = ("con", rest[-1]) if rest else ("ws", name)
+            self._reap()
+            return {"success": True}
         m = _FOCUS.fullmatch(part)
         if m:
             cid = int(m.group(1))
             if cid not in self.win:
                 return {"success": False, "error": "No matching node."}
             ws = self.ws_name_of(cid)
-            self.current[self.ws[ws]["output"]] = ws        # focusing shows its workspace
+            self._switch_to(ws)                             # focusing shows its workspace
             self.focus = ("con", cid)
             self._reap()
             return {"success": True}

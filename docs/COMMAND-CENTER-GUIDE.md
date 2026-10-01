@@ -1,6 +1,6 @@
-# Command Center (rp5deck) — User Guide
+# ROCKNIX Command Center (rp5deck) — User Guide
 
-**Status:** community project, tested on one Retroid Pocket 5; experimental parts are marked where they apply.
+**Status:** community project, tested on one Retroid Pocket 5; experimental parts are marked where they apply. This guide is for version 1.6.0. The project used to be called the Dual Screen Command Center.
 
 ## 1. What it is
 
@@ -17,6 +17,8 @@ It gives you, on the bottom screen:
 - A device-info (HUD) panel: battery, CPU/GPU, temperatures, fan, RAM,
   storage, Wi-Fi, uptime.
 - A web browser, a YouTube app, and Discord's web app.
+- Steam: while Steam is open, a library of your installed games as cover art, the running game's details on
+  the Companion, and stop controls in Clean state.
 - A manual viewer, a hotkey cheat sheet, stick-light controls, an on-screen
   keyboard toggle, a "Clean state" recovery button, a Sleep button, a
   battery charge limiter, and a screen-swap toggle.
@@ -41,7 +43,7 @@ button. Whatever game or menu has them, keeps them.
   mode (not "charge only" mode), for full functionality. With it attached:
   the add-on's screen ("top") shows EmulationStation and your games, and the
   RP5's own screen ("bottom") shows the Command Center.
-- A separate background service (`092-dual-screen-persist`, not part of
+- A separate background service (`dual-screen-layout-and-power`, not part of
   rp5deck itself — see [Installing](#2-installing-updating-removing)) that
   keeps this two-screen layout working across reboots. rp5deck depends on
   it; it does not replace it.
@@ -51,7 +53,37 @@ button. Whatever game or menu has them, keeps them.
 If the add-on isn't attached, EmulationStation and your games use the RP5's
 own screen full-screen, the same as on a Retroid Pocket 5 without this
 project at all. The Command Center stops drawing anything until the add-on
-is reconnected. The hardware volume buttons keep working either way.
+is reconnected - unless **Single-screen mode** is on (see
+[Single-screen mode](#single-screen-mode)), which also runs the Browser,
+Discord, the YouTube App and Steam on that one screen. The hardware volume
+buttons keep working either way.
+
+### Other ROCKNIX devices (untested)
+
+The Command Center is built and tested on the **Retroid Pocket 5 only**. The
+devices below run ROCKNIX and have the screens it needs, so it should work
+on them, but **none of them has been tested**. Screen sizes come from
+ROCKNIX's own device files and wiki; "unknown" means they were not found.
+
+| Device | Chip | Screens | Panel | Status |
+|---|---|---|---|---|
+| Retroid Pocket 5 (+ Dual Screen add-on) | SM8250 | 1, or 2 with the add-on | 1920x1080 | **Tested** |
+| Retroid Pocket Flip 2 (+ add-on) | SM8250 | 1, or 2 with the add-on | 1920x1080 class | Untested |
+| Retroid Pocket Mini / Mini V2 (+ add-on) | SM8250 | 1, or 2 with the add-on | unknown (4:3) | Untested |
+| AYN Thor / Thor Lite | SM8550 / SM8250 | 2 built in | unknown | Untested |
+| AYANEO Pocket DS | SM8550 | 2 built in | unknown | Untested |
+| Anbernic RG DS | RK3566 | 2 built in | 640x480 each | Untested |
+| Anbernic RG DS Plus | RK3566 | 2 built in | 1024x768 each | Untested |
+| Powkiddy X55 | RK3566 | 1 | 1280x720 | Untested (single-screen mode) |
+| Anbernic RG353P/M/V/VS, RG ARC-D/S | RK3566 | 1 | 640x480 | Untested (single-screen mode) |
+| Anbernic RG CubeXX | H700 | 1 | 720x720 | Untested (single-screen mode) |
+| Other ROCKNIX handhelds with a touch screen (Retroid Pocket 6 / Classic / Nova, AYN Odin 2 / Odin 3, AYANEO Pocket models, RG552, RG Vita Pro, GameForce ACE, ...) | various | 1 | unknown | Untested (single-screen mode) |
+
+Two things decide whether it works on a device: a **touch screen** (the
+Command Center is driven by touch - the gamepad stays the game's) and, for
+the two-screen layout, **two screens**. On one screen it runs in
+single-screen mode. Set **Settings > Screens > Screen size preset** if its
+buttons come out too big or too small.
 
 ## 2. Installing, updating, removing
 
@@ -68,7 +100,8 @@ address is shown at the top of that menu) and log in as `root`. The paths
 below refer to this project's repository: `app/` is the Command Center and
 `scripts/` holds the two system scripts. The rp5deck verify and install
 scripts (steps 3 and 4) refuse to run unless they detect a Retroid Pocket 5
-with the add-on attached and showing a picture. The hooks installer and
+with the add-on attached and showing a picture (set `TD_ALLOW_UNDOCKED=1` to
+run them without the add-on). The hooks installer and
 `scripts/install.sh` (steps 6 and 7) have no such check, so run them only
 on that hardware.
 
@@ -89,7 +122,7 @@ on that hardware.
    with `RESULT: build verified`.
 4. Install it: `sh testday/td3-install.sh install`. This:
    - backs up the current install (the app folder and the
-     `/storage/.config/autostart/094-rp5deck` autostart entry) to a
+     `/storage/.config/autostart/command-center-app` autostart entry) to a
      timestamped folder under `/storage/rp5deck-backups/`;
    - copies the new files to `/storage/rp5deck`, the app's running
      location;
@@ -110,7 +143,7 @@ on that hardware.
    EmulationStation with `systemctl restart essway` (never `sway.service`),
    because it only reads its hooks at startup.
 7. Copy `scripts/` to the device and run `sh install.sh` in it once. It
-   installs `092-dual-screen-persist` to `/storage/.config/autostart/` (the
+   installs `dual-screen-layout-and-power` to `/storage/.config/autostart/` (the
    layout daemon that keeps both screens set up across reboots and moves each
    dual-screen emulator's second window to the right screen, see
    [Dual-screen emulators](#9-dual-screen-emulators); it starts at the next
@@ -118,9 +151,20 @@ on that hardware.
    (`/storage/.config/dp-sleep-guard.sh` and
    `/storage/.config/system.d/dp-sleep-guard.service`, enabled). The sleep
    guard runs before **every** suspend, not only the Sleep tile's, and keeps
-   the add-on's screen from resetting the device (see [Sleep](#sleep)).
+   the add-on's screen from resetting the device (see [Sleep](#sleep)). The
+   daemon also puts a web app's window on its own workspace and
+   EmulationStation back on its own when you are on a single screen, so
+   update it together with the app when you update.
+8. Optional, for Steam: `sh /storage/rp5deck/steam/install-steam-nested.sh install`
+   (it comes with `app/`), then `systemctl restart essway`. It runs Steam
+   inside the desktop so the Command Center stays up (see
+   `app/steam/INSTALL.md`). Steam has to be set up on ROCKNIX already, and
+   `/storage/.local/share/Steam` has to be a real folder, the script warns if
+   it isn't. `sh install-steam-nested.sh remove` puts ROCKNIX's own launch
+   back, `status` shows where it stands.
 
 From a PC with Python 3 and `paramiko`, `scripts/deploy_rp5deck.py <name> --install`
+(add `--undocked` when the add-on isn't attached)
 does steps 1 to 5 over SSH, reading the connection details from environment
 variables or a local `rk_local.json` (see `scripts/rk.py`).
 
@@ -141,7 +185,9 @@ first and keeps your settings.
   [Dual-screen emulators](#9-dual-screen-emulators). Removing rp5deck does
   **not** undo this pin by itself — see the kill-switch table below if you
   want that behaviour back without rp5deck.
-- There is no separate "remove" script for the `092-dual-screen-persist`
+- Nested Steam comes out with `sh /storage/rp5deck/steam/install-steam-nested.sh remove`
+  (it removes its two files and puts ROCKNIX's own Steam launch back).
+- There is no separate "remove" script for the `dual-screen-layout-and-power`
   daemon yet; removing it means deleting its autostart file, or simply
   using its kill switch below.
 - There is likewise no uninstaller for the `dp-sleep-guard` suspend helper;
@@ -160,7 +206,7 @@ on):
 | `/storage/.disable-rp5deck` | Stops the whole Command Center app, its focus guard, and its game-screen pull tab. |
 | `/storage/.disable-rp5deck-focus-guard` | Stops only the focus guard; the Command Center itself keeps running. |
 | `/storage/.disable-rp5deck-overlay` | Stops only the small Command Center pull tab that can appear on the game/EmulationStation screen. |
-| `/storage/.disable-dualscreen` | Stops the `092-dual-screen-persist` daemon entirely, reverting to ROCKNIX's stock (non-persistent) dual-screen behaviour. |
+| `/storage/.disable-dualscreen` | Stops the `dual-screen-layout-and-power` daemon entirely, reverting to ROCKNIX's stock (non-persistent) dual-screen behaviour. |
 | `/storage/.rp5deck-keep-dual-flag` | Stops rp5deck from pinning ROCKNIX's `DEVICE_HAS_DUAL_SCREEN` setting to "off" at every start. |
 
 ## 3. First launch and the screen layout
@@ -213,17 +259,19 @@ Once open, the Command Center's home screen is a grid of tiles:
 | Tile | What it does |
 |---|---|
 | **Mixer** | Per-app volume sliders and mute — see [Volume and the Mixer](#volume-and-the-mixer). |
-| **HUD** | Device info: battery, CPU/GPU, temperatures, fan, RAM, storage, Wi-Fi, uptime — see [HUD](#hud-device-info). |
-| **Browser** | Firefox, on this screen — see [Browser](#browser). |
-| **Discord** | Discord's own web app, on this screen — see [Discord](#discord). |
-| **YouTube App** | The YouTube "TV" interface; sign in with a QR code — see [YouTube App](#youtube-app). |
 | **Hotkeys** | A cheat sheet of button combos — see [Hotkeys](#hotkeys). |
 | **Clean state** | Close apps, check EmulationStation — see [Clean state](#clean-state). |
 | **Settings** | Companion, screens, and every other setting in this guide. |
 | **Swap screens** | Puts the game on the other panel — see [Screen swap](#screen-swap). |
 | **Stick lights** | Thumb-stick RGB colour — see [Stick lights](#stick-lights-rgb). |
 | **Keyboard** | Type into emulator settings — see [On-screen keyboard](#on-screen-keyboard-toggle). |
-| **Sleep** | Suspend the device — see [Sleep](#sleep). |
+| **Power** | Sleep, Restart, Shut down (and Hibernate, once it works) — see [Power](#power). |
+| **Top screen** | Turns the add-on's screen *and its power* off to save battery — see [Top screen off](#top-screen-off). |
+| **Performance** | Auto / Max / Saver: how hard the CPU and GPU may run — see [Performance](#performance). |
+
+**HUD, Notes, Browser, Discord and YouTube App** are in the **tab strip** just
+above the tiles (they used to be tiles as well; the duplicates were removed).
+Over a running game, where there is no tab strip, the HUD tile still appears.
 
 A volume strip (mute, slider, level, battery, clock) always sits above the
 tiles, because — per the person who designed this — volume should always be
@@ -236,6 +284,9 @@ tiles to reorder them, and tap the eye badge in a tile's corner to hide or
 show it. Tap **Done** to save, or **Reset tile layout** to put everything
 back to the order shown above with nothing hidden. The **Settings** tile can
 never be hidden, so you can't lock yourself out of your own settings.
+**Settings › Command Center › Edit buttons…** opens the same mode without the
+long-press. When a new version adds or removes tiles, your arrangement is kept:
+new tiles are added at the end.
 
 ## 7. The Companion view
 
@@ -290,6 +341,20 @@ two pages at a time, and the next spread is pre-rendered in the background
 so turning feels instant. This was verified on the device with a real
 multi-page manual; page loads took about half a second the first time and
 were instant from cache afterwards.
+
+Tools along the bottom of the viewer:
+
+| Tool | What it does |
+|---|---|
+| **1 page / 2 pages** | One page at a time (bigger; best for landscape scans) or the two-page spread |
+| **Zoom − / Zoom +** | 100%, 150%, 200%, 300%. Pages are re-rendered at the zoomed size, so text stays sharp |
+| **Fit** | Back to 100% |
+| **First / Last** | Jump to the cover or the last page |
+
+Zoomed in, **drag** to move around the page. At 100%, a **sideways swipe**
+turns the page. Manuals whose pages are wider than a portrait page (landscape
+scans, two-page spreads scanned as one) now shrink to fit instead of running
+off both edges.
 
 ## 8. Command Center features
 
@@ -378,11 +443,14 @@ Opens Discord's own web app (`discord.com/app`) in the same browser profile
 as the Browser tile. Sign in however Discord's own web login normally
 offers (including its own "Log in with QR Code" option, if you'd rather not
 type a password on the device) — this is Discord's own page, not something
-rp5deck builds. This tile has not yet been tested on the real device; treat
-it as unverified for now.
+rp5deck builds. It has been opened, used and closed on the device, including
+on a single screen.
 
 ### App tabs
 
+The tab strip under the volume strip holds **Companion, HUD, Notes, Browser,
+Discord and YouTube App** (and an emulator's second screen while one is open,
+and **Steam** while Steam is open).
 While a Browser, Discord, or YouTube App window is open (the on-screen strip
 is showing just that app's controls), a **Tabs** button lets you jump
 straight to another running app — the Companion view, an emulator's second
@@ -434,8 +502,12 @@ A recovery button for when something's stuck. Tapping it first spends a
 moment checking what's actually running, then shows you the **exact list**
 of what it's about to stop — before anything happens. What it can close:
 the running game/emulator, the Browser/Discord window, the YouTube App, and
-the on-screen keyboard — but only things rp5deck itself started. It also
-turns the built-in touchscreen back on if a game left it disabled. If
+the on-screen keyboard — but only things rp5deck itself started. While Steam
+is open it also offers, on its own line, to stop the Steam game (Steam stays
+open) or to close Steam and go back to EmulationStation; Steam is only ever
+asked to quit, never force-killed, and none of this shows when Steam is
+closed. It also turns the built-in touchscreen back on if a game left it
+disabled. If
 EmulationStation itself looks frozen or unresponsive, Clean state can
 separately offer to restart just EmulationStation (never the whole window
 manager) — with its own extra confirmation when the evidence is
@@ -461,6 +533,80 @@ caused device resets on some builds — see
 [Known limitations](#12-known-limitations-and-troubleshooting). Use this
 button (or the equivalent on the game/EmulationStation screen) rather than
 the RP5's own power button where you can.
+
+### Notes
+
+The **Notes** tab is a notebook of pages for the bottom screen:
+
+- **Draw** (the default): draw with your finger. **Pen** cycles white, yellow,
+  cyan and red; **Undo** removes the last stroke.
+- **Type**: the on-screen keyboard appears; **New line** starts a new line.
+- **Clear** empties the page — it needs a second tap within 3 seconds, so one
+  stray tap cannot wipe it.
+- **Prev / Next / New page** page through the notebook.
+
+Everything is saved as you go to `/storage/rp5deck/notes/notebook.json`.
+Verified on the device: finger drawing (5 strokes, 216 points saved).
+
+### Power
+
+The **Power** tile (it replaced the Sleep tile, keeping its place in your
+layout) opens **Sleep**, **Restart** and **Shut down**. Restart and Shut down
+ask first. **Hibernate** is shown but disabled: it does not resume on this
+device yet.
+
+### Over a running game
+
+When the Command Center opens over a game (the dual-screen overlay), it shows
+**Mixer, HUD, Hotkeys, Performance, Notes** and **Quit game**, plus **Close**.
+Over Steam it also shows **Settings**. Quit game
+asks first, then closes the game the same way Clean state does (ES's own quit,
+then ROCKNIX's kill for that emulator) — anything since your last save is lost.
+
+### Top screen off
+
+The **Top screen** tile turns the add-on's display off. When the RP5 is the one
+powering the add-on it also cuts that power — measured on battery with
+EmulationStation idle: **3.0 W → 1.3 W**. (Turning only the display off saved
+about 0.3 W, which is why it cuts the power too.) EmulationStation moves to the
+RP5's own screen and the Command Center hides with the top screen, so a
+confirmation comes first. Turn it back on from **EmulationStation › Ports ›
+Top Screen On-Off**, or reboot — a reboot always brings the top screen back.
+With a charger plugged into the add-on, only the display goes off (the add-on
+is powering itself then).
+
+### Performance
+
+| Mode | What it does |
+|---|---|
+| **Auto** (default) | The GPU is capped at 587 MHz (or your *GPU overclock* value) for light games; Wii U, PS3, PS2, Vita, Xbox, Switch and GameCube/Wii games — and Steam, Wine or box64 while they use at least one CPU core — lift the cap to 925 MHz and run every CPU cluster at full speed, until 30 s after they stop |
+| **Max** | Always boosted |
+| **Saver** | Always capped, even for heavy games |
+
+Tap the **Performance** tile to cycle through the modes; its subtitle shows the
+current one. This also fixes a ROCKNIX bug where the GPU was never capped at all.
+
+### Brightness
+
+**Settings › Screens** has **Bottom screen brightness** (the RP5's own screen,
+a real backlight), **Top screen brightness** and **Match brightness**. The
+add-on has no brightness control the RP5 can reach, so the top slider dims it
+in software (sway's gamma) — it looks darker but does not save power. Turn on
+**Match brightness** once the two screens look alike: after that, moving the
+bottom slider moves the top one with it, at the same ratio.
+
+### Screensaver
+
+When EmulationStation's screensaver starts (its own timer and style, set in
+ES), the Command Center's screen follows: **dim** dims it, **black / random
+video / slideshow** turn it dark. Touch it, or press any button that wakes ES,
+and it comes back. A touch that wakes the screen does nothing else.
+
+### YouTube and your controller
+
+The YouTube App and the Browser can no longer read your controller (the Gamepad
+API is switched off in both), and tapping YouTube while a game runs gives the
+controller straight back to the game.
 
 ### Safe charge
 
@@ -530,13 +676,106 @@ The theme is saved in rp5deck's `config.json` like every other setting, so
 it survives restarts and updates. An unreadable or unknown value falls back
 to Default.
 
+### Button colours
+
+**Settings > Appearance > Button colours** changes the colour of the A, B, X
+and Y button pictures EmulationStation shows at the bottom of its screens,
+without changing the Command Center's own colours.
+
+- **Match screen theme** (the default) follows your colour theme: an RP5
+  edition theme gets that edition's buttons, the PlayStation and Dreamcast
+  themes get that pad's colours, anything else the Super Famicom colours the
+  icons came with.
+- Or pick one: **RP5 16 Bit, RP5 Black, RP5 White, RP5 GC, RP5 Yellow, RP5
+  Turquoise, Super Famicom, SNES (US), Xbox, PlayStation, Dreamcast,
+  GameCube, Plain grey**.
+
+Colours go by where the button sits, so a controller's colours land where
+your thumb expects them (Xbox green is the bottom button, the PlayStation
+red circle the right one). Only the RP5 16 Bit colours were sampled from
+Retroid's photos; the other RP5 editions are estimates from their names.
+EmulationStation shows the change after it restarts. On a device with 2, 3
+or 6 face buttons the setting is greyed out ("coming soon").
+
+### Screen size preset
+
+**Settings > Screens > Screen size preset** lays the Command Center out for
+a screen of that size and scales it to fit yours. **Auto** (the default)
+uses your screen's own size; on the RP5 that changes nothing. On a smaller
+screen the whole Command Center is shrunk to fit rather than cut off. Pick a
+smaller preset to make everything bigger, a larger one to make it smaller.
+Presets: 1920x1080 (RP5, Flip 2), 1280x720 (Powkiddy X55), 1024x768
+(RG DS Plus), 720x720 (RG CubeXX), 640x480 (RG353, RG ARC, RG DS).
+
+### Single-screen mode
+
+With one screen - the RP5 without the add-on, or a single-screen device -
+EmulationStation and your games have the whole screen. Turn on **Settings >
+Command Center > Single-screen mode** (or run **Ports > Command Center
+Single Screen On-Off** from EmulationStation) and the Command Center opens
+over them:
+
+- tap the small **floating button** in the top-right corner (move it with
+  **Corner handle**), or press the **summon button** (Back);
+- over EmulationStation you get the whole Command Center; over a running
+  game the game set (Mixer, HUD, Hotkeys, Performance, Quit game);
+- **Close**, Back again or swiping up puts it away. The game keeps running
+  and keeps the controller the whole time.
+
+The **Browser, Discord and YouTube App** work here too. Open one from the
+Command Center's tabs and it fills the screen, with a strip of controls at
+the bottom (the same strip as with the add-on):
+
+- **Tabs** jumps to another app. A new one opens beside the last, and an app
+  you have used before comes back where it was, no restart.
+- **Home** (the YouTube App's Home, or Tabs then Companion) goes back to
+  what is underneath, EmulationStation or Steam, and keeps the app running.
+- **Close** ends the app and lands on what is underneath.
+- Only one of them is on screen at a time, and the gamepad never goes to them.
+  The strip follows whichever one is showing.
+
+It is off until you turn it on. ROCKNIX's own "Bottom screen content" menu
+only offers its Virtual Console, so the Ports entry is the switch on the
+EmulationStation side for now.
+
+### Steam
+
+![The Steam tab: installed games as cover art, with a sort button](images/steam-library.png)
+
+Steam is a game launcher inside ROCKNIX, not a normal emulator, so on its
+own it takes the whole screen and stops the desktop the Command Center runs
+in. Turn on **nested Steam** once (see
+[Installing](#2-installing-updating-removing), step 8) and Steam runs inside
+the desktop instead, so the Command Center stays up with everything below.
+Steam features only appear while Steam is open.
+
+- **Companion:** the running Steam game's name, art, hours played, last
+  played, size, how long you have been playing and update progress. What
+  fills the bottom screen during a Steam game is **Settings > Steam >
+  During a Steam game, show** (the same choices as for other games, or
+  "Same as other games").
+- **Steam tab:** your installed games as cover art, last played first. Tap
+  one to start it in the open Steam, the Command Center then closes so the
+  game shows. The game that is running is marked **Playing**. The button
+  at the top left cycles **Recent, A-Z, Most played** for the session. More
+  than twelve games make pages, use the arrows at the top right. A game
+  with no cached art shows as a name card. If Steam closed meanwhile, the
+  tab says so and starts nothing.
+- **Clean state:** stop the Steam game (Steam stays open) or close Steam.
+- **Over Steam:** the summon button opens the Command Center with Mixer,
+  HUD, Hotkeys, Performance, Notes, Settings and Quit game.
+
+Steam's art and playtime come from Steam's own local files, nothing is sent
+anywhere, and the gamepad always stays with Steam. Achievements are not in
+those files so they are not shown.
+
 ### Settings, in full
 
 ![Settings, first tab](images/settings.png)
 
 The Settings tile opens a full-screen list with one tab per group:
 **Companion**, **Manuals**, **Command** (the Command Center itself),
-**Screens**, **Audio**, **YouTube**, **Battery**, **Appearance** and
+**Screens**, **Audio**, **YouTube**, **Steam**, **Battery**, **Appearance** and
 **About**. Stick lights have their own tile rather than a tab. Every setting
 mentioned by name earlier in this guide lives in one of these groups. A few keys exist in rp5deck's
 settings file but currently have **no on-screen control** — if you're
@@ -576,7 +815,7 @@ whole file whenever it saves, which can undo an edit made while it's
 running — then restart it (`systemctl restart essway`) afterwards.
 
 Once the setting is in place, the game's second window is automatically
-moved to the RP5's own screen (by the `092-dual-screen-persist` daemon, not
+moved to the RP5's own screen (by the `dual-screen-layout-and-power` daemon, not
 rp5deck itself), and the Command Center gets out of the way (see
 [Command Center over a game screen](#10-command-center-over-a-game-or-emulator-screen)
 below) so the game's own touch screen isn't covered.
@@ -600,9 +839,10 @@ so the next boot keeps them, and starts EmulationStation again.
 
 - **Over an emulator's second screen** (a running DS/3DS/Wii U game whose
   second screen is on the RP5's own panel): press the summon button (Back)
-  to pop a small Command Center over it, with just **Mixer**, **HUD**, and
-  a big **Close** — enough to check volume or device stats without leaving
-  the game. An optional small tap-target ("corner handle", off by default)
+  to pop a small Command Center over it, with **Mixer**, **HUD**,
+  **Hotkeys**, **Performance**, **Quit game** and a big **Close** — enough
+  to check volume, change the speed profile or quit without leaving the
+  game. An optional small tap-target ("corner handle", off by default)
   can be enabled as an alternative to the button, in one of the screen's
   corners.
 - **Over the game/EmulationStation screen**: a small pull tab in the corner
@@ -629,14 +869,28 @@ still needs the touch input for the game underneath.
 
   ![The charger banner on Home](images/banner-charger-not-charging.png)
 
-  Try the first step: unplug the charger from the add-on for 5 seconds and
-  plug it back in. If it still isn't charging a minute later, unplug the
-  charger, restart the RP5 on battery, and plug the charger in once
-  EmulationStation is back. That second path has always worked in testing;
-  restarting with the charger still plugged in is not recommended (see the
-  next point). **Dismiss** hides the banner until the next time you unplug
-  the charger. It never shows while the RP5 is powering the add-on on its
-  own, which is normal and drains the battery by design.
+  The order things are plugged in matters. The stuck state comes from the
+  add-on going onto the RP5 before its charger, so that for a moment the RP5
+  powers the add-on. To recover:
+  1. Unplug the add-on from the RP5.
+  2. Connect the charger to the add-on first.
+  3. Plug the add-on back into the RP5.
+
+  If it still isn't charging a minute later, unplug everything, restart the
+  RP5 on battery, and plug in the same way (charger into the add-on first)
+  once EmulationStation is back. Restarting with the charger still plugged in
+  is not recommended: in testing it came back up stuck.
+
+  **Dismiss** hides the banner until the next time you unplug the charger. It
+  never shows while the RP5 is powering the add-on on its own, which is
+  normal and drains the battery by design.
+- **Sleep is paused while the charger is stuck.** A suspend in that state
+  reset the RP5 in testing, so a small background guard
+  (`no-sleep-while-charger-stuck`) blocks sleep until charging works again. It
+  blocks the power key, the lid, and any other suspend request. While it's
+  active the power button doesn't put the RP5 to sleep. This works with or
+  without the top screen attached. The kill switch is
+  `/storage/.disable-charge-sleep-guard`.
 - Also see [Top screen not turning on with a charger connected](#12-known-limitations-and-troubleshooting)
   below, which is a related but separate issue.
 
@@ -645,12 +899,14 @@ still needs the touch input for the game underneath.
 | Symptom | Status | What to do |
 |---|---|---|
 | The add-on's screen stays dark after rebooting with a charger plugged in | Still being worked on; at such a boot the port never agrees a power contract with the charger, so the add-on's display link never starts. | Unplug the charger: the RP5 then powers the add-on itself and the screen comes back within a few seconds. Plug the charger in again once it is on. |
-| A charger plugged into the add-on doesn't charge the device | See [Charging with the add-on](#11-charging-with-the-add-on) above; the Command Center shows a banner when it happens. | Replug the charger; if that doesn't help, unplug, restart on battery, and plug in after boot. |
+| A charger plugged into the add-on doesn't charge the device | See [Charging with the add-on](#11-charging-with-the-add-on) above; the Command Center shows a banner when it happens. | Unplug the add-on, connect the charger to it first, then plug the add-on back in. If that doesn't help, unplug everything, restart on battery, and plug in the same way after boot. Sleep is paused until it charges. |
 | Dual-screen settings (3DS/DS/Wii U layout keys) disappear after a crash or an unclean shutdown | A background check and a Restore banner exist for this — see [Dual-screen emulators](#9-dual-screen-emulators). | Use the Restore button when the banner appears. |
-| A 3DS game used to freeze on launch until its window was moved by hand | **Fixed automatically.** A rule in the `092-dual-screen-persist` daemon now places the game's window correctly every time. | Nothing — this should no longer happen. |
+| A 3DS game used to freeze on launch until its window was moved by hand | **Fixed automatically.** A rule in the `dual-screen-layout-and-power` daemon now places the game's window correctly every time. | Nothing — this should no longer happen. |
 | The device resets instead of suspending, or doesn't wake properly, while the add-on's screen is on | A background helper now turns the add-on's screen off before suspending and waits for it to properly reconnect before turning it back on, specifically to prevent this. Use the Sleep button (or the equivalent on the game screen) rather than the power button where possible. | If the top screen doesn't come back within about 20 seconds of waking, check the add-on's connection; a reboot is a fallback if it stays dark. |
 | A game or emulator is completely stuck | — | Hold **L1 + Select + Start** together — this is ROCKNIX's own kill combo, not a rp5deck feature, and works regardless of what's frozen. |
-| Steam | Only one of two designs is active (Steam takes over the whole screen while running; the Command Center resumes automatically afterwards). A windowed/nested alternative exists in the project but is **not enabled and untested**. | No action needed under normal use. |
+| Steam takes over the screen and the Command Center goes away while it runs | That is ROCKNIX's own Steam launch, which stops the desktop. Nested Steam, installed with `install-steam-nested.sh`, avoids it and is what the Steam features need. | Install nested Steam (step 8 under Installing). Remove it the same way if you'd rather have ROCKNIX's launch. |
+| Steam tab pages | Paging past twelve games is covered by tests but has not been tried on the device, which has eleven games. | Should work, treat it as lightly tested. |
+| Steam achievements | Not in Steam's local files, so they are not shown. | — |
 | Real-finger touch dragging on sliders | The main volume slider has been dragged with a real finger on the device and behaves correctly (commits once, on release). Other sliders (per-app volume, Appearance's colour pickers, stick-light brightness) have mostly been checked with synthetic/injected touches during development, not yet a real finger. | Should work throughout, but treat the less-tested sliders as lightly tested. |
 
 ## 13. Where logs and settings live
@@ -659,12 +915,12 @@ still needs the touch input for the game underneath.
   unreadable, or has an invalid value in it, rp5deck falls back to defaults
   for whatever's wrong rather than failing to start — to get a completely
   fresh settings file, stop rp5deck, delete this file, and restart it.
-- **App logs**: `/storage/rp5deck/log/094-rp5deck.log` (the supervisor that
+- **App logs**: `/storage/rp5deck/log/command-center-app.log` (the supervisor that
   starts/restarts everything), `/storage/rp5deck/log/rp5deck.log` (the app
   itself), and `/storage/rp5deck/log/rp5deck-overlay.log` (the small
   Command Center that can appear over the game/EmulationStation screen).
 - **Dual-screen layout daemon's log**:
-  `/storage/.config/autostart/092-dual-screen-persist.log`.
+  `/storage/.config/autostart/dual-screen-layout-and-power.log`.
 - **Install backups**: `/storage/rp5deck-backups/<date-and-time>/`.
 
 ## 14. Uninstall
@@ -674,7 +930,22 @@ roll back the app with the install script, remove the EmulationStation
 hooks and restart EmulationStation, and use the `/storage/.disable-*` kill
 switches for anything you'd rather pause without fully removing it.
 
-## 15. Credits / licence
+## 15. Coming soon
+
+Not in this version, in rough order of how close they are:
+
+- **TV mode:** the Command Center on a TV with a gamepad, keyboard or mouse for control, and a mouse mode for
+  the web apps. Designed, not built.
+- **Hibernate:** the Power sheet shows it greyed out as "Work in progress". Suspend is the low-power mode
+  for now.
+- **A packaged installer:** installing is still copying files and running a few scripts (section 2). One
+  script that does all of it, Steam step included, is planned.
+- **Steam on the device:** paging through a big library, tried on a bigger library than ours.
+- **Upstream ROCKNIX fixes** the Command Center depends on or ships alongside (the charger follow-ups and a USB
+  suspend crash fix) are going to ROCKNIX as pull requests after its code freeze. Until they are merged
+  you need the project's kernel for the charging behaviour in section 11.
+
+## 16. Credits / licence
 
 The Command Center, its scripts and this guide are licensed under the GNU
 General Public License v2.0 (see `LICENSE` in the repository), the licence

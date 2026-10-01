@@ -1,11 +1,9 @@
-"""sdl3 - the slice of SDL 3.4.10 that rp5deck uses, through ctypes.
+"""sdl3: the part of SDL 3.4.10 rp5deck uses, through ctypes.
 
-Extracted from proto/proto.py and extended (hints, user events, rect uploads,
-vsync). Struct layouts are from SDL 3.4.10 SDL_events.h; the offset asserts
-at the bottom catch a wrong layout at import time instead of as garbage
-coordinates later.
+Struct layouts are from SDL 3.4.10's SDL_events.h, and the offset asserts at the bottom catch a
+wrong layout at import instead of as garbage coordinates later.
 
-Importing this module loads libSDL3.so.0, so tests never import it.
+Importing this loads libSDL3.so.0, so tests never import it.
 """
 import ctypes
 from ctypes import (POINTER, Structure, c_bool, c_char_p, c_float, c_int,
@@ -56,9 +54,9 @@ CreateTexture = _fn("SDL_CreateTexture", c_void_p, c_void_p, c_uint32, c_int, c_
 DestroyTexture = _fn("SDL_DestroyTexture", None, c_void_p)
 UpdateTexture = _fn("SDL_UpdateTexture", c_bool, c_void_p, POINTER(SDL_Rect), c_void_p, c_int)
 RenderTexture = _fn("SDL_RenderTexture", c_bool, c_void_p, c_void_p, c_void_p, c_void_p)
-# I1: the companion video gets its own XRGB8888 texture, drawn UNDER the
-# cairo UI texture; the UI texture is blended with premultiplied alpha (cairo
-# ARGB32 is premultiplied), so a transparent hole in the UI shows the video.
+# the companion video gets its own XRGB8888 texture drawn under the cairo UI texture. The UI
+# texture blends with premultiplied alpha (cairo ARGB32 is premultiplied), so a transparent hole
+# in the UI shows the video.
 SetTextureBlendMode = _fn("SDL_SetTextureBlendMode", c_bool, c_void_p, c_uint32)
 SetTextureScaleMode = _fn("SDL_SetTextureScaleMode", c_bool, c_void_p, c_int)
 SetRenderDrawColor = _fn("SDL_SetRenderDrawColor", c_bool, c_void_p, c_uint8, c_uint8,
@@ -76,18 +74,18 @@ PollEvent = _fn("SDL_PollEvent", c_bool, POINTER(SDL_Event))
 INIT_VIDEO = 0x20
 INIT_EVENTS = 0x4000
 PIXELFORMAT_ARGB8888 = 0x16362004   # == cairo ARGB32 on little-endian
-PIXELFORMAT_XRGB8888 = 0x16161804   # == mpv "bgr0" / cairo RGB24: 4th byte ignored
+PIXELFORMAT_XRGB8888 = 0x16161804  # == mpv "bgr0" / cairo RGB24, 4th byte ignored
 BLENDMODE_NONE = 0x00000000
 BLENDMODE_BLEND_PREMULTIPLIED = 0x00000010
 SCALEMODE_LINEAR = 1
 TEXTUREACCESS_STREAMING = 1
 TOUCH_MOUSEID = 0xFFFFFFFF          # mouse event synthesised from touch
 
-# Hint names (SDL_hints.h).
-HINT_TOUCH_MOUSE_EVENTS = b"SDL_TOUCH_MOUSE_EVENTS"     # "0": no mouse from touch
-HINT_MOUSE_TOUCH_EVENTS = b"SDL_MOUSE_TOUCH_EVENTS"     # "0": no touch from mouse
+# hint names (SDL_hints.h)
+HINT_TOUCH_MOUSE_EVENTS = b"SDL_TOUCH_MOUSE_EVENTS"  # "0", no mouse from touch
+HINT_MOUSE_TOUCH_EVENTS = b"SDL_MOUSE_TOUCH_EVENTS"  # "0", no touch from mouse
 HINT_NO_SIGNAL_HANDLERS = b"SDL_NO_SIGNAL_HANDLERS"     # Python owns SIGTERM
-HINT_VIDEO_ALLOW_SCREENSAVER = b"SDL_VIDEO_ALLOW_SCREENSAVER"  # "1": no idle inhibitor
+HINT_VIDEO_ALLOW_SCREENSAVER = b"SDL_VIDEO_ALLOW_SCREENSAVER"  # "1", no idle inhibitor
 
 EV_QUIT = 0x100
 EV_WINDOW_FIRST, EV_WINDOW_LAST = 0x202, 0x21A

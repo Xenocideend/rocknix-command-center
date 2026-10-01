@@ -599,8 +599,44 @@ class TestTileCustomisationSchema(ConfigTestCase):
         self.assertNotIn("home.youtube", order)
         self.assertNotIn("home.youtube", hidden)
         self.assertEqual(set(order), set(config.HOME_TILE_KEYS))
+        # batch 1 (25 Sep): _extend_tile_order keeps the owner's arrangement - the
+        # removed tile is dropped and newer tiles are appended - instead of the old
+        # reset to the default order. hidden_tiles still falls back as before.
+        kept = [k for k in stale_order if k in config.HOME_TILE_KEYS]
+        self.assertEqual(order[:len(kept)], kept)
+        self.assertIn("tile_order: new tiles added at the end", note)
+        # batch 1: the stale hidden set keeps what still exists (nothing, here)
+        self.assertEqual(hidden, [])
+
+    def _load_order(self, order):
+        d = tempfile.mkdtemp(prefix="rp5deck-cfg-")
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "config.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"schema_version": 1, "command_center": {"tile_order": order}}, f)
+        cfg, note = config.load(path)
+        return config.get_value(cfg, ("command_center", "tile_order")), note
+
+    def test_new_tiles_join_a_saved_order_at_the_end(self):
+        """The owner's saved 12-tile order (before home.topscreen/home.perf) keeps
+        its arrangement; the new tiles are appended, not a reset to the default."""
+        old = list(reversed([k for k in config.HOME_TILE_KEYS
+                             if k not in ("home.topscreen", "home.perf")]))
+        order, note = self._load_order(old)
+        self.assertEqual(order, old + ["home.topscreen", "home.perf"])
+        self.assertIn("home.topscreen, home.perf", note)
+
+    def test_a_complete_order_is_untouched(self):
+        full = list(reversed(config.HOME_TILE_KEYS))
+        order, note = self._load_order(full)
+        self.assertEqual(order, full)
+        self.assertNotIn("tile_order", note)
+
+    def test_duplicates_are_still_refused(self):
+        dup = list(config.HOME_TILE_KEYS[:-1]) + [config.HOME_TILE_KEYS[0]]
+        order, note = self._load_order(dup)
+        self.assertEqual(order, list(config.HOME_TILE_KEYS))
         self.assertIn("invalid command_center.tile_order", note)
-        self.assertIn("invalid command_center.hidden_tiles", note)
 
     def test_hidden_tiles_default_is_empty(self):
         cfg = config.defaults()
@@ -609,9 +645,23 @@ class TestTileCustomisationSchema(ConfigTestCase):
     def test_hidden_tiles_accepts_a_subset(self):
         cfg = config.defaults()
         self.assertTrue(config.set_value(cfg, ("command_center", "hidden_tiles"),
-                                         ["home.mixer", "home.hud"]))
+                                         ["home.mixer", "home.hotkeys"]))
         self.assertEqual(config.get_value(cfg, ("command_center", "hidden_tiles")),
-                         ["home.mixer", "home.hud"])
+                         ["home.mixer", "home.hotkeys"])
+
+    def test_hidden_tiles_naming_a_removed_tile_keeps_the_rest(self):
+        """Batch 1: a saved hidden set naming a removed tab tile keeps the owner's
+        other hidden tiles instead of resetting to none."""
+        d = tempfile.mkdtemp(prefix="rp5deck-cfg-")
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "config.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"schema_version": 1, "command_center": {
+                "hidden_tiles": ["home.browser", "home.keyboard"]}}, f)
+        cfg, note = config.load(path)
+        self.assertEqual(config.get_value(cfg, ("command_center", "hidden_tiles")),
+                         ["home.keyboard"])
+        self.assertIn("dropped tiles that no longer exist: home.browser", note)
 
     def test_hidden_tiles_refuses_home_settings_even_directly(self):
         cfg = config.defaults()

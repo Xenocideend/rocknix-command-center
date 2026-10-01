@@ -366,7 +366,7 @@ class TestSwapScreensToggle(unittest.TestCase):
     KEY = ("screens", "es_screen")
     CC = ("screens", "command_center_screen")
 
-    def test_screens_tab_has_exactly_the_swap_toggle(self):
+    def test_screens_tab_has_the_swap_toggle_then_brightness(self):
         sheet, *_ = make_sheet()
         self.assertIn("screens", sheet.tabs)
         self.assertIn("screens", sv.GROUP_ORDER)
@@ -375,7 +375,13 @@ class TestSwapScreensToggle(unittest.TestCase):
         self.assertNotIn(self.CC, sheet.rows)
         self.assertNotIn(self.CC, sheet.controls)
         rows_on_screens_pages = [w for page in sheet.pages["screens"] for w in page]
-        self.assertEqual(rows_on_screens_pages, [sheet.rows[self.KEY]])
+        # batch 1: brightness rows follow the swap toggle; match_ratio has no row
+        bright = [("screens", "bottom_brightness"), ("screens", "top_brightness"),
+                  ("screens", "match_brightness")]
+        bright.append(("screens", "ui_resolution"))      # batch 2: screen size preset last
+        self.assertEqual(rows_on_screens_pages, [sheet.rows[self.KEY]] + [sheet.rows[k] for k in bright])
+        self.assertNotIn(("screens", "match_ratio"), sheet.rows)
+        self.assertIsInstance(sheet.controls[("screens", "match_brightness")], ui.Toggle)
 
     def test_default_is_off_and_live(self):
         sheet, cfg, *_ = make_sheet()
@@ -473,6 +479,36 @@ class TestAboutPage(unittest.TestCase):
     def test_default_device_name_comes_from_the_device_module(self):
         sheet, *_ = make_sheet(device_name=None)
         self.assertEqual(sheet.about_rows[1].text, device.device_name())
+
+    def test_licence_line_asks_who_hurt_you(self):
+        sheet, *_ = make_sheet()
+        self.assertIn("If you paid for this, who hurt you?", sheet.about_rows[4].text)
+
+    def test_support_page_has_both_flags_and_trans_lifeline(self):
+        sheet, *_ = make_sheet()
+        support = next(pg for pg in sheet.pages["about"] if pg[0].text == "Support")
+        names = [w.name for w in support]
+        self.assertIn("settings.about.flags", names)
+        self.assertEqual(support[-1].text, "translifeline.org/donate")
+        self.assertIn("Trans Lifeline", " ".join(w.text for w in support))
+
+    def test_flags_draw_five_stripes_each_in_their_colours(self):
+        calls = []
+
+        class G:
+            def fill_rect(self, rect, color):
+                calls.append((rect, tuple(round(c * 255) for c in color)))
+
+        flags = sv.PrideFlags()
+        flags.set_rect((0, 0, 400, 120))
+        flags.draw(G())
+        self.assertEqual(len(calls), 10)
+        self.assertEqual(calls[0][1], (0x5B, 0xCE, 0xFA))      # trans: light blue on top
+        self.assertEqual(calls[2][1], (0xFF, 0xFF, 0xFF))
+        self.assertEqual(calls[5][1], (0xD5, 0x2D, 0x00))      # lesbian: dark orange on top
+        self.assertEqual(calls[9][1], (0xA3, 0x02, 0x62))
+        self.assertEqual(calls[0][0][2], 200)                  # 5:3 at the row height
+        self.assertGreater(calls[5][0][0], 200)                # second flag starts after the first
 
     def test_about_has_no_schema_keys(self):
         # About is explicitly NOT settings - nothing in it should appear in

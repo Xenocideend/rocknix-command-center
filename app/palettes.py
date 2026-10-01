@@ -1,49 +1,29 @@
-"""palettes - colour theme presets for rp5deck's Appearance setting.
+"""Colour theme presets for the Appearance setting.
 
-ui.THEME (ui.py, ~line 33) is a flat dict of 16 keys, read by every widget
-at DRAW time (`THEME["accent"]`, never a cached copy) - so the live-apply
-story for a new theme is simply "mutate the dict in place", never rebind
-the name: several modules do `from ui import THEME`, which binds their own
-local name to the SAME dict object, so `ui.THEME = {...}` would leave every
-one of those modules pointing at the old dict. apply_theme() below always
-does THEME.clear() + THEME.update(...) for exactly this reason (see its
-docstring).
+ui.THEME is one flat dict that every widget reads when it draws, so a new theme is applied by
+changing the dict in place, never by rebinding the name. Several modules do
+`from ui import THEME`, and `ui.THEME = {...}` would leave them on the old dict, which is why
+apply_theme() does THEME.clear() + THEME.update().
 
-THEME_KEYS is read directly off ui.THEME at import time - the single
-source of truth for "every key the app uses" - so a future widget adding
-THEME["something_new"] to ui.py fails PRESETS_COMPLETE loudly (a test)
-rather than silently drawing a KeyError on whichever preset forgot it.
+THEME_KEYS is read off ui.THEME at import, so a widget that adds a new key to ui.py makes the
+preset tests fail instead of drawing a KeyError on some preset.
 
-Preset data: PRESETS maps a name -> a dict of THEME_KEYS -> an 0xRRGGBB
-int (not yet an rgba tuple - ui.rgb() does that conversion once, in
-theme_rgba(), so every preset's numbers can be compared/tested as plain
-ints). "default" is copied byte-for-byte from ui.THEME's own literals
-(test_palettes.py asserts this with ui.rgb() equality) so existing users
-see no change at all.
+PRESETS maps a name to THEME_KEYS -> 0xRRGGBB ints (theme_rgba() turns them into rgba once,
+so the numbers stay easy to test). "default" is copied exactly from ui.THEME so nothing
+changes for existing setups.
 
-Custom mode (config appearance.theme_preset == "custom") is not a fixed
-PRESETS entry: derive_custom() builds the same 16 keys from just the
-three colours the owner actually picks (accent/bg/text), by blending
-towards bg/text/accent in fixed proportions - see its docstring for the
-exact formula. danger/ok/warn keep the shipped Default hues (owner did
-not pick those) but are nudged towards readable via ensure_contrast() if
-the owner's own background would otherwise wash them out.
+Custom (theme_preset == "custom") isnt a fixed entry: derive_custom() builds all 16 keys from
+the three colours you pick (accent, background, text). danger/ok/warn keep Default's hues but
+get nudged by ensure_contrast() if your background would wash them out.
 
-Contrast: contrast_ratio() is the plain WCAG 2 formula (relative
-luminance with the sRGB gamma-correction piecewise curve, then
-(L1+0.05)/(L2+0.05)). meets_body()/meets_large() are the two thresholds
-this feature is held to everywhere (settings_view.py's inline Custom
-warning, tools/palette_break_tests.py, tests/test_palettes.py):
-  - body text on its background: >= 4.5:1
-  - "large" text/buttons - accent-text-on-accent, and (extra, home-grown
-    check here) each of danger/ok/warn against its own preset's
-    background - >= 3:1
+Contrast is plain WCAG 2 (relative luminance with the sRGB curve, then (L1+0.05)/(L2+0.05)).
+Body text on its background needs 4.5:1, large text and buttons (and here also each of
+danger/ok/warn on its background) need 3:1.
 """
 import ui
 
 # ---------------------------------------------------------------------------
-# THEME_KEYS: read off the running theme, not hand-copied, so this module
-# cannot silently drift from ui.py.
+# THEME_KEYS comes from the running theme, not a copy, so this cant drift from ui.py.
 # ---------------------------------------------------------------------------
 THEME_KEYS = tuple(ui.THEME.keys())
 
@@ -55,8 +35,7 @@ CUSTOM_PRESET = "custom"
 
 
 # ---------------------------------------------------------------------------
-# Colour maths (pure - no ui.rgb() here, everything stays plain 0xRRGGBB
-# ints/0-255 byte tuples until theme_rgba() at the very end of the pipeline)
+# Colour maths, pure: plain 0xRRGGBB ints or 0-255 byte tuples until theme_rgba() at the end.
 # ---------------------------------------------------------------------------
 def _bytes(hexval):
     return ((hexval >> 16) & 255, (hexval >> 8) & 255, hexval & 255)
@@ -67,12 +46,8 @@ def _from_bytes(rgb_bytes):
     return (r << 16) | (g << 8) | b
 
 
-# Public names for appearance_view.py (its Custom colour picker moves
-# between rgb_leds' own (r, g, b) 0-255 byte tuples - the Swatch widget it
-# reuses from rgb_view.py speaks that shape - and this module's 0xRRGGBB
-# ints); _bytes()/_from_bytes() stay private, same "helpers private to
-# their own module" convention rgb_leds.py's own _hex_to_rgb()/
-# _rgb_to_hex() follow.
+# Public names for the Custom colour picker, which moves between rgb_leds' (r, g, b) byte tuples
+# (its Swatch widget speaks those) and this module's 0xRRGGBB ints.
 def hex_to_bytes(hexval):
     return _bytes(hexval)
 
@@ -114,15 +89,9 @@ def meets_large(fg, bg):
 
 
 # ---------------------------------------------------------------------------
-# HSL: appearance_view.py's Custom colour picker needs a real lightness
-# axis that rgb_leds.hue_to_rgb()/rgb_to_hue() do not have (those are
-# fixed at value=1.0 - exactly right for a full-brightness LED colour,
-# useless for picking a near-black background or a near-white one, which
-# is most of what "background"/"text" actually need). Kept here rather
-# than in rgb_leds.py since these have nothing to do with the stick
-# lights' own device protocol - appearance_view.py reuses rgb_view's
-# Swatch/PreviewCircle widgets and rgb_leds' hue dial CONCEPT (see its
-# module docstring), not this specific math.
+# HSL, since the Custom picker needs a real lightness axis. rgb_leds' hue helpers are fixed at
+# full brightness, which is right for an LED and useless for picking a near-black background or
+# near-white text.
 # ---------------------------------------------------------------------------
 def hsl_to_rgb(h, s, l):
     """h: degrees (wraps mod 360), s/l: 0-1. -> 0xRRGGBB int."""
@@ -148,9 +117,9 @@ def hsl_to_rgb(h, s, l):
 
 
 def rgb_to_hsl(hexval):
-    """Approximate inverse of hsl_to_rgb - only used to park a picker's
-    sliders at roughly the right spot for a stored colour, same spirit as
-    rgb_leds.rgb_to_hue(). Grey (s=0) returns hue 0."""
+    """Rough inverse of hsl_to_rgb, only used to put a picker's sliders near a stored colour. Grey
+    (s=0) gives hue 0.
+    """
     r, g, b = (c / 255.0 for c in _bytes(hexval))
     mx, mn = max(r, g, b), min(r, g, b)
     d = mx - mn
@@ -168,12 +137,10 @@ def rgb_to_hsl(hexval):
 
 
 def ensure_contrast(fg, bg, min_ratio=LARGE_MIN_RATIO):
-    """If fg already reads on bg, return it unchanged. Otherwise push fg
-    towards whichever of black/white increases contrast, in 5% steps,
-    until min_ratio is met (or fg has become that extreme, for a bg so
-    mid-grey neither corner would ever ordinarily satisfy a sane
-    min_ratio) - keeps fg's hue recognisable (a nudged red is still red)
-    instead of swapping in an unrelated fixed colour."""
+    """If fg already reads on bg, returns it as is. Otherwise pushes fg towards black or white
+    (whichever helps) in 5% steps until min_ratio is met or fg hits that end, so the hue stays
+    recognisable (a nudged red is still red).
+    """
     if contrast_ratio(fg, bg) >= min_ratio:
         return fg
     target = 0xFFFFFF if relative_luminance(bg) < 0.5 else 0x000000
@@ -187,19 +154,11 @@ def ensure_contrast(fg, bg, min_ratio=LARGE_MIN_RATIO):
 
 
 # ---------------------------------------------------------------------------
-# Shared derivation: every non-"default" preset below is built by calling
-# this with just 6 "anchor" colours (bg/text/accent + the 3 semantic
-# colours) - it is also exactly what Custom mode uses (derive_custom()),
-# so "sensible defaults for the keys the owner didn't pick" only has one
-# implementation to trust. Fractions were chosen by matching the shipped
-# Default theme's own bg->bar->panel->tile->tile_pressed ramp (see
-# tools/palette_break_tests.py's "derivation drifts from Default" check
-# for the tolerance this is allowed to drift by) - NOT required to
-# reproduce Default exactly (Default is its own hand-written entry below,
-# byte-identical to ui.THEME), just to land in the same neighbourhood for
-# every other preset so tiles/panels/lines still read as "a bit lighter/
-# darker than the background" regardless of which bg/text a preset or a
-# custom pick uses.
+# Every preset except Default is built from 6 anchor colours (bg, text, accent and the 3
+# semantic ones), and Custom uses the same code, so the keys you dont pick have one
+# implementation. The blend fractions follow Default's own bg -> bar -> panel -> tile ramp
+# closely (tools/palette_break_tests.py checks the drift), so tiles and panels always read as a
+# bit lighter or darker than the background whatever the preset.
 # ---------------------------------------------------------------------------
 def _derive_full(bg, text, accent, danger, ok, warn):
     tile = blend(bg, text, 0.18)
@@ -208,9 +167,8 @@ def _derive_full(bg, text, accent, danger, ok, warn):
         "bar": blend(bg, text, 0.06),
         "panel": blend(bg, text, 0.11),
         "tile": tile,
-        # pressed/lit state: nudge the tile towards the accent's own hue
-        # AND towards text (brighter on a dark theme, darker on a light
-        # one, because blend() walks straight at whatever "text" is).
+        # pressed/lit: pull the tile towards the accent and towards text (brighter on a dark theme,
+        # darker on a light one)
         "tile_pressed": blend(blend(tile, accent, 0.4), text, 0.15),
         "line": blend(bg, text, 0.24),
         "text": text,
@@ -229,11 +187,8 @@ def _derive_full(bg, text, accent, danger, ok, warn):
 # ---------------------------------------------------------------------------
 # Presets
 # ---------------------------------------------------------------------------
-# "default": copied literally from ui.THEME's own hex constants (ui.py
-# ~line 34-50) - test_palettes.py's test_default_matches_ui_theme() checks
-# this dict, run through theme_rgba(), equals ui.THEME exactly, key for
-# key, value for value. Never route this one through _derive_full(): the
-# whole point is "byte-identical to what a user already has".
+# "default" is copied straight from ui.THEME's own values, and a test checks it matches exactly.
+# Never build it with _derive_full(), the point is its identical to what you already have.
 _DEFAULT = {
     "bg": 0x12141C, "bar": 0x1B1E27, "panel": 0x1F232D, "tile": 0x262B37,
     "tile_pressed": 0x3C4558, "line": 0x363C4A, "text": 0xF4F5F7,
@@ -244,85 +199,47 @@ _DEFAULT = {
 _DEFAULT_DANGER, _DEFAULT_OK, _DEFAULT_WARN = (_DEFAULT["danger"], _DEFAULT["ok"],
                                                _DEFAULT["warn"])
 
-# name -> (bg, text, accent, danger, ok, warn) "anchor" colours. Order here
-# is cycling/display/CLI order (PRESET_ORDER, below) - default first (so a
-# fresh CycleButton or --list starts on what the owner already has),
-# high-contrast next, then the RP5 hardware editions in their goretroid.com
-# listing order, then the classic-console set, alphabetically-ish within
-# that group.
+# name -> (bg, text, accent, danger, ok, warn) anchor colours. The order here is the cycling
+# and --list order: Default first, High contrast, the RP5 editions in Retroid's listing order,
+# then the classic consoles.
 #
-# Sourcing / estimation notes (owner asked this be flagged, not just
-# picked): goretroid.com's own product photos could not be colour-sampled
-# from this environment (WebFetch on the product page returned no usable
-# colour detail - "product images shown are thumbnails without sufficient
-# detail"); a web search confirmed the SIX names (GC=purple, 16Bit=grey,
-# Black, White, Yellow, Turquoise - steamdeckhq.com/news/the-retroid-
-# pocket-5-gets-two-new-colors/, retrododo.com's colourway coverage) but
-# not exact shell hex values. So every RP5xxx shell-body hue below is an
-# ESTIMATE from the colourway's plain-English name, EXCEPT rp5_16bit's
-# accent/danger/ok/warn, which are the SFC face-button colours verified
-# by direct pixel-sampling of Retroid's own product photo (see
-# D:/Tools/RP5-DualScreen-Setup/glyphs/RP5-SFC-GLYPHS.md) - those four are
-# real, sourced hex values, not estimates.
+# Where the colours come from: the six RP5 edition names are confirmed (GC, 16 Bit, Black,
+# White, Yellow, Turquoise), but Retroid's product photos couldnt be colour-sampled, so every
+# shell colour is an estimate from the edition's name. The one exception is rp5_16bit's
+# accent/danger/ok/warn, which are the SFC face buttons sampled from Retroid's own photo
+# (glyphs/RP5-SFC-GLYPHS.md).
 _ANCHORS = {
     "high_contrast": (0x000000, 0xFFFFFF, 0x3D8BFD, 0xFF3B3B, 0x2ECC71, 0xFFC400),
-    # RP5 Black: ESTIMATE (shell is simply black; near-black UI, default's
-    # own blue accent family reused for continuity).
+    # RP5 Black: estimate (black shell, near-black UI, Default's blue accent kept)
     "rp5_black": (0x141414, 0xF5F5F5, 0x4A90E2, 0xE5484D, 0x46A758, 0xF5A524),
-    # RP5 White: ESTIMATE (light shell -> light theme). The one preset the
-    # owner specifically flagged to double check readability on - every
-    # widget's fg/bg pair here was picked to clear >=4.5:1 (see
-    # test_palettes.py's per-preset contrast test), not just the two
-    # required pairs, because a light theme is the one direction none of
-    # ui.py's widgets were ever drawn against before.
+    # RP5 White: estimate (light shell, light theme). Every fg/bg pair here clears 4.5:1, not just
+    # the two required ones, since none of the widgets were drawn on a light theme before.
     "rp5_white": (0xF5F5F5, 0x1A1A1A, 0x3D8BFD, 0xC62828, 0x1E7B34, 0x9A6400),
-    # RP5 16 Bit: body colour is an ESTIMATE (grey/silver shell); accent/
-    # danger/ok/warn are the VERIFIED SFC face-button hexes (A/B/X/Y).
+    # RP5 16 Bit: the grey body is an estimate, accent/danger/ok/warn are the sampled SFC buttons
     "rp5_16bit": (0x201F22, 0xF3F1EF, 0x4460E6, 0xED3736, 0x37CB5A, 0xEED43C),
-    # RP5 GC: ESTIMATE. Indigo/purple body per the GameCube reference the
-    # colourway is named for; accent/danger/ok borrow the GameCube pad's
-    # own green-A/red-B/yellow-C-stick scheme (a real, well-known
-    # controller colour scheme, not sampled from this specific shell).
+    # RP5 GC: estimate. Indigo body after the GameCube, with the GameCube pad's green A, red B and
+    # yellow C-stick for accent/danger/ok.
     "rp5_gc": (0x1B1730, 0xF3F1FA, 0x2E7D32, 0xE1483F, 0x43A047, 0xFFD400),
-    # RP5 Yellow / RP5 Turquoise: ESTIMATE (2026 colourways reused from the
-    # discontinued Pocket G2 - no sampled swatch available at all, only
-    # the plain colour name from press coverage).
+    # RP5 Yellow / RP5 Turquoise: estimate, only the colour names are known
     "rp5_yellow": (0x1D1A10, 0xF6F2E4, 0x8A6819, 0xE5484D, 0x46A758, 0xF5A524),
     "rp5_turquoise": (0x0F1E1D, 0xF0F7F6, 0x159488, 0xE5484D, 0x46A758, 0xF5A524),
-    # Game Boy (DMG): the four anchor colours ARE (three of) the real
-    # 4-shade DMG LCD palette (bg=shade1 lightest, accent=shade2, ok=
-    # shade3 - all textbook "Game Boy green" hex values); danger/warn
-    # break the strict monochrome (a same-hue "error" colour would be
-    # indistinguishable from body text on a 2-bit screen) - dark brick-red
-    # /olive chosen to still read against the light-green background
-    # rather than a bright red or amber that would have no contrast here.
+    # Game Boy (DMG): bg, accent and ok are real shades of the 4-shade DMG LCD palette. danger and
+    # warn break the monochrome (a same-hue error colour would disappear on a 2-bit screen), dark
+    # brick red and olive so they still read on the light green.
     "gameboy": (0x9BBC0F, 0x0F380F, 0x8BAC0F, 0x7A2000, 0x306230, 0x6B3A00),
-    # NES: grey/black body -> near-black bg; the single NES accent colour
-    # (its red) doubles as this preset's whole "flavour"; danger separated
-    # from accent (brighter red) so a real red alert is distinguishable
-    # from the red UI chrome; ok/warn are Default's own (nothing NES-
-    # specific to say for "success green").
+    # NES: near-black bg with the NES red as the accent. danger is a brighter red so a real alert
+    # stands out from the red chrome, ok/warn are Default's.
     "nes": (0x1E1E1E, 0xECECEC, 0xE60012, 0xFF5252, 0x3CB043, 0xF2A900),
-    # Sega Genesis / Mega Drive: black body, Genesis-red accent; ok/warn
-    # are Default's own.
+    # Sega Genesis / Mega Drive: black body, Genesis red accent, ok/warn are Default's
     "genesis": (0x0D0D0D, 0xF2F2F2, 0xE4002B, 0xE5484D, 0x46A758, 0xF5A524),
-    # PlayStation: grey body; accent/danger/ok are 3 of the 4 face-symbol
-    # colours (Cross blue / Circle red / Triangle green); Square's own
-    # pink was deliberately left unused here - pink does not read as a
-    # "warning" colour, so warn stays a conventional amber instead of
-    # forcing the 4th symbol colour in where it would be actively
-    # confusing.
+    # PlayStation: grey body, accent/danger/ok are Cross blue, Circle red and Triangle green. Square's
+    # pink isnt used, pink doesnt read as a warning, so warn stays amber.
     "playstation": (0x1B1C1E, 0xF1F1F2, 0x2E6DA4, 0xE0435B, 0x4FBF8B, 0xC9962A),
-    # Nintendo 64: charcoal body; accent/danger/ok/warn follow the
-    # multicolour N64 logo's own N=blue/4=red/6=green + gold keystone -
-    # NOT the controller's own button colours (not confident enough in
-    # those from memory to assert them as fact).
+    # Nintendo 64: charcoal body, accent/danger/ok/warn follow the N64 logo (blue N, red 4, green 6
+    # and the gold), not the controller buttons
     "n64": (0x1C1C1E, 0xF2F2F2, 0x2A5DB0, 0xE53935, 0x2E7D32, 0xC98A00),
-    # Dreamcast: white body, orange swirl accent (its most recognisable
-    # single colour); danger/warn are the same darkened reds/ambers the
-    # other light theme (RP5 White) uses, for the same contrast-on-light
-    # reason; ok deliberately is NOT the Dreamcast blue (blue does not
-    # read as "success"), a conventional green instead.
+    # Dreamcast: white body, orange swirl accent. danger/warn are the same darker red and amber RP5
+    # White uses for contrast on light, and ok is a normal green since blue doesnt read as success.
     "dreamcast": (0xF7F5F0, 0x1B1B1B, 0xE8720B, 0xC62828, 0x1E7B34, 0x9A6400),
 }
 
@@ -347,22 +264,13 @@ PRESET_LABELS = {
     "playstation": "90s console grey",
     "n64": "Charcoal primaries",
     "dreamcast": "White/orange swirl",
-    "custom": "Custom",   # not in PRESET_ORDER/PRESETS (it has no fixed colours of
-                          # its own) but IS a config.THEME_PRESET_VALUES enum value,
-                          # so display_label() needs an entry for it too.
+    "custom": "Custom",  # not in PRESET_ORDER/PRESETS (it has no fixed colours
+                          # of its own) but its a config.THEME_PRESET_VALUES value, so display_label() needs it too
 }
 
-# The classic-console set's PRESET_LABELS are deliberately descriptive, not
-# console names (item 2's brief: "keep them as plain descriptive labels...
-# which is fine for a colour scheme label"). display_label() (below) adds
-# the console back in brackets for the UI (settings_view.py's CycleButton -
-# device field test 25 Sep found the button showing "Dreamcast" while
-# `palettes.py --list` showed "White/orange swirl", i.e. the two only
-# disagreed because settings_view.py's generic _display() was splitting
-# the RAW PRESET NAME on underscores instead of using PRESET_LABELS at
-# all - this dict is only the bracketed hint, not a second label system).
-# The RP5 editions/Default/High contrast need no hint: their PRESET_LABELS
-# already ARE the console/device name.
+# The classic-console presets have descriptive labels, and display_label() adds the console in
+# brackets for the UI. The RP5 editions, Default and High contrast need no hint since their
+# labels already are the device name.
 PRESET_CONSOLE_HINT = {
     "gameboy": "Game Boy", "nes": "NES", "genesis": "Genesis",
     "playstation": "PlayStation", "n64": "N64", "dreamcast": "Dreamcast",
@@ -370,8 +278,9 @@ PRESET_CONSOLE_HINT = {
 
 
 def display_label(name):
-    """The one label the CycleButton and --list should agree on: the
-    descriptive PRESET_LABELS text, plus "(Console)" for the classic set."""
+    """The one label the Settings button and --list agree on: the PRESET_LABELS text, plus
+    "(Console)" for the classic set.
+    """
     label = PRESET_LABELS.get(name, name)
     hint = PRESET_CONSOLE_HINT.get(name)
     return "%s (%s)" % (label, hint) if hint else label
@@ -394,14 +303,10 @@ PRESETS = _build_presets()
 # Custom mode
 # ---------------------------------------------------------------------------
 def derive_custom(accent, bg, text):
-    """The three owner-picked colours (0xRRGGBB ints) -> a full 16-key
-    THEME dict, via the same _derive_full() every shipped preset (other
-    than Default) uses. danger/ok/warn are NOT owner-picked - they keep
-    Default's own hues, nudged towards the owner's background with
-    ensure_contrast() so a very light or very dark custom background
-    cannot wash out an error/success/warning colour to invisible (item 2's
-    "keep semantic colours meaningful in every preset" applies here too,
-    even though this "preset" is computed rather than shipped)."""
+    """The three colours you pick (0xRRGGBB ints) -> a full 16-key THEME, through the same
+    _derive_full() the shipped presets use. danger/ok/warn keep Default's hues, nudged with
+    ensure_contrast() so a very light or very dark background cant wash them out.
+    """
     danger = ensure_contrast(_DEFAULT_DANGER, bg)
     ok = ensure_contrast(_DEFAULT_OK, bg)
     warn = ensure_contrast(_DEFAULT_WARN, bg)
@@ -409,10 +314,9 @@ def derive_custom(accent, bg, text):
 
 
 def custom_contrast_warning(accent, bg, text):
-    """None if the owner's own accent/bg/text pick is readable; otherwise
-    a short string naming which pair is below the WCAG body-text ratio -
-    settings_view.py shows this inline (item 3: "show a short inline
-    warning... don't block it") rather than refusing the pick."""
+    """None if your accent/bg/text pick is readable, otherwise a short note naming the pair below the
+    body-text ratio. Settings shows it inline instead of refusing the pick.
+    """
     problems = []
     if not meets_body(text, bg):
         problems.append("text on background")
@@ -427,13 +331,10 @@ def custom_contrast_warning(accent, bg, text):
 # Resolving + applying a config to ui.THEME
 # ---------------------------------------------------------------------------
 def resolve_theme_hex(preset, custom_accent=None, custom_bg=None, custom_text=None):
-    """preset: a config.py appearance.theme_preset value (already schema-
-    validated, but defended again here - see module docstring). Returns a
-    16-key dict of 0xRRGGBB ints, never raises: an unrecognised preset
-    name (a build that shipped a preset since removed, or a caller that
-    skipped config's own validation) falls back to Default, same as a
-    genuinely corrupt config.json does further up the chain in
-    config.py's own _validate_tree()."""
+    """preset: an appearance.theme_preset value (config already checked it, checked again here).
+    Returns a 16-key dict of 0xRRGGBB ints and never raises, an unknown name falls back to
+    Default.
+    """
     if preset == CUSTOM_PRESET:
         accent = _hex_or(custom_accent, _DEFAULT["accent"])
         bg = _hex_or(custom_bg, _DEFAULT["bg"])
@@ -443,11 +344,9 @@ def resolve_theme_hex(preset, custom_accent=None, custom_bg=None, custom_text=No
 
 
 def hex_str_to_int(value, fallback):
-    """A config.py "#rrggbb" string (or anything else at all) -> a 0xRRGGBB
-    int, or `fallback` if it isn't one - public counterpart to
-    hex_to_bytes()/bytes_to_hex() above, for the same reason (appearance_
-    view.py's picker needs to go from a stored hex_color string to bytes
-    and back)."""
+    """A config "#rrggbb" string (or anything else) -> a 0xRRGGBB int, or `fallback` if it isnt one.
+    The picker uses it to go from a stored colour string to bytes and back.
+    """
     return _hex_or(value, fallback)
 
 
@@ -464,17 +363,17 @@ def _hex_or(value, fallback):
 
 
 def theme_rgba(hexdict):
-    """hexdict (THEME_KEYS -> 0xRRGGBB int) -> the same keys -> ui.rgb()
-    rgba tuples, i.e. exactly ui.THEME's own value shape."""
+    """hexdict (THEME_KEYS -> 0xRRGGBB int) -> the same keys as ui.rgb() rgba tuples, ui.THEME's own
+    shape.
+    """
     return {k: ui.rgb(v) for k, v in hexdict.items()}
 
 
 def theme_for_config(cfg, config_mod=None):
-    """cfg: a loaded config.py dict. Reads appearance.* through
-    config.get_value() (never cfg[...] directly, so a config.py that
-    predates the "appearance" group - or one where validation already
-    fell back a field to its own default - still resolves to Default
-    rather than raising)."""
+    """cfg: a loaded config dict. Reads appearance.* through config.get_value(), so an older config
+    without the group, or a field that fell back to its default, still gives Default instead of
+    raising.
+    """
     m = config_mod
     if m is None:
         import config as m
@@ -486,18 +385,12 @@ def theme_for_config(cfg, config_mod=None):
 
 
 def apply_theme(cfg, config_mod=None, theme=None):
-    """Recompute the effective theme from `cfg` and apply it LIVE: mutate
-    ui.THEME in place (clear() + update(), never `ui.THEME = {...}` - see
-    the module docstring for why a rebind would miss every module that
-    already did `from ui import THEME`). `theme` is an injection point for
-    tests (a throwaway dict standing in for ui.THEME); main.py and
-    cc_overlay.py both call this with no `theme` arg, i.e. against the
-    real ui.THEME both processes actually draw from.
+    """Works out the theme from `cfg` and applies it live by changing ui.THEME in place (clear() +
+    update(), never rebinding, see the module docstring). `theme` lets tests pass a stand-in dict.
+    main.py and cc_overlay.py call it with no `theme`, against the real ui.THEME.
 
-    Caller's job, not this function's: mark whatever needs a redraw dirty
-    afterwards (main.py's on_setting() already sets self.state_dirty for
-    every settings change; cc_overlay.py does the same in its own apply
-    path) - this function only ever touches the dict, never the screen."""
+    This only touches the dict. Marking things for a redraw afterwards is the caller's job.
+    """
     hexdict = theme_for_config(cfg, config_mod=config_mod)
     target = theme if theme is not None else ui.THEME
     target.clear()
@@ -506,10 +399,8 @@ def apply_theme(cfg, config_mod=None, theme=None):
 
 
 # ---------------------------------------------------------------------------
-# CLI: `python palettes.py --list` - preset names + the two required
-# contrast ratios, for a quick by-eye sanity check (also handy input for
-# whoever later screenshots each preset on the device - not this agent's
-# job per the brief).
+# CLI: `python palettes.py --list` prints the preset names and their two contrast ratios, for a
+# quick check by eye.
 # ---------------------------------------------------------------------------
 def _cli_list():
     for name in PRESET_ORDER:

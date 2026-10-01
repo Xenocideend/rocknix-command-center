@@ -1,80 +1,71 @@
 #!/usr/bin/env python3
-"""esevents - EmulationStation's selection / game / screensaver events,
-delivered to rp5deck.
+"""esevents: EmulationStation's selection, game and screensaver events, delivered to rp5deck.
 
-Why: ES's HTTP API cannot report the highlighted game (es_api.py, read from
-source). Only ES's event scripts can. rp5deck installs tiny hooks (es-hooks/,
-installed by tools/install-es-hooks.sh) for game-selected, system-selected,
-game-start, game-end, screensaver-start, screensaver-stop, sleep and wake.
+ES's HTTP API cant report the highlighted game, only its event scripts can. So rp5deck
+installs tiny hooks (es-hooks/, via tools/install-es-hooks.sh) for game-selected,
+system-selected, game-start, game-end, screensaver-start, screensaver-stop, sleep and wake.
 
-How ES runs them (Scripting.cpp executeScript + Platform.cpp, read from
-source): ASYNCHRONOUSLY, through `sh -c`, fire-and-forget. A hook can never
-stall ES, but hooks for back-to-back events run CONCURRENTLY and can finish
-out of order (RV1-m1, RV2-M3). ES also shell-parses the arguments before the
-hook runs (RV1-M3: see name_guard.py).
+ES runs them async through `sh -c` and never waits (Scripting.cpp executeScript and
+Platform.cpp). A hook can never stall ES, but hooks for back to back events run at the same
+time and can finish out of order. ES also shell-parses the arguments before the hook runs
+(see name_guard.py).
 
-The spool (one file per event, never overwritten)
+The spool, one file per event, never overwritten
 -------------------------------------------------
-Each hook writes its event as its OWN file in a spool directory,
-/var/run/rp5deck/es-events/ (tmpfs), atomically: a hidden `.tmp.<pid>` in the
-same directory, then mv onto
+Each hook writes its event as its own file in /var/run/rp5deck/es-events/ (tmpfs),
+atomically: a hidden `.tmp.<pid>` in the same folder, then mv onto
 
-    <start>-<anchor>-<pid>.ev        e.g. 000000008453-0000000408-0000000415.ev
+    <start>-<anchor>-<pid>.ev        like 000000008453-0000000408-0000000415.ev
 
-anchor is the `sh -c` process ES forked for that event, start is its start
-time (clock ticks since boot). ES creates those on its own thread, one event
-after the other (only the hooks run detached), so (start, anchor) is ES's
-FIRE order however late the hook itself got to run; pid (the hook's own) makes names unique. Fields are fixed-width
-decimal, so the names also sort correctly as text (`ls`).
+anchor is the `sh -c` process ES forked for that event and start is its start time (clock
+ticks since boot). ES makes those on its own thread one event after another (only the hooks
+run detached), so (start, anchor) is the order ES fired them no matter how late the hook ran.
+pid (the hook's own) keeps names unique. The fields are fixed width so the names also sort
+right as text.
 
-This module consumes the files in key order and deletes each one after
-processing (SpoolReader):
-  * a selection event (game-/system-selected) or a screensaver/sleep/wake
-    event older than one already delivered in its class is STALE (a hook that
-    ran late) and is dropped - the companion never shows the previous game
-    because of reordering;
-  * within one batch only the newest selection and the newest idle event are
-    delivered (the rest could only flicker); every game-start/game-end edge
-    in the batch is delivered, in order, unless older than an edge already
-    delivered;
-  * the directory is bounded: beyond `max_spool` files the oldest are dropped
-    and logged (the hooks also prune beyond 512 when nothing consumes them).
+SpoolReader reads the files in key order and deletes each one once handled:
 
-Record format (version 1): NUL-terminated key=value fields, in this order
+A selection event (game/system-selected) or a screensaver/sleep/wake event older than one
+already delivered in its class is stale (a hook that ran late) and gets dropped, so the
+companion never shows the previous game because of reordering.
+
+Within one batch only the newest selection and the newest idle event get delivered, the
+rest would only flicker. Every game-start/game-end in the batch is delivered in order unless
+it's older than one already delivered.
+
+The folder is bounded. Past `max_spool` files the oldest get dropped and logged (the hooks
+also prune past 512 when nothing reads them).
+
+Record format (version 1): NUL-terminated key=value fields in this order
 
     rp5deck-es-event=1 \\0 event=<event> \\0 argc=<N> \\0 arg1=<...> \\0 ... argN=<...> \\0
 
-NUL is the one byte that cannot occur in a command-line argument, so the
-record is unambiguous for any game name or path (apostrophes, '&', spaces,
-newlines, non-ASCII, invalid UTF-8). Values are split on the FIRST '=' only.
-Bytes are decoded as UTF-8 with surrogateescape, so a non-UTF-8 file name
-round-trips to the same bytes via os.fsencode(). `tr '\\0' '\\n' < FILE`
-shows one on the device.
+NUL is the one byte that cant be in a command line argument, so any game name or path works
+(apostrophes, '&', spaces, newlines, non-ASCII, bad UTF-8). Values split on the first '='
+only. Bytes decode as UTF-8 with surrogateescape so a non-UTF-8 file name comes back to the
+same bytes through os.fsencode(). `tr '\\0' '\\n' < FILE` shows one on the device.
 
-Argument layouts (ES source, ROCKNIX/emulationstation-next Scripting/FileData):
+Argument layouts (from emulationstation-next's Scripting/FileData):
     game-selected    system, rompath, name
-    system-selected  system            (observed on device: "system [rompath name]")
-    game-start       rompath, rom basename, name   (NOT yet observed on device)
-    game-end         same as game-start            (NOT yet observed on device)
+    system-selected  system            (on the device: "system [rompath name]")
+    game-start       rompath, rom basename, name   (paths come shell escaped, see below)
+    game-end         same as game-start
     screensaver-*, sleep, wake: no game arguments (whatever ES passes is kept)
-ES drops every argument after the first EMPTY one (executeScript breaks out
-of its loop), so a missing trailing argument is normal.
+ES drops every argument after the first empty one, so a missing trailing argument is
+normal.
 
-Watcher: one daemon thread. inotify (ctypes) on the spool directory for
-IN_MOVED_TO|IN_CLOSE_WRITE of `*.ev` names, plus a slow safety rescan; where
-inotify is unavailable (the Windows dev PC, tests) it rescans the directory
-every `stat_poll` seconds.
+The watcher is one daemon thread with inotify (ctypes) on the spool folder for
+IN_MOVED_TO|IN_CLOSE_WRITE of `*.ev` names, plus a slow safety rescan. Without inotify (the
+Windows PC, tests) it rescans every `stat_poll` seconds.
 
-A second daemon thread polls ES's /runningGame every `poll_interval` seconds
-as a fallback for the running game (hooks not installed, or a missed
-game-start). A failed or timed-out request is UNKNOWN, never "not running"
-(RV1-M2 / RV2-M2): only ES's own {"msg": "NO GAME RUNNING"} counts, and a
-poll-sourced game-end needs `end_after` such answers IN A ROW. Changes are
-emitted as synthetic "game-start"/"game-end" events with source="poll".
-Both threads call `on_event(EsEvent)` from their own thread: the caller must
-hand it to its own event loop (main.py posts it to the UI thread).
+A second daemon thread polls ES's /runningGame every `poll_interval` seconds as a fallback
+(hooks not installed, or a missed game-start). A failed or timed out request is UNKNOWN, never
+"not running". Only ES's own {"msg": "NO GAME RUNNING"} counts, and a poll-sourced game-end
+needs `end_after` of those in a row. Changes come out as made-up "game-start"/"game-end"
+events with source="poll". Both threads call on_event(EsEvent) from their own thread, so the
+caller has to hand it to its own loop (main.py posts it to the UI thread).
 
-    python3 esevents.py --watch [--seconds N]     print events as they arrive
+    python3 esevents.py --watch [--seconds N]     print events as they come in
     python3 esevents.py --parse FILE              decode one record file
 """
 import collections
@@ -93,8 +84,8 @@ import time
 log = logging.getLogger("rp5deck.esevents")
 
 DEFAULT_SPOOL_DIR = "/var/run/rp5deck/es-events"
-ENV_SPOOL_DIR = "RP5DECK_ES_SPOOL"            # same override the hook scripts honour
-ENV_EVENT_FILE = "RP5DECK_ES_EVENT_FILE"      # legacy: its directory + /es-events
+ENV_SPOOL_DIR = "RP5DECK_ES_SPOOL"  # the same override the hook scripts use
+ENV_EVENT_FILE = "RP5DECK_ES_EVENT_FILE"  # older setting: its folder + /es-events
 MAGIC_KEY = "rp5deck-es-event"
 RECORD_VERSION = "1"
 
@@ -112,7 +103,7 @@ EVENTS = GAME_EVENTS + IDLE_EVENTS            # every event rp5deck installs a h
 IDLE_ON = (SCREENSAVER_START, SLEEP)          # stop companion video
 IDLE_OFF = (SCREENSAVER_STOP, WAKE)           # allow it again
 
-# ordering classes: staleness is judged within a class
+# ordering classes, staleness is judged within a class
 EVENT_CLASS = {GAME_SELECTED: "select", SYSTEM_SELECTED: "select",
                GAME_START: "game", GAME_END: "game",
                SCREENSAVER_START: "idle", SCREENSAVER_STOP: "idle", SLEEP: "idle",
@@ -144,7 +135,8 @@ ints in ES's fire order) for hook events read from the spool."""
 
 def spool_dir_path(env=None):
     """RP5DECK_ES_SPOOL, else <dir of RP5DECK_ES_EVENT_FILE>/es-events, else
-    /var/run/rp5deck/es-events - the same rule the hook scripts use."""
+    /var/run/rp5deck/es-events, the same rule the hook scripts use.
+    """
     env = os.environ if env is None else env
     d = env.get(ENV_SPOOL_DIR)
     if d:
@@ -159,8 +151,9 @@ def spool_dir_path(env=None):
 # Parsing (pure)
 # ---------------------------------------------------------------------------
 def parse_fields(data):
-    """bytes -> dict of key -> value, or None if this is not a v1 record.
-    A truncated record (no final NUL) is refused rather than half-read."""
+    """bytes -> dict of key -> value, or None if it isnt a v1 record. A cut off record (no final NUL)
+    gets refused instead of half read.
+    """
     if not data or not data.endswith(b"\0"):
         return None
     fields = {}
@@ -191,35 +184,31 @@ _BACKSLASH_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
 
 
 def unescape_shell_backslashes(s):
-    """Undo shell backslash-escaping: 'Foo\\ \\(Bar\\).zip' -> 'Foo (Bar).zip'.
+    """Undoes shell backslash escaping: 'Foo\\ \\(Bar\\).zip' -> 'Foo (Bar).zip'.
 
-    Observed on the device (FX-E): ES's game-start/game-end hooks receive
-    their path arguments pre-escaped for a shell - a backslash before every
-    character a shell would treat specially (space, '(', ')', ','), e.g.
+    ES's game-start/game-end hooks get their paths pre-escaped for a shell, a backslash before
+    every character a shell treats specially (space, '(', ')', ','), like
 
         rom='/storage/roms/gb/Adventures\\ of\\ Rocky\\ and\\ Bullwinkle\\
               and\\ Friends,\\ The\\ \\(USA\\).zip'
 
-    while the /runningGame poll gives the same file's CLEAN path. Without
-    this the two never compare equal (companion.py's running-game match,
-    RunningPoll.game_key) even though they name the same file. Removing one
-    backslash per escaped character is the exact inverse of that escaping.
-    A literal backslash cannot occur in a ROM path on this device (Linux
-    paths), so applying this unconditionally to game-start/game-end
-    arguments is safe."""
+    while the /runningGame poll gives the same file's clean path. Without this the two never
+    match even though they're the same file. Dropping one backslash per escaped character is the
+    exact inverse. A real backslash cant be in a ROM path here (Linux paths), so doing this to
+    every game-start/game-end argument is safe.
+    """
     if not isinstance(s, str) or "\\" not in s:
         return s
     return _BACKSLASH_ESCAPE_RE.sub(r"\1", s)
 
 
 def interpret(kind, args, source="hook", t=0.0, seq=None):
-    """Turn a hook's raw arguments into an EsEvent (pure; see module doc)."""
+    """Turns a hook's raw arguments into an EsEvent (pure, see the module doc)."""
     args = list(args)
     if kind in (GAME_START, GAME_END):
-        # ES gives these two events' path arguments shell-escaped (see
-        # unescape_shell_backslashes); every downstream field (system, rom,
-        # name) is derived from `args` below, so normalising here is enough
-        # to make the hook path compare equal to the poll's clean path.
+        # ES gives these two events' paths shell escaped (see unescape_shell_backslashes). Every field
+        # below (system, rom, name) comes from `args`, so fixing them here is enough for the hook path
+        # to match the poll's clean path.
         args = [unescape_shell_backslashes(a) for a in args]
     system = rom = name = ""
     if kind == SYSTEM_SELECTED:
@@ -232,7 +221,7 @@ def interpret(kind, args, source="hook", t=0.0, seq=None):
         if len(args) >= 2 and _looks_like_path(args[1]):
             system, rom = args[0], args[1]
             name = args[2] if len(args) >= 3 else ""
-        elif args and _looks_like_path(args[0]):           # tolerate (rompath, name)
+        elif args and _looks_like_path(args[0]):  # also take (rompath, name)
             rom = args[0]
             name = args[1] if len(args) >= 2 else ""
     elif kind in (GAME_START, GAME_END):
@@ -242,7 +231,7 @@ def interpret(kind, args, source="hook", t=0.0, seq=None):
             if idx >= 1:
                 system = args[0]
             rest = args[idx + 1:]
-            # (rompath, basename, name) -> the last one is the display name
+            # (rompath, basename, name), the last one is the display name
             name = rest[-1] if rest else ""
     if rom and not system:
         system = system_from_path(rom)
@@ -252,7 +241,7 @@ def interpret(kind, args, source="hook", t=0.0, seq=None):
 
 
 def parse_record(data, t=0.0, seq=None):
-    """bytes of one record file -> EsEvent, or None if malformed/unknown."""
+    """bytes of one record file -> EsEvent, or None if broken or unknown."""
     fields = parse_fields(data)
     if fields is None:
         return None
@@ -282,8 +271,9 @@ def read_record(path, t=None, seq=None):
 
 
 def build_record(event, args):
-    """What the hook scripts write, built in Python (tests, and the self-test
-    in tools/install-es-hooks.sh compares against it)."""
+    """What the hook scripts write, built in Python (tests, and install-es-hooks.sh's self-test
+    compares against it).
+    """
     out = [b"%s=%s\0" % (MAGIC_KEY.encode(), RECORD_VERSION.encode()),
            b"event=%s\0" % event.encode(), b"argc=%d\0" % len(args)]
     for i, a in enumerate(args, 1):
@@ -321,7 +311,7 @@ def list_spool(directory):
 
 
 def write_spool_event(directory, key, event, args):
-    """What a hook does, in Python (tests and tools): temp file + rename."""
+    """What a hook does, in Python for tests and tools: temp file + rename."""
     os.makedirs(directory, exist_ok=True)
     tmp = os.path.join(directory, "%s%d.%d" % (TMP_PREFIX, os.getpid(), threading.get_ident()))
     with open(tmp, "wb") as f:
@@ -332,10 +322,10 @@ def write_spool_event(directory, key, event, args):
 
 
 class SpoolReader:
-    """Consumes the spool directory: drain() reads every event file in key
-    order, drops stale / superseded / excess ones, deletes every file it has
-    handled, and returns the EsEvents to deliver (in order). Not thread-safe:
-    one consumer (the Watcher thread) owns it."""
+    """Reads the spool folder: drain() takes every event file in key order, drops stale, replaced
+    or excess ones, deletes every file it handled, and returns the EsEvents to deliver in
+    order. Not thread safe, one reader (the Watcher thread) owns it.
+    """
 
     def __init__(self, directory, max_spool=DEFAULT_MAX_SPOOL, log_fn=None):
         self.dir = directory
@@ -420,7 +410,7 @@ class SpoolReader:
 # inotify (ctypes)
 # ---------------------------------------------------------------------------
 def parse_inotify_events(buf):
-    """Raw inotify read -> [(wd, mask, cookie, name)]; a truncated tail is dropped."""
+    """Raw inotify read -> [(wd, mask, cookie, name)], a cut off tail gets dropped."""
     out = []
     i, n, hs = 0, len(buf), _INOTIFY_HEADER.size
     while i + hs <= n:
@@ -435,8 +425,9 @@ def parse_inotify_events(buf):
 
 
 def is_spool_event(mask, name):
-    """An event file appearing by rename (or a direct close-after-write),
-    never a hook's `.tmp.<pid>` file; a queue overflow means "rescan"."""
+    """An event file showing up by rename (or a direct close after write), never a hook's
+    `.tmp.<pid>` file. A queue overflow means rescan.
+    """
     if mask & IN_Q_OVERFLOW:
         return True
     return bool(mask & _WATCH_MASK) and spool_key(name) is not None
@@ -448,7 +439,7 @@ class _Inotify:
 
     @classmethod
     def create(cls, directory):
-        """None where inotify is unavailable (not Linux) - never raises."""
+        """None where there's no inotify (not Linux), never raises."""
         if not sys.platform.startswith("linux"):
             return None
         try:
@@ -496,17 +487,17 @@ class _Sentinel:
         return False
 
 
-UNKNOWN = _Sentinel("UNKNOWN")          # ES did not answer (timeout, refused, bad JSON)
+UNKNOWN = _Sentinel("UNKNOWN")  # ES didnt answer (timeout, refused, bad JSON)
 NOT_RUNNING = _Sentinel("NOT_RUNNING")  # ES answered {"msg": "NO GAME RUNNING"}
 DEFAULT_END_AFTER = 2
 
 
 def probe_running_game(client=None):
-    """/runningGame, telling FAILURE apart from "nothing running":
-    an es_api.Game, NOT_RUNNING (ES said {"msg": "NO GAME RUNNING"}), or
-    UNKNOWN (no answer within the timeout, connection refused, a non-JSON or
-    unexpected body). es_api.running_game() returns None for both of the
-    last two by design, which is why the poll cannot use it. Never raises."""
+    """/runningGame, telling a failure apart from nothing running: an es_api.Game, NOT_RUNNING (ES
+    said {"msg": "NO GAME RUNNING"}), or UNKNOWN (no answer in time, refused, a non-JSON or odd
+    body). es_api.running_game() returns None for both of the last two on purpose, which is why
+    the poll cant use it. Never raises.
+    """
     try:
         import es_api
         c = client if client is not None else es_api._default_client
@@ -527,21 +518,21 @@ def probe_running_game(client=None):
 
 
 def game_key(game):
-    """Identity of an es_api.Game for change detection."""
+    """identity of an es_api.Game for spotting changes"""
     if game is None or isinstance(game, _Sentinel):
         return None
     return (getattr(game, "system", ""), getattr(game, "rom_path", "") or getattr(game, "id", ""))
 
 
 class RunningPoll:
-    """Turns successive /runningGame results into start/end events.
-    Pure: feed(result, t) returns a list of EsEvents to emit.
+    """Turns /runningGame results one after another into start/end events. Pure, feed(result, t)
+    returns the EsEvents to emit.
 
-    result: an es_api.Game (running), NOT_RUNNING (ES positively said nothing
-    runs), or UNKNOWN / None (no usable answer). UNKNOWN never ends a game and
-    breaks a run of NOT_RUNNING answers; a poll-sourced game-end needs
-    `end_after` NOT_RUNNING answers in a row (RV1-M2 / RV2-M2). None counts
-    as UNKNOWN because es_api.running_game() returns None for failures too."""
+    result is an es_api.Game (running), NOT_RUNNING (ES said nothing runs), or UNKNOWN / None (no
+    usable answer). UNKNOWN never ends a game and breaks a run of NOT_RUNNING answers, and a
+    poll-sourced game-end needs `end_after` NOT_RUNNING answers in a row. None counts as UNKNOWN
+    since es_api.running_game() returns None for failures too.
+    """
 
     def __init__(self, end_after=DEFAULT_END_AFTER):
         self.key = None
@@ -584,15 +575,14 @@ def _is_es_api_running_game(fn):
 # The watcher
 # ---------------------------------------------------------------------------
 class Watcher:
-    """Watches the hook spool (and optionally polls the running game) and
-    calls on_event(EsEvent) from its own threads. start()/stop(); stop()
-    returns within ~1 s and leaves no thread behind.
+    """Watches the hook spool (and can poll the running game) and calls on_event(EsEvent) from its
+    own threads. start()/stop(), and stop() returns within about 1 s with no thread left behind.
 
-    running_probe() -> Game | NOT_RUNNING | UNKNOWN is what the poll uses.
-    running_game() is the older interface (Game or None): es_api's own
-    running_game is replaced by probe_running_game (same request, but it can
-    tell a timeout from "nothing running"); any other callable has its None
-    treated as UNKNOWN, so it can start a game but never end one."""
+    running_probe() -> Game | NOT_RUNNING | UNKNOWN is what the poll uses. running_game() is the
+    older interface (Game or None). es_api's own running_game gets swapped for
+    probe_running_game (same request, but it can tell a timeout from nothing running), and any
+    other callable has its None treated as UNKNOWN, so it can start a game but never end one.
+    """
 
     def __init__(self, on_event, spool_dir=None, running_game=None, running_probe=None,
                  poll_interval=3.0, stat_poll=1.0, read_initial=True, log_fn=None,
@@ -622,7 +612,7 @@ class Watcher:
 
     @property
     def path(self):
-        """The watched directory (older callers called it the record path)."""
+        """the watched folder (older callers called it the record path)"""
         return self.dir
 
     def start(self):
@@ -682,7 +672,7 @@ class Watcher:
         if self.read_initial:
             self._drain()
         else:
-            for _, name in list_spool(self.dir):      # start clean: forget the backlog
+            for _, name in list_spool(self.dir):  # start clean, forget the backlog
                 self.reader._remove(name)
         while not self._stop.is_set():
             rlist = [self._wake_r]

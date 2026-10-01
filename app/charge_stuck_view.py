@@ -1,38 +1,33 @@
-"""charge_stuck_view - the "charger connected but not charging" banner.
+"""charge_stuck_view - the big "charger connected but not charging" warning.
 
-No sheet, no confirmation, no privileged command - charge_stuck.py only ever
-reads sysfs/debugfs, so there is nothing here to confirm before running.
-poll() is called every main.CHARGE_STUCK_POLL_S (a plain sysfs read, cheap
-even every 10 s) and only ever updates the Home banner
-(screens.Home.set_charge_notice); dismiss() is the banner's own Dismiss
-button, which re-arms itself the next time the charger is unplugged (the
-owner's "maybe a dismiss" - it must not need a fresh look every 10 s once
-the owner has seen it and knows the fix, but it must not stay silently
-dismissed forever either)."""
+poll() runs every main.CHARGE_STUCK_POLL_S and only reads sysfs/debugfs. Once charge_stuck says
+its stuck the warning comes up full screen and stays until the charger is unplugged, even if
+charging recovers first. It only comes back on a new stuck plug. A weak charger never trips it
+since the input stage still reads a real limit (ICL not 0)."""
 import logging
 
 import charge_stuck
 
 log = logging.getLogger("rp5deck.charge_stuck")
 
-# Two steps (device, 25 Sep 04:51): a replug fixed it on some plug-ins, not
-# after the APSD loop; restarting on battery and plugging in after boot is
-# the path that has always charged (v4, 24 Sep 23:31 / 23:52). Restarting
-# WITH the charger in is not offered: the top screen may then stay off.
-MESSAGE = ("Not charging: replug the charger (unplug 5 s). Still not? Unplug, restart, "
-          "plug in after boot.")
-# Old samples are trimmed on every poll so this list never grows unbounded
-# over a long play session; a couple of windows' worth is plenty for
-# evaluate()'s own rolling WINDOW_S.
+# Unplugging and replugging the charger is the fix that works. A restart with the charger still
+# in came up stuck again, so it's never offered. While stuck, sleep_guard.py blocks suspend,
+# since a suspend in this state reset the RP5.
+HEADLINE = "Charger connected but not charging"
+LINES = ("The best fix is to unplug the charger and plug it back in.",
+         "This message will close when you unplug the charger.")
+MESSAGE = HEADLINE + ". " + " ".join(LINES)
+# old samples get trimmed every poll so this never grows over a long session, a couple of
+# windows is plenty for evaluate()'s rolling WINDOW_S
 KEEP_S = charge_stuck.WINDOW_S * 2
 
 
 class ChargeStuckController:
-    """host: main.App (ui, state_dirty). submit(fn, *args, done=cb) runs fn
-    (charge_stuck.Sampler.sample) on a worker and posts cb(result) to the UI
-    thread - real sysfs/debugfs I/O, so this must never run on the UI
-    thread, even though each read is cheap. sampler defaults to
-    charge_stuck.Sampler() (tests inject a fake with canned samples)."""
+    """host is main.App (ui, state_dirty). submit(fn, *args, done=cb) runs fn
+    (charge_stuck.Sampler.sample) on a worker and posts cb(result) to the UI thread, since it's real
+    sysfs/debugfs I/O even if each read is cheap. sampler defaults to charge_stuck.Sampler() (tests
+    pass a fake with canned samples).
+    """
 
     def __init__(self, host, submit, sampler=None):
         self.host = host
@@ -40,7 +35,7 @@ class ChargeStuckController:
         self.sampler = sampler or charge_stuck.Sampler()
         self.samples = []
         self.stuck = False
-        self.dismissed = False
+        self.warning = False            # latched on a stuck plug, cleared only by an unplug
         self.poll_inflight = False
 
     def poll(self):
@@ -54,14 +49,18 @@ class ChargeStuckController:
         self.samples.append(sample)
         cutoff = sample["t"] - KEEP_S
         self.samples = [s for s in self.samples if s["t"] >= cutoff]
-        if not sample["plugged"]:
-            self.dismissed = False       # re-arm: the owner's own "next plug-in" rule
         was_stuck = self.stuck
         self.stuck, reason = charge_stuck.evaluate(self.samples)
         if self.stuck and not was_stuck:
             log.warning("charge_stuck: %s", reason)
         elif was_stuck and not self.stuck:
             log.info("charge_stuck: cleared (%s)", reason)
+        if self.stuck and not self.warning:
+            self.warning = True
+            log.warning("charge_stuck: warning up until the charger is unplugged")
+        elif self.warning and not sample["plugged"]:
+            self.warning = False
+            log.info("charge_stuck: charger unplugged, warning closed")
         self._apply()
         self.host.state_dirty = True
 
@@ -69,13 +68,9 @@ class ChargeStuckController:
         home = getattr(self.host.ui, "home", None)
         if home is None:
             return
-        home.set_charge_notice(MESSAGE if (self.stuck and not self.dismissed) else "")
-
-    def dismiss(self):
-        log.info("charge_stuck: dismissed (re-arms on the next plug-in)")
-        self.dismissed = True
-        self._apply()
-        self.host.state_dirty = True
+        show = getattr(self.host, "set_charge_warning", None)
+        if show is not None:
+            show(self.warning)
 
     def state(self):
-        return {"stuck": self.stuck, "dismissed": self.dismissed, "samples": len(self.samples)}
+        return {"stuck": self.stuck, "warning": self.warning, "samples": len(self.samples)}

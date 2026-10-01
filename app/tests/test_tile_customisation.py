@@ -58,7 +58,7 @@ class TestDragPersists(AppCase):
         app = self.make_app()
         self._open_cc(app)
         app.ui.cc.home.enter_edit()
-        self._drag_far(app, "home.hud")
+        self._drag_far(app, "home.hotkeys")
         wanted = list(app.ui.cc.home.order)
         cfg2, _note = config.load(path=os.environ["RP5DECK_CONFIG"])
         self.assertEqual(config.get_value(cfg2, ("command_center", "tile_order")), wanted)
@@ -72,12 +72,12 @@ class TestHidePersists(AppCase):
         app = self.make_app()
         self._open_cc(app)
         app.ui.cc.home.enter_edit()
-        app.ui.cc.home._toggle_hidden("home.browser")
+        app.ui.cc.home._toggle_hidden("home.lights")
         app.ui.cc.home.exit_edit()
-        self.assertNotIn("home.browser", app.ui.targets())
+        self.assertNotIn("home.lights", app.ui.targets())
         cfg2, _note = config.load(path=os.environ["RP5DECK_CONFIG"])
         self.assertEqual(config.get_value(cfg2, ("command_center", "hidden_tiles")),
-                         ["home.browser"])
+                         ["home.lights"])
 
     def test_settings_tile_cannot_be_hidden_end_to_end(self):
         app = self.make_app()
@@ -92,7 +92,7 @@ class TestHidePersists(AppCase):
         app = self.make_app()
         self._open_cc(app)
         app.ui.cc.home.enter_edit()
-        app.ui.cc.home._toggle_hidden("home.discord")
+        app.ui.cc.home._toggle_hidden("home.keyboard")
         app.ui.cc.home.reset_layout()
         cfg2, _note = config.load(path=os.environ["RP5DECK_CONFIG"])
         self.assertEqual(config.get_value(cfg2, ("command_center", "tile_order")),

@@ -29,9 +29,9 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BREAKS = [
     ("companion.py",
-     '            # against the last resolved info, which re-arms the timer.\n'
+     '            # the timer.\n'
      '            self._resume_ingame_mode()\n',
-     '            # against the last resolved info, which re-arms the timer.\n'
+     '            # the timer.\n'
      '            pass  # (cm_break_tests: resume disabled)\n',
      "tests.test_companion.TestInGameDisplay.test_hud_loop_resumes_once_the_settings_sheet_closes"),
     ("companion.py",
@@ -45,9 +45,9 @@ BREAKS = [
      "tests.test_companion.TestInGameDisplay.test_slideshow_falls_back_to_art_when_the_system_has_no_slides"),
     ("companion.py",
      '        if raw == "manual":\n'
-     '            # CC2 polish (test day):',
+     '            # "manual" with no manual for this game',
      '        if False:  # (cm_break_tests: hint disabled)\n'
-     '            # CC2 polish (test day):',
+     '            # "manual" with no manual for this game',
      "tests.test_companion.TestInGameDisplay.test_manual_fallback_to_art_shows_a_hint_why"),
     ("settings_view.py",
      '        self.header.set_text("%s  (%d-%d of %d)" % (self.field["label"], lo, hi, n))\n',

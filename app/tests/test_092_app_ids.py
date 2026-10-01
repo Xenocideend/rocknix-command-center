@@ -1,5 +1,5 @@
 """Every app_id rp5deck owns must be placed on the Command Center's screen by
-rocknix-config/092-dual-screen-persist.
+rocknix-config/dual-screen-layout-and-power.
 
 Device, 24 Sep 20:02: the YouTube App's Firefox (rp5deck-ytapp, added to
 sway_ipc.OWN_APP_IDS) had no 092 rule, so it mapped on the add-on behind the
@@ -22,7 +22,8 @@ sys.path.insert(0, APP)
 import sway_ipc  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(APP))
-PATH_092 = os.environ.get("SW1_092_PATH") or os.path.join(os.path.dirname(APP), "scripts", "092-dual-screen-persist")
+PATH_092 = os.environ.get("SW1_092_PATH") or os.path.join(
+    os.path.dirname(APP), "scripts", "dual-screen-layout-and-power")
 
 # app_id=\"PATTERN\" inside a double-quoted swaymsg argument
 APP_ID_RE = re.compile(r'app_id=\\"(.+?)\\"\]')

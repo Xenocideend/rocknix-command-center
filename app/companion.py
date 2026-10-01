@@ -1,35 +1,23 @@
-"""companion - the default view (Navigation v2): art / video of the game
-selected in EmulationStation, or of the running game, ES-DE-companion style.
+"""The companion, the default view: art or video of the game picked in ES, or of the running
+game, like the ES-DE companion app.
 
 Parts (pure unless noted):
-  choose_media()      which media kind to show, per companion.media_priority
-  metadata_lines()    the optional title / facts / description lines
-  video_render_size() / video_rects()   video sizing and SDL src/dst rects
-  fs_media_paths()    ES's on-disk media naming, a fallback when ES is down
-  Resolver            ES lookups (runs on a worker thread; its ESClient and
-                      caches are used by that one thread only)
-  VideoWorker         owns the libmpv VideoPlayer on its OWN thread: mpv's SW
-                      render runs there into a back buffer, swapped under a
-                      lock; the UI thread only uploads the front buffer into
-                      its own XRGB8888 texture (DESIGN media budget)
-  CompanionView, ManualSheet, VolumeOSD   ui widgets (drawing untested)
-  CompanionController the logic that ties them together on the UI thread:
-                      targets (running > selected game > selected system >
-                      idle), media resolution with stale-result dropping,
-                      the video start delay, and the video rules:
-                      video ONLY while browsing, NEVER while a game runs,
-                      stopped whenever the companion is not the active view.
-                      CC2: while a game IS running, companion.in_game_display
-                      picks what actually shows (art / dim / off / manual /
-                      hud / clock / slideshow) - see companion_modes.py for
-                      the pure decision logic and its ES-DE Companion mapping
-                      (research/CC3-esde-companion.md), and
-                      CompanionController._apply_in_game_mode() for the one
-                      timer (ingame_timer) that drives the hud/slideshow
-                      choices.
+  choose_media()       which media kind to show, from companion.media_priority
+  metadata_lines()     the optional title / facts / description lines
+  video_render_size() / video_rects()   video sizing and the SDL src/dst rects
+  fs_media_paths()     ES's on-disk media names, a fallback when ES is down
+  Resolver             ES lookups (one worker thread uses it and its caches)
+  VideoWorker          owns libmpv on its own thread, renders into a back buffer swapped
+                       under a lock, and the UI thread only uploads the front buffer
+  CompanionView, ManualSheet, VolumeOSD   ui widgets (drawing isnt tested)
+  CompanionController  ties it together on the UI thread: what to show (running game >
+                       picked game > picked system > idle), media resolution that drops
+                       stale results, the video start delay, and video only while
+                       browsing, never while a game runs. While a game runs,
+                       companion.in_game_display picks what shows (see companion_modes.py).
 
-Dependencies are injected (worker submit, timers, video, image loader, ES,
-manuals), so tests drive it with fakes and no native library.
+Everything it needs is passed in (worker, timers, video, image loader, ES, manuals), so the
+tests run it with fakes and no native library.
 """
 import collections
 import logging
@@ -46,6 +34,7 @@ import es_api
 import manuals
 import media
 import screens
+import steam_library
 import theme_colour
 import ui
 from ui import THEME, Button, Container, Label, Sheet, Widget
@@ -58,14 +47,9 @@ ES_SETTINGS = "/storage/.config/emulationstation/es_settings.cfg"
 
 MEDIA_FALLBACK = ("thumbnail",)          # last resort when nothing in the priority exists
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
-# ES's scraped-media naming on this device (ES-API-NOTES / es fixtures):
-# <romdir>/images/<stem>-<suffix>.<ext>, videos/<stem>-video.mp4
-# "cartridge" and "boxback" (CC3: ES-DE Companion's "Physical Media" and
-# "Box Back Cover" widgets - research/CC3-esde-companion.md) are CONFIRMED
-# on this device (ES-API-NOTES.md: real `ls -la` on
-# ".../images/<stem>-cartridge.png" and "...-boxback.png"), unlike
-# "magazine"/"map" (in es_api.MEDIA_KINDS from ES source alone, never seen in
-# a real fixture) - those two stay out of FS_SUFFIX/config.MEDIA_VALUES.
+# ES's scraped media names on this device: <romdir>/images/<stem>-<suffix>.<ext> and
+# videos/<stem>-video.mp4. "cartridge" and "boxback" exist on the device, "magazine" and
+# "map" were never seen so they stay out.
 FS_SUFFIX = {"image": "image", "thumbnail": "thumb", "marquee": "marquee",
              "fanart": "fanart", "titleshot": "titleshot", "mix": "mix",
              "cartridge": "cartridge", "boxback": "boxback"}
@@ -75,11 +59,10 @@ FS_SUFFIX = {"image": "image", "thumbnail": "thumb", "marquee": "marquee",
 # Pure helpers
 # ---------------------------------------------------------------------------
 def choose_media(paths, priority, allow_video):
-    """paths: kind -> existing local path. priority: companion.media_priority.
-    The FIRST available kind in priority order wins. If that is "video" (and
-    video is allowed) it plays, with the next available still as its poster;
-    if video is not allowed it is skipped as if absent.
-    Returns (video_path | None, still_path | None, still_kind | None)."""
+    """paths: kind -> existing path. The first kind in priority order that exists wins. If its
+    video and video is allowed it plays with the next one as its poster, if not its skipped.
+    Returns (video_path | None, still_path | None, still_kind | None).
+    """
     video = None
     still = still_kind = None
     for kind in list(priority) + [k for k in MEDIA_FALLBACK if k not in priority]:
@@ -120,8 +103,9 @@ def fmt_rating(rating):
 
 
 def metadata_lines(info, show):
-    """(title, facts, description) for the companion's text band, honouring
-    companion.show_metadata.*; each is "" when hidden or unknown."""
+    """(title, facts, description) for the text band, following companion.show_metadata.*. Each is
+    "" when hidden or unknown.
+    """
     show = show or {}
     title = info.get("title", "") if show.get("title", True) else ""
     facts = []
@@ -135,13 +119,16 @@ def metadata_lines(info, show):
         facts.append(fmt_rating(info.get("rating")))
     if show.get("playtime", False):
         facts.append(companion_modes.fmt_playtime({"playcount": info.get("playcount")}))
+    facts.extend(info.get("extra_facts") or [])
+    facts.extend(info.get("live_facts") or [])
     desc = " ".join((info.get("desc") or "").split()) if show.get("description", False) else ""
     return title, "  ·  ".join(f for f in facts if f), desc
 
 
 def video_render_size(native, box):
-    """Render size for mpv: the video's own size, shrunk (never grown) to fit
-    the box - the GPU scales it up, which is free; mpv scaling is not."""
+    """Render size for mpv: the video's own size, shrunk (never grown) to fit the box. The GPU
+    scales it up for free, mpv scaling isnt free.
+    """
     nw, nh = native
     bw, bh = box
     if nw <= 0 or nh <= 0 or bw <= 0 or bh <= 0:
@@ -151,8 +138,9 @@ def video_render_size(native, box):
 
 
 def video_rects(fw, fh, box, mode):
-    """SDL src/dst rects (x, y, w, h) to draw an fw x fh frame into box per
-    companion.image_fit: fit = letterboxed, fill = stretched, crop = covered."""
+    """SDL src/dst rects (x, y, w, h) to draw an fw x fh frame into box per companion.image_fit:
+    fit letterboxes, fill stretches, crop covers.
+    """
     bx, by, bw, bh = box
     if fw <= 0 or fh <= 0 or bw <= 0 or bh <= 0:
         return (0, 0, max(0, fw), max(0, fh)), tuple(box)
@@ -188,15 +176,14 @@ def fs_media_paths(rom_path, isfile=os.path.isfile):
     return out
 
 
-ES_VIDEO_AUDIO_DEFAULT = True     # ES Settings.cpp: VideoAudio defaults to true (R6, RV4-M1)
+ES_VIDEO_AUDIO_DEFAULT = True  # ES's VideoAudio defaults to true
 
 
 def video_muted(setting, es_settings_path=ES_SETTINGS):
-    """companion.video_audio -> mute? follow_es reads ES's VideoAudio from
-    es_settings.cfg. ES only writes a setting that differs from its default,
-    so an ABSENT key means ES's default (true: audio on, so not muted,
-    RV4-M1); only an explicit value="false" mutes. An UNREADABLE file means
-    muted (never surprise-loud when we cannot tell)."""
+    """companion.video_audio -> mute? follow_es reads ES's VideoAudio. ES only writes a setting
+    that differs from its default, so a missing key means audio on. Only value="false" mutes,
+    and a file we cant read means muted (never surprise loud).
+    """
     if setting == "unmuted":
         return False
     if setting == "muted":
@@ -227,12 +214,15 @@ def target_key(t):
 
 
 class Resolver:
-    """Target -> info dict (title, metadata, local media paths, manual,
-    logo). ES first (the per-game ?localpaths route), the on-disk naming
-    convention as a fallback. Used from ONE worker thread."""
+    """Target -> info dict (title, metadata, local media paths, manual, logo). ES first, the
+    on-disk names as a fallback. One worker thread uses it.
+    """
 
     def __init__(self, es=None, find_manual=None, isfile=os.path.isfile, index_ttl=120.0,
-                 clock=time.monotonic):
+                 clock=time.monotonic, steam=None, steam_root=None, now=time.time):
+        self.steam = steam if steam is not None else steam_library
+        self.steam_root = steam_root
+        self.now = now
         self.es = es if es is not None else es_api.ESClient()
         self.find_manual = find_manual or manuals.find_manual
         self.isfile = isfile
@@ -242,7 +232,7 @@ class Resolver:
         self._detail = collections.OrderedDict()   # (system, id) -> Game
         self._manual = collections.OrderedDict()   # rom path -> path | None
         self._logos = {}
-        self._bg_theme = {}                      # CC4: system -> (bg_rgba, fg_rgba) | None
+        self._bg_theme = {}  # system -> (bg_rgba, fg_rgba) | None
 
     def _rom_index(self, system):
         hit = self._index.get(system)
@@ -291,9 +281,9 @@ class Resolver:
         return p
 
     def system_logo(self, system):
-        """Local path of the theme's logo for a system (ES /systems/{s}
-        ?localpaths=true - es_api has no public call for it, so this uses its
-        guarded _get, which allows exactly that route)."""
+        """Path of the theme's logo for a system (ES /systems/{s}?localpaths=true, through es_api's
+        guarded _get which allows exactly that route).
+        """
         if system in self._logos:
             return self._logos[system]
         path = None
@@ -310,14 +300,10 @@ class Resolver:
         return path
 
     def system_bg_color_theme(self, system, logo_path):
-        """CC4: (bg_rgba, fg_rgba) from the installed ES theme's own XML
-        (theme_colour.theme_background_color()), keyed off the SAME logo
-        path system_logo() already fetched (its directory tree is walked
-        upward to find the theme's theme.xml - theme_colour.find_theme_root)
-        - no extra ES call. None (never cached, like system_logo() above -
-        ES/the theme file might come back later) if there is no logo path
-        yet, no theme.xml reachable from it, or the theme has nothing
-        usable."""
+        """(bg_rgba, fg_rgba) from the ES theme's own XML, found from the logo path system_logo()
+        already fetched, so no extra ES call. None (not cached, the theme might show up later) if
+        theres no logo path, no theme.xml or nothing usable.
+        """
         if system in self._bg_theme:
             return self._bg_theme[system]
         result = None
@@ -367,7 +353,7 @@ class Resolver:
         manual = self.manual_for(rom, t.system) if rom else None
         if manual is None and paths.get("manual"):
             manual = paths["manual"]
-        return {
+        out = {
             "kind": "game", "system": t.system or (src.system if src else ""),
             "rom_path": rom, "running": t.running,
             "title": (src.name if src is not None and src.name else t.name) or
@@ -380,6 +366,38 @@ class Resolver:
             "playcount": extra.get("playcount", ""),
             "media": paths, "manual": manual,
         }
+        if out["system"] == "steam":
+            self._add_steam(out, rom)
+        return out
+
+    # ES's media (the gamelist) wins; Steam's cached art fills what ES has none of. The hero is the wide
+    # picture, the 600x900 capsule is the box art, the header stands in for the screenshot-like kinds.
+    STEAM_ART_AS = (("hero", "fanart"), ("capsule", "image"), ("header", "mix"), ("header", "titleshot"),
+                    ("header", "thumbnail"))
+
+    def _add_steam(self, out, rom):
+        """Title, art and facts from Steam's own files for a Steam shortcut, or for whichever game Steam
+        is running when the shortcut is the Big Picture launcher. Anything that fails leaves `out` as ES
+        gave it.
+        """
+        try:
+            appid = self.steam.appid_from_desktop(rom) if rom else None
+            if appid is None and out.get("running"):
+                appid = self.steam.running_appid()
+            if appid is None:
+                return
+            root = self.steam_root or self.steam.default_root()
+            i = self.steam.info(root, appid)
+        except Exception:               # noqa: BLE001 - never lose the ES info over Steam's
+            log.exception("steam info")
+            return
+        out["steam_appid"] = appid
+        if i.get("name"):
+            out["title"] = i["name"]
+        for kind, as_kind in self.STEAM_ART_AS:
+            if i["art"].get(kind):
+                out["media"].setdefault(as_kind, i["art"][kind])
+        out["extra_facts"] = self.steam.facts(i, self.now())
 
     def random_art(self, rng=random):
         """A random still from the library, for the idle slideshow."""
@@ -395,15 +413,28 @@ class Resolver:
                         return paths[k]
         return None
 
+    def _steam_slide_art(self, rng):
+        """A random hero (or header) from the installed Steam games, for the slideshow: ES has no media for
+        Steam shortcuts, Steam's own art cache has plenty."""
+        try:
+            root = self.steam_root or self.steam.default_root()
+            games = self.steam.games(root)
+            for g in rng.sample(games, min(8, len(games))):
+                a = self.steam.art(root, g["appid"])
+                if a.get("hero") or a.get("header"):
+                    return a.get("hero") or a.get("header")
+        except Exception:               # noqa: BLE001 - no slide, the game's own art stays up
+            log.exception("steam slide art")
+        return None
+
     def system_art(self, system, rng=random):
-        """A random still from ONE system's library, for the in-game
-        slideshow (companion.in_game_display == "slideshow", CC2). Unlike
-        random_art() (the idle slideshow: whole library, a few systems),
-        this is scoped to the system of the game that is currently running
-        - the owner asked specifically for "a slideshow of the SYSTEM's
-        art" while playing, not a whole-library shuffle."""
+        """A random still from the running game's own system, for the in-game slideshow (the idle
+        slideshow uses the whole library).
+        """
         if not system:
             return None
+        if system == "steam":
+            return self._steam_slide_art(rng)
         games = self.es.games(system)
         if not games:
             return None
@@ -438,17 +469,15 @@ class _FrameView:
 
 
 class VideoWorker:
-    """Plays one companion video. All VideoPlayer calls happen on this
-    object's thread (media.py's one-thread rule); mpv's wake callback only
-    sets an Event. Frames are rendered into a back buffer and swapped under
-    a lock; notify() (called on the worker thread - it must only post to the
-    UI loop) says a new frame is ready. play()/stop() bump a generation so a
-    frame of the previous video can never be shown after stop().
+    """Plays one companion video. Every VideoPlayer call happens on this object's thread, mpv's
+    wake callback only sets an Event. Frames render into a back buffer swapped under a lock, and
+    notify() (worker thread, it must only post to the UI loop) says a new frame is ready.
+    play()/stop() bump a generation so an old frame never shows after stop().
 
-    stop() CLOSES the player (frees libmpv's threads and decoder); play()
-    after that builds a new one. A muted video gets mpv's ao=null, so no
-    audio output (PipeWire stream, audio decode) is created at all; since ao
-    is fixed at creation, a change of mute rebuilds the player."""
+    stop() closes the player (frees libmpv's threads and decoder) and play() builds a new one. A
+    muted video gets ao=null so no audio stream is made at all, and since ao is fixed at
+    creation a change of mute rebuilds the player.
+    """
 
     def __init__(self, notify, factory=None, log_fn=None):
         self._notify = notify
@@ -612,10 +641,10 @@ def icon_book(g, r, color):
 
 
 class PullTab(Button):
-    """The grab handle at the top edge: a tap opens the Command Center (the
-    swipe-down that starts here is claimed by the gesture recogniser first).
-    It is also the way in when swipe-down is disabled and no hardware button
-    is bound - otherwise Settings would be unreachable."""
+    """The grab handle at the top edge. A tap opens the Command Center (a swipe down from here goes
+    to the gesture recogniser first). It is also the way in with swipe-down off and no button
+    bound, otherwise Settings would be unreachable.
+    """
 
     def draw(self, g):
         x, y, w, h = self.rect
@@ -652,8 +681,52 @@ class VolumeOSD(Widget):
         g.text(text, (x + w - 200, y, 170, h), 60, THEME["text"], True, "center")
 
 
+MANUAL_ZOOMS = (1.0, 1.5, 2.0, 3.0)
+MANUAL_SWIPE_PX = 150
+
+
+class ManualPanArea(Widget):
+    """Under the pages. Zoomed in a drag pans, at 100% a sideways swipe turns the page (right =
+    back, left = forward).
+    """
+    interactive = True
+    owns_drag = True            # ui.TouchRouter: no swipe gesture takes this finger
+
+    def __init__(self, sheet, h, name):
+        Widget.__init__(self, name=name)
+        self.sheet, self.h = sheet, h
+        self.pid = self.start = self.last = None
+
+    def on_press(self, pid, x, y):
+        if self.pid is None:
+            self.pid, self.start, self.last = pid, (x, y), (x, y)
+
+    def on_move(self, pid, x, y):
+        if pid != self.pid:
+            return
+        if self.sheet.zoom > 1.0:
+            self.sheet.pan_by(x - self.last[0], y - self.last[1])
+        self.last = (x, y)
+
+    def on_release(self, pid, x, y):
+        if pid != self.pid:
+            return
+        dx, dy = x - self.start[0], y - self.start[1]
+        self.pid = self.start = self.last = None
+        if self.sheet.zoom == 1.0 and abs(dx) >= MANUAL_SWIPE_PX and abs(dx) > 1.5 * abs(dy):
+            self.h.manual_page(-1 if dx > 0 else 1)
+
+    def on_cancel(self, pid):
+        if pid == self.pid:
+            self.pid = self.start = self.last = None
+
+
 class ManualSheet(Sheet):
-    """Full-panel manual viewer: two-page spreads, Prev / Next, Back."""
+    """Full-panel manual viewer: two-page spreads, Prev / Next, Back, and PDF tools under the pages
+    (1 or 2 pages, zoom that re-renders so text stays sharp, Fit, First / Last, drag to pan when
+    zoomed, swipe to turn pages at 100%).
+    """
+    TOOL_H = 130  # tool buttons 120 px tall (the touch floor)
 
     def __init__(self, h, name="manual"):
         Sheet.__init__(self, "Manual", on_close=h.close_manual, name=name)
@@ -663,14 +736,36 @@ class ManualSheet(Sheet):
                                     name=name + ".next", size=44))
         self.msg = self.body.add(Label("", size=48, bold=True, align="center",
                                        name=name + ".message"))
+        # the pan area first: the tool buttons, added after it, are hit first
+        self.pan = self.body.add(ManualPanArea(self, h, name + ".pan"))
+        tool = getattr(h, "manual_tool", None) or (lambda _n: None)
+        self.pages_btn = self.body.add(Button("1 page", name=name + ".pages", size=36,
+                                              on_click=lambda: tool("single")))
+        self.zoom_out = self.body.add(Button("Zoom -", name=name + ".zoom_out", size=36,
+                                             on_click=lambda: tool("zoom_out")))
+        self.zoom_lbl = self.body.add(Label("100%", size=36, align="center",
+                                            name=name + ".zoom"))
+        self.zoom_in = self.body.add(Button("Zoom +", name=name + ".zoom_in", size=36,
+                                            on_click=lambda: tool("zoom_in")))
+        self.fit_btn = self.body.add(Button("Fit", name=name + ".fit", size=36,
+                                            on_click=lambda: tool("fit")))
+        self.first_btn = self.body.add(Button("First", name=name + ".first", size=36,
+                                              on_click=lambda: tool("first")))
+        self.last_btn = self.body.add(Button("Last", name=name + ".last", size=36,
+                                             on_click=lambda: tool("last")))
         self.pages = []             # [(Image, x, y)]
         self.visible = False
+        self.single = False
+        self.zoom = 1.0
+        self.offset = [0, 0]        # pan, px (zoomed only)
 
     def page_height(self):
-        return max(1, int(self.body.rect[3]) - 16)
+        return max(1, int(self.body.rect[3]) - self.TOOL_H - 16)
 
     def body_rect(self):
-        return self.body.rect
+        """The area the pages are laid out in (the body minus the tool row)."""
+        bx, by, bw, bh = self.body.rect
+        return (bx, by, bw, max(1, bh - self.TOOL_H - 8))
 
     def layout(self, rect):
         Sheet.layout(self, rect)
@@ -680,6 +775,43 @@ class ManualSheet(Sheet):
         self.next.set_rect((x + w - 320, y + 10, 300, self.HEADER_H - 20))
         bx, by, bw, bh = self.body.rect
         self.msg.set_rect((bx, by + bh * 0.4, bw, 80))
+        self.pan.set_rect(self.body_rect())
+        tools = ui.hsplit((bx + 20, by + bh - self.TOOL_H, bw - 40, self.TOOL_H - 10),
+                          [230, 200, None, 200, 170, 170, 170], gap=16)
+        for wdg, r in zip((self.pages_btn, self.zoom_out, self.zoom_lbl, self.zoom_in,
+                           self.fit_btn, self.first_btn, self.last_btn), tools):
+            wdg.set_rect(r)
+
+    def set_tools(self, single, zoom):
+        self.single, self.zoom = bool(single), float(zoom)
+        self.pages_btn.text = "2 pages" if self.single else "1 page"
+        self.pages_btn.invalidate()
+        self.zoom_lbl.set_text("%d%%" % round(self.zoom * 100))
+        self.zoom_out.set_enabled(self.zoom > MANUAL_ZOOMS[0])
+        self.zoom_in.set_enabled(self.zoom < MANUAL_ZOOMS[-1])
+        self.fit_btn.set_enabled(self.zoom != 1.0)
+
+    def _bounds(self):
+        if not self.pages:
+            return None
+        xs = [px for _i, px, _py in self.pages] + [px + i.w for i, px, _py in self.pages]
+        ys = [py for _i, _px, py in self.pages] + [py + i.h for i, _px, py in self.pages]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def pan_by(self, dx, dy):
+        b = self._bounds()
+        if b is None:
+            return
+        ax, ay, aw, ah = self.body_rect()
+        left, top, right, bottom = b
+
+        def clamp(off, lo_edge, hi_edge, a0, a1):
+            if hi_edge - lo_edge <= a1 - a0:
+                return 0                              # fits that way: centred, no pan
+            return max(a1 - hi_edge, min(a0 - lo_edge, off))
+        self.offset[0] = clamp(self.offset[0] + dx, left, right, ax, ax + aw)
+        self.offset[1] = clamp(self.offset[1] + dy, top, bottom, ay, ay + ah)
+        self.invalidate()
 
     def set_nav(self, title, can_prev, can_next):
         self.title.set_text(title)
@@ -692,8 +824,10 @@ class ManualSheet(Sheet):
             self.pages = []
         self.invalidate()
 
-    def set_pages(self, pages):
+    def set_pages(self, pages, reset_pan=True):
         self.pages = list(pages)
+        if reset_pan:
+            self.offset = [0, 0]
         self.msg.set_text("")
         self.invalidate()
 
@@ -701,8 +835,15 @@ class ManualSheet(Sheet):
         Container.draw(self, g)
         x, y, w, h = self.rect
         g.fill_rect((x, y + self.HEADER_H - 2, w, 2), THEME["line"])
-        for img, px, py in self.pages:
-            g.image(img, px, py)
+        ox, oy = self.offset
+        clipped = getattr(g, "clipped", None)
+        if clipped is None:                          # test fakes
+            for img, px, py in self.pages:
+                g.image(img, px + ox, py + oy)
+            return
+        with clipped(self.body_rect()):              # zoomed pages never cover the tools
+            for img, px, py in self.pages:
+                g.image(img, px + ox, py + oy)
 
 
 class CompanionView(Container):
@@ -726,8 +867,8 @@ class CompanionView(Container):
         self.clock_text = self.date_text = ""
         self.warning = ""               # one line, top left (name guard at startup)
         self.manual_btn_wanted = False
-        self.bg_color = BLACK           # CC4: system-carousel background (fill behind the logo)
-        self.fg_color = THEME["text"]   # CC4: matching readable text colour
+        self.bg_color = BLACK  # the system carousel background (behind the logo)
+        self.fg_color = THEME["text"]  # a readable text colour to match
         self.tab = self.add(PullTab("", on_click=h.open_command_center, name="companion.tab"))
         self.manual_btn = self.add(Button("Manual", on_click=h.open_manual,
                                           name="companion.manual", size=44, icon=icon_book))
@@ -747,7 +888,7 @@ class CompanionView(Container):
         self.title = self.facts = self.desc = self.badge = ""
         self.manual_btn_wanted = False
         self.manual_btn.set_visible(False)
-        self.set_bg_color(None)         # CC4: idle/clock is never themed - back to BLACK
+        self.set_bg_color(None)  # idle and the clock are never themed, back to black
         self.invalidate()
 
     def show_info(self, info, image, logo, lines, dim, bg=None):
@@ -764,26 +905,23 @@ class CompanionView(Container):
         self.dim = dim
         self.manual_btn_wanted = bool(info.get("manual"))
         self.manual_btn.set_visible(self.manual_btn_wanted and not self.manual.visible)
-        self.set_bg_color(bg if self.mode == "system" else None)   # CC4
+        self.set_bg_color(bg if self.mode == "system" else None)
         self.invalidate()
 
     def logo_box(self):
-        """CC4: (x, y, w, h) of the currently-placed logo image, or None -
-        NOT used to exclude anything from a DP-1 screenshot (this is the
-        BOTTOM screen's own copy of the logo, a different screen/theme
-        layout than ES's own carousel on DP-1 - see theme_colour.py's
-        default_exclude_box for that) - exposed for introspection/tests."""
+        """(x, y, w, h) of the logo as placed here, or None. Its this screen's own copy of the logo,
+        not used for anything on the top screen, just for tests and state.
+        """
         if self.logo is None:
             return None
         x, y = self.logo_xy
         return (x, y, self.logo.w, self.logo.h)
 
     def set_bg_color(self, bg):
-        """CC4: bg = (bg_rgba, fg_rgba) or None (-> BLACK/THEME["text"],
-        the pre-CC4 look). Called synchronously from show_info() when the
-        colour is already known (theme source, or a cached sample), and
-        asynchronously later by the controller once a debounced DP-1
-        sample comes back (sample source, first visit to a system)."""
+        """bg = (bg_rgba, fg_rgba) or None (black and the theme's text colour). Called right away from
+        show_info() when the colour is known, or later by the controller when a top screen sample
+        comes back.
+        """
         bg_color, fg_color = bg if bg is not None else (BLACK, THEME["text"])
         if (bg_color, fg_color) != (self.bg_color, self.fg_color):
             self.bg_color, self.fg_color = bg_color, fg_color
@@ -801,9 +939,9 @@ class CompanionView(Container):
             self.invalidate()
 
     def set_manual_open(self, is_open):
-        """The manual sheet covers the panel; the pull tab and Manual button
-        underneath are hidden too, so a tap on the sheet's blank area can
-        never fall through to them (Container.hit tries every child)."""
+        """The manual sheet covers the panel. The pull tab and Manual button under it are hidden too
+        so a tap on the sheet's blank area cant fall through to them.
+        """
         self.manual.set_visible(is_open)
         self.tab.set_visible(not is_open)
         self.manual_btn.set_visible(not is_open and self.manual_btn_wanted)
@@ -845,7 +983,7 @@ class CompanionView(Container):
 
     def draw(self, g):
         x, y, w, h = self.rect
-        g.fill_rect(self.rect, self.bg_color)      # CC4: was hard-coded BLACK
+        g.fill_rect(self.rect, self.bg_color)
         if self.mode == "idle":
             if self.idle_mode == "slideshow" and self.image is not None:
                 g.image(self.image, *self.image_xy)
@@ -917,12 +1055,13 @@ def _es_start_ticks():
 
 
 class CompanionController:
-    """UI-thread logic behind CompanionView. Inputs: on_es_event(),
-    set_active(), config_changed(), tick_clock(), and the manual actions.
+    """UI-thread logic behind CompanionView. Inputs: on_es_event(), set_active(), config_changed(),
+    tick_clock() and the manual actions.
 
-    submit(fn, *args, done=cb): runs fn on a worker and cb(result) back on
-    the UI thread. timers: call_later(delay, fn) -> handle, cancel(handle).
-    video: a VideoWorker (or fake). cfg_fn() -> the live config dict."""
+    submit(fn, *args, done=cb) runs fn on a worker and cb(result) back on the UI thread.
+    timers: call_later(delay, fn) -> handle, cancel(handle). video: a VideoWorker (or fake).
+    cfg_fn() gives the live config.
+    """
 
     def __init__(self, view, submit, timers, video, cfg_fn, resolver=None,
                  load_image=None, manuals_mod=None, clock=time.monotonic, wall=time.localtime,
@@ -943,7 +1082,7 @@ class CompanionController:
         self.es_start_ticks = es_start_ticks if es_start_ticks is not None else _es_start_ticks
         self.stale_starts = 0               # hook game-starts dropped: their ES has exited
         self.hud_last = None                # most recent hud.sample() dict, or None
-        self.ingame_timer = None            # CC2: the ONE timer behind in_game_display "hud"/"slideshow"
+        self.ingame_timer = None  # the one timer behind in_game_display "hud" and "slideshow"
         self.ingame_mode_applied = None      # introspection: the mode actually shown last _resolved()
         self._last_display = (None, None, ("", "", ""))   # (image, logo, lines) of the last resolve
         self.selected = None            # Target (game or system) from ES events
@@ -968,14 +1107,15 @@ class CompanionController:
         self.manual_renders = 0         # spreads actually rendered (introspection)
         self._auto_manual = False       # manuals.open_mode == auto_on_game_start, pending
         self.es_idle = None             # ES screensaver-start / sleep in effect
-        self.ignored_ends = 0           # game-ends for another ROM (RV4-N1)
+        self.ignored_ends = 0  # game-ends that belong to another ROM
         self.warning = ""
-        # CC4: system-carousel background colour, "sample" source only -
-        # the "theme" source is cheap enough to resolve inline in
-        # _resolve_job (see there); "sample" costs a real `grim` screenshot
-        # so it gets its own debounce (bg_gate) and generation counter
-        # (stale captures from a system the owner already scrolled past
-        # must never overwrite what is on screen now).
+        self.steam_timer = None         # the poll for which Steam game is up (see _sync_steam_poll)
+        self.steam_appid = None         # the last appid that poll saw
+        self.steam_live = []            # that poll's session and download lines, as last shown
+        # The system carousel background, "sample" source only. "theme" is cheap and resolves inline
+        # in _resolve_job. "sample" takes a real grim screenshot, so it gets its own debounce
+        # (bg_gate) and generation count, so a capture from a system you already scrolled past never
+        # overwrites whats on screen now.
         self.bg_sample = theme_colour.SampleCache()
         self.bg_gate = theme_colour.SettleGate(settle_s=0.4)
         self.bg_timer = None
@@ -990,11 +1130,11 @@ class CompanionController:
         return self.running or self.selected
 
     def _start_predates_es(self, ev):
-        """True if a hook game-start was fired by an ES that has since exited:
-        the spool key's first field is the start time (clock ticks since boot)
-        of the `sh -c` ES forked for the event (es-hooks/*.sh), the same clock
-        as ES's own /proc/<pid>/stat starttime. Unknown either way -> False
-        (keep the start: the safe direction, no video while a game may run)."""
+        """True if a hook game-start came from an ES that has since exited. The spool key starts with
+        the start time (clock ticks since boot) of the sh ES forked for the event, the same clock as
+        ES's own /proc/<pid>/stat. Unknown either way -> False (keep the start, no video while a game
+        might be running).
+        """
         if ev.source != "hook" or not ev.seq:
             return False
         try:
@@ -1014,18 +1154,17 @@ class CompanionController:
             self.selected = Target("game", ev.system, ev.rom_path, ev.name)
         elif ev.kind == esevents.SYSTEM_SELECTED and ev.system:
             self.selected = Target("system", ev.system)
-            self._schedule_bg_sample(ev.system)     # CC4 (source="sample" only; no-op otherwise)
+            self._schedule_bg_sample(ev.system)  # system background sample (does nothing unless the source is "sample")
         elif ev.kind == esevents.GAME_START and self._start_predates_es(ev):
-            # Test day, 24 Sep: a Steam launch stops sway and ES is restarted,
-            # so game-end never fires; the spool replayed the old start at the
-            # next app start and "Now playing" stuck on a game that was gone.
+            # A Steam launch stops sway and restarts ES, so game-end never fires. Without this the spool
+            # replays the old start at the next app start and "Now playing" sticks on a game thats gone.
             self.stale_starts += 1
             log.info("ES game-start (hook) for %r dropped: it predates the running ES",
                      ev.rom_path)
         elif ev.kind == esevents.GAME_START:
-            # The game needs the CPU: stop video NOW, before anything else.
+            # The game needs the CPU, stop video before anything else.
             self._stop_video("game-start")
-            self._cancel_bg_sample()                # CC4: never sample DP-1 while a game runs
+            self._cancel_bg_sample()  # never sample the top screen while a game runs
             same = self.running is not None and self.running.rom_path == ev.rom_path
             if ev.source == "poll":
                 self.running_confirmed = True
@@ -1036,11 +1175,9 @@ class CompanionController:
             if self._c_manual_auto():
                 self._auto_manual = True
         elif ev.kind == esevents.GAME_END:
-            # A poll "end" only counts if the poll had confirmed that game;
-            # a hook-reported start the poll never saw stays until game-end
-            # (safe direction: no video while a game may be running). The poll
-            # itself only reports an end after repeated clean "NO GAME
-            # RUNNING" answers - a timeout is never an end (esevents).
+            # A poll "end" only counts if the poll had confirmed that game. A start from the hooks that the
+            # poll never saw stays until game-end (no video while a game might be running). The poll only
+            # reports an end after repeated clean "NO GAME RUNNING" answers, a timeout never counts.
             if self._end_is_for_another_game(ev):
                 self.ignored_ends += 1
                 log.info("ES game-end (%s) for %r ignored: the running game is %r",
@@ -1053,8 +1190,8 @@ class CompanionController:
                     if self.manual_state is not None:
                         self.close_manual()
         elif ev.kind in esevents.IDLE_ON:
-            # ES's screensaver started or the device is going to sleep: no
-            # video decode (and no slideshow) behind a blanked screen (RV1-M5)
+            # ES's screensaver started or the device is going to sleep: no video decode or slideshow behind
+            # a blank screen
             self.es_idle = ev.kind
             self._stop_video(ev.kind)
             self._cancel_slides()
@@ -1067,10 +1204,81 @@ class CompanionController:
                 self._resume_ingame_mode()
         if target_key(self.target()) != before:
             self.refresh()
+        self._sync_steam_poll()
+
+    # -- Steam: the game running inside Big Picture is not the one ES launched ------------------
+    STEAM_POLL_S = 5.0
+
+    def _steam_running(self):
+        r = self.running
+        return r is not None and r.system == "steam"
+
+    def _sync_steam_poll(self):
+        """While Steam is the running 'game', watch which Steam game is actually up (the Big Picture
+        launcher starts with none), and stop watching when it ends."""
+        if self._steam_running():
+            if self.steam_timer is None:
+                self.steam_timer = self.timers.call_later(self.STEAM_POLL_S, self._steam_tick)
+        elif self.steam_timer is not None:
+            self.timers.cancel(self.steam_timer)
+            self.steam_timer = None
+            self.steam_appid = None
+            self.steam_live = []
+
+    def _steam_tick(self):
+        self.steam_timer = None
+        if not self._steam_running():
+            return
+        steam = getattr(self.resolver, "steam", steam_library)
+        root = getattr(self.resolver, "steam_root", None) or steam.default_root()
+        self.submit(steam.poll, root, done=self._steam_polled)
+
+    @staticmethod
+    def steam_live_facts(res):
+        """The short lines that change while a game runs: how long this session has been going, and a
+        background download or update."""
+        out = []
+        if res.get("appid") and res.get("seconds"):
+            d = steam_library.fmt_duration(res["seconds"])
+            if d:
+                out.append("Playing for " + d)
+        dl = res.get("downloads") or []
+        if dl:
+            more = " (+%d more)" % (len(dl) - 1) if len(dl) > 1 else ""
+            out.append("Updating %s %d%%%s" % (dl[0]["name"][:24], dl[0]["percent"], more))
+        return out
+
+    def _steam_polled(self, res):
+        if not self._steam_running():
+            return
+        res = res or {}
+        appid = res.get("appid")
+        if appid != self.steam_appid:
+            self.steam_appid = appid
+            shown = (self.info or {}).get("steam_appid")
+            if appid is not None and appid != shown:
+                self.refresh()
+        live = self.steam_live_facts(res)
+        if live != self.steam_live:
+            self.steam_live = live
+            self._show_live_facts()
+        self.steam_timer = self.timers.call_later(self.STEAM_POLL_S, self._steam_tick)
+
+    def _show_live_facts(self):
+        """Put the changed session and download lines on the screen without resolving the game again."""
+        if self.info is None or self.info.get("system") != "steam":
+            return
+        self.info["live_facts"] = list(self.steam_live)
+        image, logo, _ = self._last_display
+        lines = metadata_lines(self.info, self._c("show_metadata") or {})
+        self._last_display = (image, logo, lines)
+        if self.info.get("running") and self.ingame_mode_applied in ("art", "dim"):
+            self._apply_in_game_mode(self.info, image, logo, lines)
 
     def _end_is_for_another_game(self, ev):
-        """RV4-N1: a game-end whose ROM differs from the tracked running
-        game (both known) is late or stale - ES runs one game at a time."""
+        """A game-end for a different ROM than the running one (both known) is late or stale, ES runs
+        one game at a time.
+        """
         r = self.running
         if r is None or not ev.rom_path or not r.rom_path:
             return False
@@ -1079,21 +1287,19 @@ class CompanionController:
         return posixpath.normpath(ev.rom_path) != posixpath.normpath(r.rom_path)
 
     def set_warning(self, text):
-        """A one-line warning on the companion view ("" clears it); main.py
-        shows name_guard's startup result here."""
+        """A one line warning on the companion view ("" clears it). main.py shows name_guard's startup
+        result here.
+        """
         self.warning = text or ""
         self.view.set_warning(self.warning)
 
     def _c_manual_auto(self):
         return config.get_value(self.cfg_fn(), ("manuals", "open_mode")) == "auto_on_game_start"
 
-    # -- CC4: system-carousel background colour, "sample" source ------------
-    # (the "theme" source is resolved inline in _resolve_job - it is just a
-    # couple of file reads, no debounce needed. "sample" is a real `grim`
-    # screenshot, so it is debounced (bg_gate, ~400ms of no further
-    # scrolling) and generation-guarded the same way image resolution
-    # already is (self.gen) - a capture that was still running when the
-    # owner scrolled on must never overwrite what the screen shows now.)
+    # -- system carousel background, "sample" source ------------------------------------------
+    # A real grim screenshot, so its debounced (bg_gate, about 400 ms without scrolling) and
+    # generation-guarded like image resolution, so a capture still running when you scrolled on
+    # never overwrites whats on screen now.
     def _cancel_bg_sample(self):
         if self.bg_timer is not None:
             self.timers.cancel(self.bg_timer)
@@ -1108,7 +1314,7 @@ class CompanionController:
         cached = self.bg_sample.cached(system)
         if cached is not None:
             self._apply_bg_if_current(system, cached)
-            return                      # already know this system's colour - no capture needed
+            return  # already know this system's colour, no capture needed
         self.bg_gate.note(system, self.clock())
         gen = self.bg_gen
         self.bg_timer = self.timers.call_later(self.bg_gate.settle_s,
@@ -1146,17 +1352,10 @@ class CompanionController:
         else:
             self._update_video()
             self._arm_slides()
-            # CC2 bug (test day, 24 Sep): the Command Center/Settings sheet
-            # covering the companion makes it inactive; _ingame_active()
-            # gates every hud/slideshow tick on self.active, so a tick that
-            # fires while covered bails out WITHOUT re-arming itself
-            # (_cancel_ingame_timer() above does the same going the other
-            # way). Nothing used to restart that loop when the sheet closed
-            # and the companion became active again - hud/slideshow just
-            # stayed dead until some unrelated event (game end/start) forced
-            # a full refresh(). _resume_ingame_mode() (already used for the
-            # ES-screensaver case below) re-applies the CURRENT setting
-            # against the last resolved info, which re-arms the timer.
+            # The Command Center or Settings covering the companion makes it inactive, and an in-game tick
+            # that fires while covered stops without re-arming. So when it becomes active again,
+            # _resume_ingame_mode() puts the current setting back on the last resolved info, which re-arms
+            # the timer.
             self._resume_ingame_mode()
 
     def video_allowed(self):
@@ -1244,10 +1443,8 @@ class CompanionController:
                     "title": t.name or t.system or os.path.basename(t.rom_path or "")}
         if gen != self.gen:
             return None
-        # CC4: the "theme" source is cheap (a couple of file reads, already
-        # cached per system in the resolver) - resolved inline, no debounce.
-        # "sample" is handled entirely by the controller (_schedule_bg_sample
-        # et al.) since it needs a real timer, not just this one-shot job.
+        # the "theme" background is a couple of cached file reads so it resolves inline here. "sample"
+        # is the controller's job since it needs a real timer.
         if info.get("kind") == "system" and (self._c("system_bg_source") or "sample") == "theme":
             try:
                 bg = self.resolver.system_bg_color_theme(info.get("system"), info.get("logo"))
@@ -1275,6 +1472,8 @@ class CompanionController:
             return                      # a newer target is already on its way
         _, info, choice, image, logo = res
         self.info, self.choice = info, choice
+        if info.get("system") == "steam":
+            info["live_facts"] = list(self.steam_live)      # the last session and download lines
         lines = metadata_lines(info, self._c("show_metadata") or {})
         if info.get("kind") == "system" and info.get("total_games"):
             lines = (lines[0], "%d games" % info["total_games"], "")
@@ -1284,7 +1483,7 @@ class CompanionController:
         else:
             self._cancel_ingame_timer()
             self.ingame_mode_applied = None
-            bg = None                   # CC4
+            bg = None
             if info.get("kind") == "system":
                 source = self._c("system_bg_source") or "sample"
                 if source == "theme":
@@ -1295,14 +1494,23 @@ class CompanionController:
         self._update_video()
         if self._auto_manual and info.get("running"):
             self._auto_manual = False
-            # in_game_display == "manual" (just above) may already have
-            # opened it this same refresh - never open it twice.
+            # in_game_display "manual" just above may have opened it already this refresh, never open it
+            # twice
             if info.get("manual") and self.manual_state is None:
                 self.open_manual()
 
-    # -- CC2: what the bottom screen shows during a single-screen game -----
+    # -- what the bottom screen shows during a single-screen game -----------------------------
+    def _in_game_raw(self, info):
+        """The in-game display setting that applies to this game: Steam has a choice of its own
+        (steam.in_game_display), "same" or unset means the Companion's like any other game."""
+        if (info or {}).get("system") == "steam":
+            own = config.get_value(self.cfg_fn(), ("steam", "in_game_display"))
+            if own and own != "same":
+                return own
+        return self._c("in_game_display") or "art"
+
     def _in_game_mode(self, info):
-        raw = self._c("in_game_display") or "art"
+        raw = self._in_game_raw(info)
         return companion_modes.effective_in_game_mode(raw, bool(info.get("manual")))
 
     def _cancel_ingame_timer(self):
@@ -1315,22 +1523,19 @@ class CompanionController:
         self.ingame_timer = self.timers.call_later(delay, fn)
 
     def _ingame_active(self, mode):
-        """True if `mode` is still the right thing to be doing right now -
-        checked at the top of every tick, since none of the paths that stop
-        a game/leave the companion/change the setting reach into this
-        module's timer directly (RV2-style: fewer places that must
-        remember to cancel something)."""
+        """True if `mode` is still the right thing to do right now. Checked at the top of every tick
+        since none of the paths that stop a game, leave the companion or change the setting touch
+        this timer directly.
+        """
         return (self.active and self.es_idle is None and self.info is not None
                 and bool(self.info.get("running")) and self._in_game_mode(self.info) == mode)
 
     def _apply_in_game_mode(self, info, image, logo, lines):
-        """Chooses what actually appears on screen for a running
-        single-screen game, per companion.in_game_display (CC2). Video is
-        never a candidate here - video_allowed() already refuses it
-        unconditionally while a game is running (DESIGN.md media budget);
-        this only ever picks among still art, the manual, a HUD-lite
-        overlay, the clock, or a slideshow of the system's own art."""
-        raw = self._c("in_game_display") or "art"
+        """Picks what shows for a running single-screen game, per companion.in_game_display. Never
+        video (video_allowed() refuses it while a game runs), only still art, the manual, the HUD,
+        the clock or a slideshow of the system's own art.
+        """
+        raw = self._in_game_raw(info)
         mode = companion_modes.effective_in_game_mode(raw, bool(info.get("manual")))
         self.ingame_mode_applied = mode
         dim = float(self._c("background_dim"))
@@ -1351,14 +1556,9 @@ class CompanionController:
             self.tick_clock()
             return
         if mode == "slideshow":
-            # Show this game's own art right away (RP5 test day: a Mega
-            # Drive game had no system_art on this device, and the ONLY
-            # thing this branch used to do was arm a timer - so with
-            # nothing to slide to, the screen just kept showing whatever
-            # mode was applied before "slideshow" was picked, e.g. the
-            # idle clock from an earlier setting change, forever). This is
-            # the same "never leave stale/blank content" rule "manual"
-            # already follows by falling back to art.
+            # Show this game's own art right away. With no art to slide to (some systems have none), just
+            # arming the timer left whatever was on screen before up forever. Same "never leave stale
+            # content" rule "manual" follows by falling back to art.
             self.view.show_info(info, image, logo, lines, dim)
             self._arm_ingame_timer(0.0, self._ingame_slide_tick)
             return
@@ -1369,20 +1569,15 @@ class CompanionController:
         # "art" (default) or "dim"
         self._cancel_ingame_timer()
         if raw == "manual":
-            # CC2 polish (test day): "manual" with no manual for this game
-            # falls back to "art" by design (effective_in_game_mode) - but
-            # silently showing art with no explanation looks identical to
-            # having picked "art" on purpose. A one-line hint in the facts
-            # row (the same slot "hud" already repurposes for its own
-            # placeholder) says why, without adding any new UI.
+            # "manual" with no manual for this game falls back to art, which would look the same as
+            # picking "art". A one line hint in the facts row says why.
             lines = (lines[0], "No manual for this game — showing art", "")
         self.view.show_info(info, image, logo, lines, companion_modes.in_game_dim(mode, dim))
 
     def _resume_ingame_mode(self):
-        """After the screensaver/sleep interval ends (IDLE_OFF), replay the
-        currently-running game's in-game mode from the LAST resolved
-        result rather than paying for a fresh ES round trip - the target
-        has not changed, only es_idle has."""
+        """After the screensaver or sleep ends, replay the running game's in-game mode from the last
+        resolved result instead of asking ES again, only es_idle changed.
+        """
         if self.info is not None and self.info.get("running"):
             image, logo, lines = self._last_display
             self._apply_in_game_mode(self.info, image, logo, lines)
@@ -1425,13 +1620,9 @@ class CompanionController:
         def done(res):
             if res is None or res[0] != self.gen or not self._ingame_active("slideshow"):
                 return
-            # A system with no slide art (RP5 test day: a Mega Drive game,
-            # confirmed on-device) leaves res[1] None: nothing to show, but
-            # also nothing to CLEAR - _apply_in_game_mode() already put this
-            # game's own art on screen the moment "slideshow" was picked
-            # (see there), so there is no stale mode's view left behind to
-            # fall back from here. Just keep retrying at the normal
-            # interval in case art becomes available (e.g. a rescrape).
+            # A system with no slide art leaves res[1] None. Nothing to show and nothing to clear, since
+            # _apply_in_game_mode() already put this game's art up. Keep retrying in case art shows up (a
+            # rescrape).
             if res[1] is not None:
                 self.view.show_idle("slideshow", res[1])
             self._arm_ingame_timer(float(self._c("idle_slideshow_interval_s")),
@@ -1496,7 +1687,8 @@ class CompanionController:
         self.manual_gen += 1
         self.manual_seq += 1
         self.manual_state = {"pdf": pdf, "pages": None, "left": 1,
-                             "title": info.get("title") or "Manual"}
+                             "title": info.get("title") or "Manual",
+                             "single": False, "zoom": 1.0}
         mv = self.view.manual
         mv.set_nav(self.manual_state["title"], False, False)
         mv.set_message("Opening manual…")
@@ -1512,11 +1704,42 @@ class CompanionController:
         self.view.set_manual_open(False)
         self._update_video()
 
+    def manual_tool(self, name):
+        """The viewer's PDF tools: single (1/2 pages), zoom_in, zoom_out, fit, first, last. Each
+        re-renders the current place, zoom renders sharper pages.
+        """
+        st = self.manual_state
+        if st is None:
+            return
+        n = st["pages"]
+        z = st.get("zoom", 1.0)
+        zi = MANUAL_ZOOMS.index(z) if z in MANUAL_ZOOMS else 0
+        if name == "single":
+            st["single"] = not st.get("single")
+            if not st["single"] and st["left"] % 2 == 0:
+                st["left"] -= 1                       # spreads start on odd pages
+        elif name == "zoom_in":
+            st["zoom"] = MANUAL_ZOOMS[min(len(MANUAL_ZOOMS) - 1, zi + 1)]
+        elif name == "zoom_out":
+            st["zoom"] = MANUAL_ZOOMS[max(0, zi - 1)]
+        elif name == "fit":
+            st["zoom"] = 1.0
+        elif name == "first":
+            st["left"] = 1
+        elif name == "last" and n:
+            st["left"] = n if (st.get("single") or n % 2 == 1) else n - 1
+        else:
+            return
+        self.view.manual.set_tools(st.get("single"), st.get("zoom", 1.0))
+        self.manual_seq += 1
+        self._render_spread()
+
     def manual_page(self, delta):
         st = self.manual_state
         if st is None or not st["pages"]:
             return
-        left = st["left"] + 2 * (1 if delta > 0 else -1)
+        step = 1 if st.get("single") else 2
+        left = st["left"] + step * (1 if delta > 0 else -1)
         if left < 1 or left > st["pages"]:
             return
         st["left"] = left
@@ -1524,13 +1747,11 @@ class CompanionController:
         self._render_spread()
 
     def _render_spread(self):
-        """Render the LATEST requested spread (RV2-M5). At most one render
-        job is queued or running: page turns while it is in flight only move
-        manual_state["left"], a job that is already stale when it starts
-        returns without rendering, and when a job finishes the newest spread
-        is rendered next - so a flick of N taps costs at most two renders,
-        and only the settled spread asks manuals for a prerender (one bounded
-        worker there, not threads per tap)."""
+        """Render the latest requested spread. At most one render job is queued or running: page turns
+        while its busy only move manual_state["left"], a job thats already stale when it starts
+        returns without rendering, and when one finishes the newest spread renders next. So a flick
+        of N taps costs at most two renders, and only the settled spread asks for a prerender.
+        """
         if self.manual_inflight or self.manual_state is None:
             return
         st = self.manual_state
@@ -1539,6 +1760,10 @@ class CompanionController:
         ph = mv.page_height()
         bx, by, bw, bh = mv.body_rect()
         pdf, left, pages = st["pdf"], st["left"], st["pages"]
+        single, zoom = bool(st.get("single")), float(st.get("zoom", 1.0))
+        rh = int(ph * zoom)                           # render height (sharper when zoomed)
+        vw, vh = int(bw * zoom), int(bh * zoom)       # the zoomed virtual page area
+        ox, oy = bx - (vw - int(bw)) // 2, by - (vh - int(bh)) // 2
         mods, load = self.manuals, self.load_image
 
         def job():
@@ -1546,21 +1771,27 @@ class CompanionController:
                 return mg, seq, None, None          # superseded before it started
             n = pages if pages else mods.page_count(pdf)
             self.manual_renders += 1
-            lp, rp = mods.render_spread(pdf, left, height=ph, total_pages=n)
+            if single:
+                one = getattr(mods, "render_page", None)
+                lp = one(pdf, left, height=rh) if one is not None else \
+                    mods.render_spread(pdf, left, height=rh, total_pages=n)[0]
+                rp = None
+            else:
+                lp, rp = mods.render_spread(pdf, left, height=rh, total_pages=n)
             if lp is None:
                 return mg, seq, n, []
             sizes = [mods.png_size(p) for p in (lp, rp) if p is not None]
             if not sizes or any(s is None for s in sizes):
                 return mg, seq, n, []
             lay = mods.spread_layout(sizes[0], sizes[1] if len(sizes) > 1 else None,
-                                     screen=(int(bw), int(bh)))
+                                     screen=(vw, vh))
             out = []
             for p, key in ((lp, "left"), (rp, "right")):
                 if p is None or lay.get(key) is None:
                     continue
                 lx, ly, lw, lh = lay[key]
                 img = load(os.fspath(p), int(lw), int(lh), "fit")
-                out.append((img, bx + lx, by + ly))
+                out.append((img, ox + lx, oy + ly))
             return mg, seq, n, out
 
         def done(res):
@@ -1585,10 +1816,13 @@ class CompanionController:
             # the page range first: a long title is what gets ellipsized
             label = "%s of %s   %s" % (("%d-%d" % (st2["left"], last)) if last > st2["left"]
                                        else str(st2["left"]), n if n else "?", st2["title"])
+            step = 1 if single else 2
             mv.set_pages(out)
-            mv.set_nav(label, st2["left"] > 1, bool(n) and st2["left"] + 2 <= n)
-            if n and left + 2 <= n:                 # warm the cache for the next spread
-                mods.prerender(pdf, [p for p in (left + 2, left + 3) if p <= n], height=ph)
+            mv.set_tools(single, zoom)
+            mv.set_nav(label, st2["left"] > 1, bool(n) and st2["left"] + step <= n)
+            if n and left + step <= n:              # warm the cache for the next spread
+                nxt = (left + 1,) if single else (left + 2, left + 3)
+                mods.prerender(pdf, [p for p in nxt if p <= n], height=rh)
         self.manual_inflight = True
         self.submit(_guarded(job), done=done)
 

@@ -1,71 +1,34 @@
 #!/usr/bin/env python3
-"""rp5deck - touch companion app for the Retroid Pocket 5's bottom screen.
+"""rp5deck, the touch companion app for the Retroid Pocket 5's bottom screen.
 
     python3 main.py [--seconds N] [--output NAME]
 
-Settings live in one JSON file (config.py; default /storage/rp5deck/config.json,
-schema v1, edited live from the Settings sheet): cfg["output"] is the screen
-the panel binds to (default DSI-1), cfg["es_output"] the screen
-EmulationStation is on (default DP-1). --output overrides for one run.
+Settings are one JSON file (config.py, default /storage/rp5deck/config.json) and the
+Settings sheet edits it live. --output pins the screen for one run.
 
-Navigation v2 (DESIGN.md, I1): the default view is the COMPANION (art /
-video of the game selected in ES, or of the running game; companion.py). The
-COMMAND CENTER is pulled down over it (summon.PullDownStateMachine): swipe
-down from the top edge, a tap on the pull tab, or the hardware button
-(command_center.hardware_button) opens it; swipe up, Close / Back, the button
-again, or the auto-close timeout close it. Its first row is master volume.
-ES selection / game events come from the es-hooks (esevents.py) plus a
-/runningGame poll. A brief volume overlay shows on the companion whenever the
-level changes while the Command Center is closed.
+The default view is the companion (art or video of the game picked in ES, or the one
+running). The Command Center pulls down over it with a swipe from the top edge, the pull
+tab or the hardware button, and closes with a swipe up, Close/Back, the button again or
+its timeout. Master volume is its first row.
 
-A zwlr_layer_surface_v1 on DSI-1 (layer TOP, keyboard interactivity NONE),
-so a tap never takes keyboard focus from EmulationStation / the game on the
-top screen (DESIGN.md). Three display modes come from sway IPC:
-FULL (covers every DSI-1 pixel), BAR (bottom strip with an exclusive zone,
-while an rp5deck-* window uses the rest), HIDDEN (unmapped: something else
-owns DSI-1, or the device is undocked).
-
-CC5 (hidden_overlay.py): a fourth mode, OVERLAY, entered only from HIDDEN
-when an emulator's second window owns the panel's screen: the summon button
-(or the optional corner handle) maps this same surface full panel over that
-window, on the layer-shell OVERLAY layer (above fullscreen windows), still
-keyboard NONE, showing the Command Center volume first; Close / the button
-again / swipe up / an auto-close timeout unmap it back to HIDDEN, so the
-emulator gets its touch screen back. The game keeps focus and keeps running.
+Its a layer-shell surface on DSI-1 with keyboard interactivity NONE, so a tap never
+steals focus from ES or the game up top. Modes come from sway: FULL (the whole panel),
+BAR (a bottom strip while an rp5deck-* window uses the rest), HIDDEN (something else owns
+the panel, or its undocked) and OVERLAY (hidden_overlay.py, the same surface over an
+emulator's second window or undocked, on the overlay layer, until its closed or times out).
 
 Environment:
   RP5DECK_AUDIO_DRYRUN=1   audio setters log instead of running (readers stay real)
-  RP5DECK_LOG_DIR          log directory (default /storage/rp5deck/log; 512 KB x 2)
-  RP5DECK_RUN_DIR          runtime directory for state.json (default /run/rp5deck)
+  RP5DECK_LOG_DIR          log directory (default /storage/rp5deck/log, 512 KB x 2)
+  RP5DECK_RUN_DIR          where state.json goes (default /run/rp5deck)
   RP5DECK_STDERR=1         also log to stderr
-  RP5DECK_DEBUG=1          SIGUSR1 injects a scripted finger drag on the volume
-                           slider into SDL's own event queue (testing only: sway's
-                           `seat cursor set` delivers no motion during a press;
-                           the Command Center must be open)
-  RP5DECK_ES_SPOOL         the ES hooks' spool dir, one file per event (default
-                           /var/run/rp5deck/es-events; if unset, the directory of
-                           RP5DECK_ES_EVENT_FILE + /es-events is used)
-  RP5DECK_OSK              on-screen keyboard for Firefox: auto | button | off
-                           (default auto; config apps.osk_mode wins when present)
+  RP5DECK_DEBUG=1          SIGUSR1 fakes a finger drag on the volume slider (testing only,
+                           sway's seat cursor gives no motion during a press)
+  RP5DECK_ES_SPOOL         the ES hooks' event spool dir (default /var/run/rp5deck/es-events)
+  RP5DECK_OSK              Firefox's on-screen keyboard: auto | button | off
 
-Browser / Discord (HF1, web_tiles.py): the tiles start Firefox (rp5deck-web);
-092's rules put the window on DSI-1, the mode goes BAR and the strip shows
-that app's controls. rp5deck never sends a
-sway command for this: the owner taps Firefox to type (sway focuses it), and
-focus_guard.py returns focus to ES when the window closes.
-
-Screen swap (SW1, screen_swap.py): the panel binds to whichever output
-EmulationStation is NOT on - as sway shows ES, so a setting 092 has not acted
-on can never put the panel under ES - and follows a swap live by re-creating
-its layer surface on the other output (wl_layer.rebind). The Command Center
-tile "Swap screens" (and Settings > Screens) writes screens.es_screen; 092
-moves ES. cc_overlay.py (a second process) is the same Command Center on the
-game screen, as a pull-down; App's hooks (layer_level, placement_output,
-initial_mode, start_watchers) are what it overrides.
-
-Exit codes: 0 clean (SIGTERM/SIGINT/--seconds), 1 crash, 2 startup failure,
-3 the compositor closed the layer surface, 4 the surface could not be
-(re)mapped. The 094 supervisor restarts on any of them.
+Exit codes: 0 clean, 1 crash, 2 startup failure, 3 the compositor closed the surface,
+4 the surface couldnt be (re)mapped. command-center-app restarts on any of them.
 """
 import argparse
 import heapq
@@ -73,6 +36,7 @@ import json
 import logging
 import logging.handlers
 import os
+import subprocess
 import queue
 import signal
 import sys
@@ -90,9 +54,11 @@ import bar_autohide  # noqa: E402  (AH)
 import charge_limit  # noqa: E402  (YT4)
 import charge_stuck_view  # noqa: E402  (CHG)
 import cleanstate_view  # noqa: E402  (CC1)
+import steam_view  # noqa: E402
 import companion  # noqa: E402
 import config     # noqa: E402
 import device     # noqa: E402
+import screen_map  # noqa: E402
 import dualscreen_keys_view  # noqa: E402  (DS)
 import esevents   # noqa: E402
 import hidden_overlay  # noqa: E402  (CC5)
@@ -102,6 +68,8 @@ import hud        # noqa: E402
 import rgb_leds   # noqa: E402  (RG)
 import rgb_view   # noqa: E402  (RG)
 import rocknix_keyboard  # noqa: E402
+import brightness  # noqa: E402  (batch 1: both screens' brightness)
+import screen_idle  # noqa: E402  (14c: the panel follows ES's screensaver)
 import screens    # noqa: E402
 import settings_view  # noqa: E402
 import summon     # noqa: E402
@@ -115,9 +83,12 @@ import web_tiles  # noqa: E402
 import screen_swap  # noqa: E402
 import swap_ui    # noqa: E402
 import palettes   # noqa: E402  (Appearance)
+import button_colours  # noqa: E402  (batch 2: ES button prompt colours)
+import screen_presets  # noqa: E402  (batch 2: layout size for the device's panel)
+import version  # noqa: E402  (the version number and patch notes)
 from sway_ipc import BAR, FULL, HIDDEN   # noqa: E402
 
-VERSION = "I1"
+VERSION = version.label()  # the number and release date, from version.py
 BAR_H = screens.BAR_H
 VOLUME_HZ = 20.0
 HUD_PERIOD = 1.0
@@ -126,25 +97,23 @@ REMAP_WATCHDOG = 3.0
 OSD_SECONDS = 1.5
 SAVE_DELAY = 0.8
 ES_POLL_PERIOD = 3.0
-SLEEP_DELAY_S = 1.0            # YT4: lets the Sleep tap's own release paint first
-CHARGE_TOAST_S = 2.5           # YT4: how long a charge-limit error toast stays up
-# DS: dual-screen settings guard (dualscreen_keys.py) - reading system.cfg
-# (a few hundred lines) is cheap, so a modest interval is enough; the owner's
-# rule is WARN ONLY here, never a write from this timer.
+SLEEP_DELAY_S = 1.0  # lets the Sleep tap's release paint first
+CHARGE_TOAST_S = 2.5  # how long a charge limit error stays up
+# how often the dual-screen settings guard looks at system.cfg (it only warns, never writes)
 DS_POLL_S = 300.0
-# CHG: "charger connected but not charging" guard (charge_stuck.py) - a
-# handful of sysfs reads, cheap enough for the owner's own "every 10 s".
+# how often the "charger in but not charging" guard checks (a few sysfs reads)
 CHARGE_STUCK_POLL_S = 10.0
-# SW2: the in-app mode watchdog (main.App._reconcile). Recomputes mode from a
-# fresh sway tree and applies it only after seeing the SAME disagreement on
-# two consecutive checks RECONCILE_PERIOD apart (never on the first sighting:
-# a single stale read must not fight a transition that is already in flight).
+# dual-screen-layout-and-power writes this when the add-on stopped answering and needs a replug
+ADDON_REPLUG_FLAG = "/run/rp5deck-addon-replug"
+ADDON_REPLUG_POLL_S = 5.0
+ADDON_REPLUG_TEXT = "The Dual Screen add-on isnt answering. Unplug it and plug it back in."
+# The mode watchdog (_reconcile) only fixes a mode after the same disagreement shows up on
+# two checks in a row, so one stale read cant fight a change thats already happening.
 RECONCILE_PERIOD = 5.0
 RECONCILE_CONFIRM = 2
-RECONCILE_MIN_GAP = 10.0        # rate limit: no more than one correction this often
-# SW2: 094-rp5deck's hang detector kills a child whose heartbeat is this
-# stale; main.py touches its heartbeat file about this often (well under the
-# supervisor's own default stale threshold).
+RECONCILE_MIN_GAP = 10.0  # at most one correction this often
+# command-center-app kills a child whose heartbeat gets this stale, we touch it way more
+# often than that
 HEARTBEAT_PERIOD = 2.0
 PULL = summon.PullDownStateMachine
 ES_SCREEN_KEY = ("screens", "es_screen")
@@ -171,9 +140,9 @@ def setup_logging(name="rp5deck.log"):
 
 
 class Poster:
-    """Hands callables from worker threads to the main thread and wakes
-    SDL_WaitEventTimeout with a user event (SDL_PushEvent is thread-safe).
-    At most one wake event is outstanding at a time."""
+    """Hands work from worker threads to the main thread and wakes SDL_WaitEventTimeout with a
+    user event. Only one wake event is ever waiting.
+    """
 
     def __init__(self):
         self.q = queue.SimpleQueue()
@@ -212,10 +181,10 @@ class Poster:
 
 
 class LogLimiter:
-    """Log an exception with its traceback the first time a key fails, then
-    at most once per `interval` seconds with a count of the repeats in
-    between, so a call that fails on every tick cannot flood the 512 KB log.
-    Thread-safe (workers call it)."""
+    """Logs an exception with its traceback the first time a key fails, then at most once per
+    `interval` with a count of repeats, so something failing every tick cant flood the log.
+    Safe from worker threads.
+    """
 
     def __init__(self, logger, interval=60.0, clock=time.monotonic):
         self.log = logger
@@ -241,10 +210,9 @@ class LogLimiter:
 
 
 class _Failed:
-    """The result a guarded() call posts when the call raised: `done`
-    callbacks must clear their in-flight flags on it (RV2-m6), and it can
-    never be mistaken for a real reading (None means "unknown" to several
-    readers)."""
+    """What a guarded() call posts when it raised. `done` callbacks have to clear their
+    in-flight flags on it, and it can never be mistaken for a real reading.
+    """
 
     def __repr__(self):
         return "FAILED"
@@ -253,10 +221,19 @@ class _Failed:
 FAILED = _Failed()
 
 
+def own_cgroup(path="/proc/self/cgroup"):
+    """This process's cgroup lines ("" if unreadable), to refuse an ES restart from inside essway."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def guarded(fn, limiter):
-    """Wrap fn so an exception is logged (rate-limited) and becomes FAILED,
-    and the `done` callback still runs. Works with any worker (the tests'
-    synchronous one too), since nothing about submit() changes."""
+    """Wraps fn so an exception gets logged (rate limited) and turns into FAILED, and `done`
+    still runs.
+    """
     name = getattr(fn, "__name__", repr(fn))
 
     def call(*args):
@@ -271,8 +248,7 @@ def guarded(fn, limiter):
 
 
 class Worker:
-    """One background thread running submitted calls in order; results are
-    posted back to the main thread."""
+    """One background thread running calls in order, results posted back to the main thread."""
 
     def __init__(self, name, post):
         self.q = queue.Queue()
@@ -305,7 +281,7 @@ class Worker:
 
 
 class App:
-    ROLE = "panel"                  # cc_overlay.OverlayApp: "overlay"
+    ROLE = "panel"  # the game-screen overlay says "overlay"
 
     def __init__(self, args):
         self.args = args
@@ -331,8 +307,8 @@ class App:
         self._set_lock = threading.Lock()
         self._set_value = None          # newest live value for the one queued set
         self._set_queued = False
-        # master read-backs (RV2-M1): at most one get_master in flight; none
-        # while a finger is on the slider or a commit / restore is pending
+        # volume read-backs: one get_master in flight at most, and none while a finger is on the
+        # slider or a commit is pending
         self.master_inflight = False
         self.master_again = False
         self.commit_pending = False
@@ -348,6 +324,8 @@ class App:
         self.unmapped_since = None
         self.started = time.time()
         self.w = self.h = 0
+        self.surface = (0, 0)       # the real surface; self.w/h is the layout canvas
+        self._pixels_warned = False  # one-time warning when canvas.pixels() has no data
         self.sdl = self.win = self.ren = self.tex = self.canvas = None
         self.layer = None
         self.watcher = None
@@ -356,23 +334,19 @@ class App:
         self._sig_r = self._sig_w = None
         self.debug = os.environ.get("RP5DECK_DEBUG") == "1"
         self.cfg, self.cfg_note = config.load()
-        # Appearance: resolve the saved theme (default/a preset/custom)
-        # into ui.THEME BEFORE any widget is built, so the very first
-        # frame already shows it - screens.DeckUI's Root/Home/Bar/Sheet
-        # constructions below read THEME live via bg="..."/color="..."
-        # keys now (ui.py's Container.bg_color()/Label.color_value()), but
-        # only once ui.THEME itself holds the right values.
+        # Load the saved theme into ui.THEME before any widget is built so the first frame
+        # already has the right colours.
         palettes.apply_theme(self.cfg)
         if args.output:
             self.cfg["output"] = args.output
         self.output = self.cfg["output"]          # the screen the Command Center lives on
         self.es_output = self.cfg["es_output"]    # the screen ES / games live on
-        # SW1: --output pins the surface for this run; otherwise it follows ES
+        # --output pins the surface for this run, otherwise it follows ES
         self.output_forced = bool(args.output)
         self.placement = None           # screen_swap.Placement, last applied
         self.screen_watcher = None
         self.rebinds = 0
-        # SW2: the reconcile watchdog (a backstop for "stuck": see _reconcile)
+        # the mode watchdog (see _reconcile)
         self.reconcile_candidate = None     # (mode, reason) seen once, awaiting confirmation
         self.reconcile_last = 0.0           # monotonic time of the last correction applied
         self.reconcile_next = 0.0           # monotonic time of the next scheduled check
@@ -381,14 +355,17 @@ class App:
         self.heartbeat_written = 0.0
         self._unsaved = {}              # key_path -> value not yet written (save_changes)
         self.last_gesture = None
-        # Navigation v2 (I1)
+        # navigation
         self.ui = self.router = self.gestures = None
         self.pull = None                # summon.PullDownStateMachine
         self.companion = None           # companion.CompanionController
+        self.screen_idle = None  # screen_idle.ScreenIdle
+        self.bottom_bl = brightness.BottomBacklight()
+        self.top_dim = brightness.TopDim(screen_map.CURRENT.top)
         self.video = None               # companion.VideoWorker
         self.media_worker = self.io_worker = None
         self.es_watcher = None
-        self.name_guard = None          # name_guard summary (RV1-M3), once scanned
+        self.name_guard = None  # name_guard summary once its scanned
         self.summon_reader = self.summon_thread = None
         self.summon_presses = 0
         self.last_summon = None
@@ -404,49 +381,49 @@ class App:
         self.vseq = None
         self.video_src = self.video_dst = None
         self.counts["video_uploads"] = 0
-        # HF1: Browser / Discord
+        # Browser / Discord
         self.web = None                 # web_tiles.WebApps
         self.web_worker = self.search_worker = None
         self.web_parts = {}             # tests inject fakes (browser, player, keyboard, ...)
-        # W2b: the YouTube TV (leanback) tile - its OWN Firefox instance/
-        # profile/app_id/Marionette port (browser.TV_*), never web_tiles.WebApps.
+        # The YouTube TV tile has its own Firefox (profile, app_id, Marionette port), never
+        # web_tiles.WebApps.
         self.ytapp = None                # web_tiles.YtAppSession
         self.ytapp_parts = {}            # tests inject a fake browser
-        # AH: the YouTube TV app's auto-hidden strip (bar_autohide.py) - the
-        # only BAR app kind that does not reserve the fixed BAR_H strip.
+        # the YouTube TV strip hides itself, the only BAR app that doesnt keep the fixed strip
         self.ytauto = None               # bar_autohide.BarAutoHide
-        # CC1: the Clean state tile (cleanstate_view -> cleanstate.Helper)
+        # the Clean state tile
         self.clean = None               # cleanstate_view.CleanStateController
+        self.steam_view = None          # steam_view.SteamLibraryController
         self.clean_worker = None        # discover (~5 s) / execute run here, never on the UI
         self.clean_parts = {}           # tests inject helper_factory
-        # CC5: the Command Center over an emulator's second screen
+        # the Command Center over an emulator's second screen
         self.cc5 = None                 # hidden_overlay.OverlayController
         self.cc5_parts = {}             # tests inject query / handle_factory / peer_state
-        # CC6: the app tabs (app_tabs.TabsController; the panel only)
+        # the app tabs (panel only)
         self.tabs = None
         self.tabs_parts = {}            # tests inject switcher / avail / submit
-        # RG: Stick lights (rgb_leds.py device control, rgb_view.py the sheet)
+        # stick lights (rgb_leds.py does the device, rgb_view.py the sheet)
         self.rgb = None                 # rgb_view.RGBController
-        self.rgb_timer = None           # keeper_tick() poll (rgb_leds.KEEPER_PERIOD_S)
-        # YT4: the Sleep tile - guards a double tap and the ~1 s paint delay
+        self.rgb_timer = None  # keeper_tick() poll
+        # the Sleep tile (guards a double tap and the ~1 s paint delay)
         self.sleep_pending = False
         self.sleep_timer = None
         self.sleep_parts = {}            # tests inject a fake suspend()
-        # YT4: Safe charge - main.App.charge_parts injects fake charge_limit
-        # module-level functions (read_live/apply) so tests never touch real
-        # sysfs; charge_available mirrors the last read_live() probe.
+        # Safe charge. Tests swap in fake charge_limit functions so they never touch real sysfs,
+        # charge_available is the last read_live() result.
         self.charge_parts = {}
         self.charge_available = True
         self.charge_probe_inflight = False
-        # DS: dual-screen settings guard (dualscreen_keys.py / _view.py)
+        # dual-screen settings guard
         self.dualscreen = None          # dualscreen_keys_view.DualScreenKeysController
         self.ds_worker = None           # check() / restore() run here, never on the UI thread
         self.ds_parts = {}              # tests inject checker/restorer
         self.ds_timer = None
-        # CHG: "charger connected but not charging" guard (charge_stuck.py)
+        # "charger in but not charging" guard
         self.charge_stuck = None        # charge_stuck_view.ChargeStuckController
         self.charge_stuck_parts = {}    # tests inject a fake sampler
         self.charge_stuck_timer = None
+        self.charge_warning_on = False
 
     # -- timers -----------------------------------------------------------
     def call_at(self, t, fn):
@@ -471,11 +448,9 @@ class App:
 
     # -- signals ----------------------------------------------------------
     def _install_signals(self):
-        # Must happen BEFORE SDL_Init (and SDL_HINT_NO_SIGNAL_HANDLERS is set
-        # too), so Python - not SDL - owns SIGTERM/SIGINT. Python's C-level
-        # handler writes the signal number to the wakeup fd even while the
-        # main thread is blocked inside SDL_WaitEventTimeout; a helper thread
-        # turns that byte into an SDL user event, which wakes the loop.
+        # This has to happen before SDL_Init so Python owns SIGTERM/SIGINT, not SDL. Python writes
+        # the signal to the wakeup fd even while we're blocked in SDL_WaitEventTimeout, and a
+        # helper thread turns that into an SDL event that wakes the loop.
         self._sig_r, self._sig_w = os.pipe()
         os.set_blocking(self._sig_w, False)
         signal.signal(signal.SIGTERM, self._on_signal)
@@ -490,9 +465,8 @@ class App:
             self.stop_reason = signal.Signals(signum).name
 
     def _sig_thread(self):
-        # If this thread ends, SIGTERM still sets stop_reason (the Python
-        # handler), but the loop only notices at its next wake-up (up to 60 s
-        # when idle), so its death must be visible in the log (RV5b).
+        # If this thread dies SIGTERM still works but the loop only notices at its next wake (up to
+        # 60 s idle), so make the death show up in the log.
         while True:
             try:
                 data = os.read(self._sig_r, 16)
@@ -534,8 +508,8 @@ class App:
         sdl3.SetHint(sdl3.HINT_TOUCH_MOUSE_EVENTS, b"0")
         sdl3.SetHint(sdl3.HINT_MOUSE_TOUCH_EVENTS, b"0")
         sdl3.SetHint(sdl3.HINT_NO_SIGNAL_HANDLERS, b"1")
-        # Without this SDL creates an idle inhibitor for its window, which
-        # would stop the handheld from ever blanking or sleeping.
+        # Without this SDL keeps an idle inhibitor for its window and the handheld never blanks or
+        # sleeps.
         sdl3.SetHint(sdl3.HINT_VIDEO_ALLOW_SCREENSAVER, b"1")
         if not sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS):
             raise StartupError("SDL_Init: %s" % sdl3.error())
@@ -552,8 +526,7 @@ class App:
         sdl3.SetBooleanProperty(props, b"SDL.window.create.opengl", True)
         sdl3.SetNumberProperty(props, b"SDL.window.create.width", 1920)
         sdl3.SetNumberProperty(props, b"SDL.window.create.height", 1080)
-        # Never "Bottom"/"Secondary"/"Screen 2" in a title: ROCKNIX's sway
-        # rules match those words.
+        # Never "Bottom"/"Secondary"/"Screen 2" in a title, ROCKNIX's sway rules match those words.
         sdl3.SetStringProperty(props, b"SDL.window.create.title", b"rp5deck")
         self.win = sdl3.CreateWindowWithProperties(props)
         sdl3.DestroyProperties(props)
@@ -610,11 +583,12 @@ class App:
 
         self._clock_tick()
         self._battery_tick()
-        self._rgb_tick()                 # RG: keeper_tick() poll
-        self._ds_tick()                  # DS: dual-screen settings guard poll
-        self._charge_stuck_tick()        # CHG: "charger not charging" guard poll
+        self._rgb_tick()  # stick lights keeper poll
+        self._ds_tick()  # dual-screen settings guard poll
+        self._charge_stuck_tick()  # "charger not charging" guard poll
+        self._replug_tick()  # the add-on replug notice from dual-screen-layout-and-power
 
-    # -- SW1: screen placement (hooks cc_overlay.OverlayApp overrides) ------
+    # -- screen placement (the game-screen overlay overrides these hooks) ------
     def layer_level(self):
         return self.wl.LAYER_TOP
 
@@ -638,19 +612,12 @@ class App:
         self._start_screen_watcher()
 
     def _on_watched_mode(self, mode, reason, internal, external):
-        """ModeWatcher (background thread) computed this against the
-        (internal, external) pair it had AT THAT MOMENT, then posted it here
-        - but on_placement can rebind and recompute mode (synchronously,
-        against the fresh output pairing) from an event queued AHEAD of this
-        one, in the same drain() pass. Applying a mode computed for an output
-        pairing we have since moved away from would silently undo that fresh,
-        correct recompute (the real bug, 24 Sep: ES's transient post-game
-        blip on DSI-1, main.on_placement rebinding DP-1->DSI-1 there, and
-        this exact race leaving the panel HIDDEN and blank until restart -
-        see the bug report for the full trace). Safe to just drop: whichever
-        of on_placement's own recompute or the watcher's NEXT real
-        computation (using the now-updated watcher.internal/external) runs
-        next will reflect the current placement correctly."""
+        """ModeWatcher worked this out against the output pair it had at the time, but
+        on_placement may have rebound and recomputed since (from an event queued ahead of this
+        one). Applying a mode for a pairing we already moved away from would undo that fresh
+        recompute and leave the panel HIDDEN and blank, so drop it. The next real computation
+        will be right.
+        """
         if (internal, external) != (self.output, self.es_output):
             log.info("mode event dropped (stale): computed for %s/%s, now on %s/%s (%s)",
                      internal, external, self.output, self.es_output, reason)
@@ -680,8 +647,9 @@ class App:
         log.info("screens: %s -> this %s binds to %s", p, self.ROLE, self.output)
 
     def on_placement(self, p):
-        """ScreenWatcher (main thread, via post): ES moved, the add-on came
-        or went, or the setting changed while ES could not be seen."""
+        """ScreenWatcher (main thread): ES moved, the add-on came or went, or the setting changed
+        while ES couldnt be seen.
+        """
         self.placement = p
         self._refresh_screen_setting()
         if self.output_forced:
@@ -704,8 +672,8 @@ class App:
         try:
             self.layer.rebind(output)
         except Exception:           # noqa: BLE001
-            # A fresh process binds to the right output by itself (setup ->
-            # _initial_placement), so a failed rebind costs a restart only.
+            # A fresh process lands on the right output by itself, so a failed rebind only costs a
+            # restart.
             log.exception("rebind to %s failed; exiting so the supervisor starts a fresh "
                           "surface there", output)
             self.stop_reason = "rebind to %s failed" % output
@@ -721,8 +689,7 @@ class App:
         return True
 
     def _output_changed(self, output):
-        """Things of the main panel that name its output (HF1's web apps:
-        the BAR check and the on-screen keyboard's --output)."""
+        """Things that name the panel's output (the web apps' BAR check and the keyboard's --output)."""
         web = getattr(self, "web", None)
         if web is None:
             return
@@ -733,9 +700,9 @@ class App:
             kb.output = output
 
     def _refresh_screen_setting(self):
-        """The file is the truth for the swap (the overlay may have changed
-        it): keep this process's copy and the Settings toggle in step,
-        without queueing a save."""
+        """The file is the truth for the swap (the overlay may have changed it), so keep our copy
+        and the Settings toggle in step without queueing a save.
+        """
         cur = screen_swap.read_setting()
         if config.get_value(self.cfg, ES_SCREEN_KEY) == cur:
             return
@@ -767,17 +734,216 @@ class App:
         self.after_swap_requested()
         self.state_dirty = True
 
+    # -- Top screen / Performance tiles ------------------------------------------
+    TOP_SCREEN_SH = os.path.join(HERE, "top-screen.sh")
+
+    def ask_top_screen_off(self):
+        self.ui.cc.confirm.ask(
+            "Turn off the top screen?",
+            "The add-on's screen and its power go off to save battery (about 1.7 W). "
+            "The Command Center hides with it and ES moves to this screen. Turn it back on "
+            "from ES > Ports > Top Screen On-Off, by unplugging the add-on, or by rebooting.",
+            "Turn off", on_yes=self.top_screen_off_now, on_no=self.close_sheet)
+        self.ui.open(swap_ui.CONFIRM_SHEET)
+        self.state_dirty = True
+
+    def top_screen_off_now(self):
+        log.info("TOP SCREEN: off requested (092 applies it at its next poll)")
+        try:
+            subprocess.Popen(["sh", self.TOP_SCREEN_SH, "off"], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            log.exception("top-screen.sh")
+        self.ui.close()
+        self.state_dirty = True
+
+    # -- Quit game (overlay) and the Power sheet -----------------------------------
+    def ask_quit_game(self):
+        self.ui.cc.confirm.ask(
+            "Quit the game?",
+            "The running game closes without saving: anything since your last save is lost.",
+            "Quit game", on_yes=self.quit_game_now, on_no=self.close_sheet)
+        self.ui.open(swap_ui.CONFIRM_SHEET)
+        self.state_dirty = True
+
+    def quit_game_now(self):
+        """Clean state's own game stop: ES's /emukill, then ROCKNIX's kill target, then a port's
+        processes.
+        """
+        import cleanstate
+        self.ui.close()
+        self.ui.bar.show_hint("Quitting the game…")
+        if self.clean is None:
+            log.warning("quit game: no clean-state controller")
+            return
+        # the helper gets made the first time Clean state opens
+        helper = self.clean.helper or self.clean.helper_factory()
+
+        def job():
+            plan = helper.discover(check_health=False)
+            return helper.execute(plan, [cleanstate.KILL_EMULATOR], confirmed=True)
+        self._submit_clean(job, done=self._quit_done)
+        self.state_dirty = True
+
+    def _quit_done(self, steps):
+        ok = bool(steps) and all(getattr(s, "ok", False) for s in steps)
+        log.info("QUIT GAME: %s", "; ".join(getattr(s, "text", str(s)) for s in steps or []))
+        self.ui.bar.show_hint("Game closed" if ok else "The game is still running")
+        self.state_dirty = True
+
+    def open_power(self):
+        self.ui.open("power")
+        log.info("screen -> power")
+        self.state_dirty = True
+
+    POWER_CONFIRM = {
+        "restart": ("Restart the device?", "Everything closes and the RP5 restarts.", "Restart",
+                    ("systemctl", "reboot")),
+        "shutdown": ("Shut down the device?", "Everything closes and the RP5 turns off.",
+                     "Shut down", ("systemctl", "poweroff")),
+    }
+
+    def power_action(self, name):
+        if name == "sleep":
+            self.ui.close()
+            self.open_sleep()
+        elif name in self.POWER_CONFIRM:
+            title, text, yes, cmd = self.POWER_CONFIRM[name]
+            self.ui.cc.confirm.ask(title, text, yes, on_yes=lambda: self._power_run(name, cmd),
+                                   on_no=self.close_sheet)
+            self.ui.open(swap_ui.CONFIRM_SHEET)
+        else:
+            log.info("power: %s not available", name)
+        self.state_dirty = True
+
+    def _power_run(self, name, cmd):
+        log.info("POWER: %s -> %s", name, " ".join(cmd))
+        self.ui.close()
+        self.ui.bar.show_hint("Restarting…" if name == "restart" else "Shutting down…")
+        run = self.sleep_parts.get("power_run") or (
+            lambda c: subprocess.run(c, timeout=30, capture_output=True))
+        self.io_worker.submit(run, cmd, done=lambda _r: None)
+        self.state_dirty = True
+
+    PERF_MODES = ("auto", "max", "saver")
+    PERF_LABELS = {"auto": "Auto: boost heavy games", "max": "Max: always boosted",
+                   "saver": "Saver: always capped"}
+
+    def perf_mode(self):
+        import perf_profile
+        return perf_profile.read_mode(perf_profile.MODE_PATH)
+
+    def _apply_button_colours(self):
+        """Rewrites ES's A/B/X/Y icons for the chosen scheme (or the one matching the theme), only
+        when something actually changed.
+        """
+        choice = config.get_value(self.cfg, ("appearance", "button_colours"))
+        theme = config.get_value(self.cfg, ("appearance", "theme_preset"))
+        scheme = button_colours.resolve(choice, theme)
+        if scheme == getattr(self, "_button_scheme", None):
+            return
+        try:
+            done, msg = button_colours.apply(choice, theme)
+        except OSError as e:
+            log.warning("button colours: %s", e)
+            return
+        # ES loaded its icons when it started, so any change from Settings needs an ES restart to show
+        self.es_restart_pending = True
+        self._button_scheme = done
+        self.refresh_es_restart_row()
+        if self.ui is not None:
+            self.ui.bar.show_hint(msg)
+
+    # -- ES restart for new button icons -----------------------------------------------
+    ES_RESTART_ARM_S = 5.0
+
+    def _game_running(self):
+        return getattr(getattr(self, "companion", None), "running", None) is not None
+
+    def refresh_es_restart_row(self):
+        cc = getattr(getattr(self, "ui", None), "cc", None)
+        row = getattr(getattr(cc, "settings", None), "es_restart", None)
+        if row is not None:
+            row.show(getattr(self, "es_restart_pending", False), self._game_running(),
+                     getattr(self, "es_restart_armed", False), getattr(self, "es_restart_busy", False))
+            self.state_dirty = True
+
+    def restart_es_for_buttons(self):
+        """The ES restart row: the first tap arms it, a second tap within ES_RESTART_ARM_S restarts ES.
+        Never while a game runs, a restart would close it."""
+        if not getattr(self, "es_restart_pending", False) or self._game_running() or \
+                getattr(self, "es_restart_busy", False):
+            self.refresh_es_restart_row()
+            return
+        if not getattr(self, "es_restart_armed", False):
+            self.es_restart_armed = True
+            self.call_later(self.ES_RESTART_ARM_S, self._disarm_es_restart)
+            self.refresh_es_restart_row()
+            return
+        self.es_restart_armed = False
+        self.es_restart_busy = True
+        self.refresh_es_restart_row()
+        log.info("button colours: restarting ES so the new icons show")
+
+        def job():
+            import cleanstate
+            if "essway" in own_cgroup():
+                return False, "this process runs inside essway.service"
+            r = subprocess.run(list(cleanstate.CMD_RESTART_ES), capture_output=True, text=True, timeout=60)
+            return r.returncode == 0, (r.stdout + r.stderr).strip()[-120:]
+        self._submit_clean(job, done=self._es_restart_done)
+
+    def _disarm_es_restart(self):
+        if getattr(self, "es_restart_armed", False):
+            self.es_restart_armed = False
+            self.refresh_es_restart_row()
+
+    def _es_restart_done(self, result):
+        ok, why = result if isinstance(result, tuple) else (False, str(result))
+        self.es_restart_busy = False
+        if ok:
+            self.es_restart_pending = False
+        log.info("button colours: ES restart %s", "done" if ok else "failed: " + why)
+        self.refresh_es_restart_row()
+        if self.ui is not None:
+            self.ui.bar.show_hint("ES restarted with the new buttons" if ok else "ES didnt restart")
+
+    def refresh_perf_tile(self):
+        try:
+            t = self.ui.cc.home._tiles_by_name["home.perf"]
+        except (AttributeError, KeyError):
+            return
+        t.subtitle = self.PERF_LABELS.get(self.perf_mode(), self.PERF_LABELS["auto"])
+        self.state_dirty = True
+
+    def cycle_perf_mode(self):
+        import perf_profile
+        cur = self.perf_mode()
+        new = self.PERF_MODES[(self.PERF_MODES.index(cur) + 1) % len(self.PERF_MODES)] \
+            if cur in self.PERF_MODES else "auto"
+        try:
+            tmp = perf_profile.MODE_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(new + "\n")
+            os.replace(tmp, perf_profile.MODE_PATH)
+            log.info("PERF: mode %s -> %s", cur, new)
+        except OSError:
+            log.exception("perf-mode write")
+        self.refresh_perf_tile()
+
     def after_swap_requested(self):
         if self.pull is not None and self.pull.is_open():
             self.pull._goto(PULL.COMPANION, "swap")
 
     def build_ui(self, w, h):
-        """The widget tree and the navigation around it (no SDL needed, so
-        tests build the real thing): companion view + controller, settings
-        sheet, Command Center, pull-down state machine, swipe recogniser,
-        touch router. Needs self.w/self.h, self.title; creates the media
-        worker and the video worker unless a test already injected them."""
+        """Builds the widget tree and the navigation around it (no SDL needed, so tests build the
+        real thing). Makes the media and video workers unless a test already put fakes in.
+        """
         self.w, self.h = w, h
+        # the scheme ES is showing now, only settings changes are applied (nothing at start)
+        self._button_scheme = button_colours.resolve(
+            config.get_value(self.cfg, ("appearance", "button_colours")),
+            config.get_value(self.cfg, ("appearance", "theme_preset")))
         if not getattr(self, "title", None):
             self.title = device.app_title()
         if self.media_worker is None:
@@ -798,29 +964,22 @@ class App:
         view = companion.CompanionView(self)
         settings = settings_view.SettingsSheet(
             self.cfg, self.on_setting, self.close_settings, app_version=VERSION,
-            # Appearance: self.appearance (appearance_view.AppearanceController)
-            # is built further down, after self.ui exists (its sheet needs
-            # add_sheet()) - these two callables are only ever CALLED once
-            # the sheet is up and the owner taps a button, by which point
-            # self.appearance is set, so the late lookup here is safe.
+            # self.appearance gets built further down (its sheet needs add_sheet()). These only get
+            # called once the sheet is up and someone taps, so looking it up late is fine.
             on_edit_colours=lambda: self.appearance.open(),
-            on_reset_appearance=self.reset_appearance)
-        hotkeys_sheet = hotkeys_view.HotkeysSheet(self)   # CC7
+            on_reset_appearance=self.reset_appearance,
+            on_edit_tiles=self.edit_home_tiles,
+            on_restart_es=self.restart_es_for_buttons)
+        hotkeys_sheet = hotkeys_view.HotkeysSheet(self)
         self.ui = screens.DeckUI(self, w, h, self.title, companion=view, settings=settings,
                                  hotkeys=hotkeys_sheet)
         self.pull = PULL.from_config(self.cfg.get("command_center"), on_change=self.on_pull)
         kw = summon.swipe_recognizer_kwargs(
             config.get_value(self.cfg, ("command_center", "swipe_sensitivity")))
-        # Taps and drags go to widgets; the recogniser watches every stroke
-        # and claims the ones the pull-down wants (only in FULL mode: in BAR
-        # the surface is a 140 px strip and HIDDEN receives nothing).
-        # YT3: BAR mode is otherwise gestureless for every app (checked: the
-        # Browser/Discord strip has no swipe-up either, since `self.mode` is
-        # never FULL/OVERLAY while their window fills DSI-1) - added here for
-        # the YouTube App's tv strip ONLY (gated on `self.ytauto.active`,
-        # bar_autohide.BarAutoHide's own "BAR + Bar.app == 'tv'" flag), a
-        # swipe up on the strip or its auto-hidden handle opens the Command
-        # Center the same way tapping Home does (on_gesture, below).
+        # Taps and drags go to widgets. The recogniser watches every stroke and claims the ones the
+        # pull-down wants (FULL only, BAR is a 140 px strip and HIDDEN gets nothing). The one
+        # exception in BAR is the YouTube TV strip, where a swipe up opens the Command Center like
+        # Home does.
         self.gestures = ui.SwipeRecognizer(
             lambda: self.h,
             wants=lambda g: (self.mode in (FULL, hidden_overlay.OVERLAY) and self.pull.wants(g))
@@ -830,58 +989,59 @@ class App:
         self.router = ui.TouchRouter(self.ui.root, log=log.info, gestures=self.gestures)
         self.companion = companion.CompanionController(
             view, self._submit_media, self, self.video, lambda: self.cfg)
+        # dim this panel with ES's screensaver, and undo a crashed run's leftover dim
+        self.screen_idle = screen_idle.ScreenIdle(is_docked=self._panel_is_ours_and_docked)
+        try:
+            self.screen_idle.restore_leftovers()
+        except Exception:           # noqa: BLE001
+            log.exception("screen idle: restoring a leftover")
         self.web = self._make_web()
-        self.ytapp = self._make_ytapp()  # W2b
-        # AH: 0 (config.get_value default if the key is missing) disables
-        # auto-hide, same "0 = off" convention as auto_close_timeout_s.
+        self.ytapp = self._make_ytapp()
+        # 0 turns auto-hide off, same as auto_close_timeout_s
         self.ytauto = bar_autohide.BarAutoHide(
             self, timeout_s=config.get_value(self.cfg, ("youtube", "tv_bar_hide_s")))
         self.cc5 = hidden_overlay.OverlayController(self, **self.cc5_parts)
         self.clean = cleanstate_view.CleanStateController(self, self._submit_clean,
                                                           **self.clean_parts)
         self.ui.add_sheet("cleanstate", self.clean.sheet)
-        # DS: dual-screen settings guard - a Home banner, not a tile; see
-        # dualscreen_keys_view.py.
+        self.steam_view = steam_view.SteamLibraryController(self, self._submit_io, self._submit_media)
+        self.ui.add_sheet("steam", self.steam_view.sheet)
+        # dual-screen settings guard, a Home banner not a tile
         self.dualscreen = dualscreen_keys_view.DualScreenKeysController(
             self, self._submit_ds, **self.ds_parts)
         self.ui.add_sheet("dualscreen", self.dualscreen.sheet)
-        # CHG: "charger connected but not charging" - a Home banner, no
-        # sheet (read-only sysfs; nothing here to confirm). Shares io_worker
-        # (charge_limit's own worker, plain sysfs reads - unlike DS's
-        # restore(), never blocks for seconds).
+        # "charger in but not charging", a Home banner with no sheet. Shares io_worker since its
+        # just quick sysfs reads.
         self.charge_stuck = charge_stuck_view.ChargeStuckController(
             self, self._submit_io, **self.charge_stuck_parts)
-        # RG: Stick lights - initial state loads from config.get_value()
-        # through rgb_leds.state_from_config() (the "lights" schema group
-        # in config.py).
+        self.ui.add_sheet("charge_warning", screens.ChargeWarningSheet(
+            charge_stuck_view.HEADLINE, charge_stuck_view.LINES))
+        # stick lights load their first state from config (the "lights" group)
         lights = rgb_leds.Controller(state=rgb_leds.state_from_config(self.cfg))
         self.rgb = rgb_view.RGBController(self, lights)
         self.ui.add_sheet("lights", self.rgb.sheet)
-        # Appearance: appearance_view.AppearanceController owns the
-        # "Custom colours" sheet (opened from the Settings > Appearance
-        # page's own button, not a Home tile - see close_appearance()
-        # below for why it returns to "settings" rather than Home).
+        # The Custom colours sheet opens from Settings > Appearance, not a Home tile (so it goes
+        # back to Settings, see close_appearance()).
         self.appearance = appearance_view.AppearanceController(self, self.cfg)
         self.ui.add_sheet("appearance_custom", self.appearance.sheet)
-        # Tile customisation: push the persisted order/hidden set into
-        # Home (construction order / nothing-hidden until config.py's
-        # "command_center.tile_order"/"hidden_tiles" say otherwise -
-        # on_tile_layout_changed() below writes them back).
+        # Push the saved tile order and hidden set into Home, on_tile_layout_changed() writes them
+        # back.
         self.ui.cc.home.set_order(config.get_value(self.cfg, ("command_center", "tile_order")))
         self.ui.cc.home.set_hidden(config.get_value(self.cfg, ("command_center", "hidden_tiles")))
+        self.refresh_perf_tile()  # the tile shows the saved mode
+        self._apply_top_brightness()  # the add-on's saved dimming
         self.ui.cc.set_bar_app(None, keys_offered=self.web.policy.enabled())
         self.ui.set_view("companion")
         self.companion.refresh()
         self._update_active()
-        self.tabs = app_tabs.TabsController(self, **self.tabs_parts)     # CC6
+        self.tabs = app_tabs.TabsController(self, **self.tabs_parts)
         self.ui.cc.set_tabs(self.tabs.strip)
 
     def _submit_media(self, fn, *args, done=None):
         self.media_worker.submit(fn, *args, done=done)
 
     def _apps_setting(self, key, ok, default):
-        """An apps.* value if the config has a valid one (config.py has no
-        such keys yet: the HF1 report asks for them), else the default."""
+        """An apps.* value if the config has a valid one, else the default."""
         v = config.get_value(self.cfg, ("apps", key))
         try:
             return v if v is not None and ok(v) else default
@@ -906,10 +1066,11 @@ class App:
                                  internal=self.output, **parts)
 
     def _make_ytapp(self):
-        """W2b: its own Firefox instance/profile - see web_tiles.YtAppSession's
-        own doc for why this is not a third WebApps label."""
+        """Its own Firefox instance and profile (see web_tiles.YtAppSession for why its not a third
+        WebApps label).
+        """
         parts = {"registry": self.web.registry,
-                # YT4: live-updatable via on_setting(), read once at startup here
+                # live via on_setting(), read once here at startup
                 "swipe_natural": config.get_value(self.cfg, ("youtube", "tv_swipe_natural"))}
         parts.update(self.ytapp_parts)
         return web_tiles.YtAppSession(self, self._submit_web, **parts)
@@ -930,18 +1091,19 @@ class App:
         self.io_worker.submit(fn, *args, done=done)
 
     def start_services(self):
-        """ES events (hooks + /runningGame poll) and the summon button reader.
-        Both survive their device being absent (the PC, tests, undocked)."""
+        """ES events (hooks plus the /runningGame poll) and the summon button reader. Both cope with
+        their device missing (the PC, tests, undocked).
+        """
         import name_guard
-        # HF1: a Firefox / mpv / wvkbd orphaned by a hard crash of the last run
-        # (no shutdown ran) is stopped before the mode watcher starts.
+        # A Firefox, mpv or wvkbd left behind by a hard crash of the last run gets stopped before
+        # the mode watcher starts.
         self.web.reap_stale()
         self.es_watcher = esevents.Watcher(lambda ev: self.post(self.on_es_event, ev),
                                            running_probe=esevents.probe_running_game,
                                            poll_interval=ES_POLL_PERIOD, log_fn=log.info)
         self.es_watcher.start()
-        # RV1-M3: warn (log + companion view) if ES would shell-parse any game
-        # name/path through the hooks. Scans on its own daemon thread.
+        # Warn (log and companion view) if ES would shell-parse a game name or path through the
+        # hooks. Scans on its own thread.
         name_guard.check_async(on_done=lambda r: self.post(self.on_name_guard, r),
                                log_fn=log.warning)
         binding = config.get_value(self.cfg, ("command_center", "hardware_button"))
@@ -980,22 +1142,28 @@ class App:
             self.vtex, self.vtex_size, self.vseq = None, None, None
         if self.canvas:
             self.canvas.free()
-        self.w, self.h = w, h
+        self.surface = (w, h)
         sdl.SetWindowSize(self.win, w, h)
+        # the UI is laid out on a canvas sized for the chosen preset and the renderer stretches it
+        # to the surface (on the RP5 at Auto theyre the same)
+        w, h = screen_presets.layout_size(
+            w, h, config.get_value(self.cfg, ("screens", "ui_resolution")))
+        self.w, self.h = w, h
         self.tex = sdl.CreateTexture(self.ren, sdl.PIXELFORMAT_ARGB8888,
                                      sdl.TEXTUREACCESS_STREAMING, w, h)
-        # cairo ARGB32 is premultiplied; the companion leaves a transparent
-        # hole over the video texture drawn underneath.
+        # cairo ARGB32 is premultiplied, the companion leaves a see-through hole over the video
+        # texture drawn underneath.
         if not sdl.SetTextureBlendMode(self.tex, sdl.BLENDMODE_BLEND_PREMULTIPLIED):
-            # The UI is opaque except over the video, so the panel still looks
-            # right; only video-under-UI compositing would be wrong.
+            # The UI is opaque except over the video, so the panel still looks right, only
+            # video-under-UI blending would be off.
             log.warning("premultiplied blend refused by the renderer: %s", sdl.error())
         self.canvas = self.gfx.Canvas(w, h)
         self.ui.set_size(w, h)
         self._update_active()
         self.counts["resizes"] += 1
         self.state_dirty = True
-        log.info("surface size %dx%d", w, h)
+        log.info("surface size %dx%d%s", self.surface[0], self.surface[1],
+                 "" if (w, h) == self.surface else " (layout %dx%d)" % (w, h))
 
     # -- main loop --------------------------------------------------------
     def run(self):
@@ -1041,10 +1209,8 @@ class App:
             t = min(t, self.state_written + 0.1)
         if self.mode != HIDDEN and not self.layer.can_present:
             t = min(t, now + 0.1)       # waiting for a configure
-        # SW2: the loop must wake for these on its own - nothing else
-        # guarantees a timer inside HEARTBEAT_PERIOD/RECONCILE_PERIOD (an
-        # idle companion with the Command Center closed can otherwise go
-        # 30s+ between wakes, right up against 094-rp5deck's hang threshold).
+        # the loop has to wake for these by itself, an idle companion can go 30 s+ between wakes
+        # which is right up against command-center-app's hang threshold
         t = min(t, self.heartbeat_written + HEARTBEAT_PERIOD)
         t = min(t, self.reconcile_next)
         return max(0, int((t - now) * 1000) + 1)
@@ -1061,29 +1227,16 @@ class App:
             self.stop_reason = "remap watchdog"
             self.exit_code = 4
 
-    # -- SW2: the in-app mode watchdog (a backstop for "stuck") -------------
+    # -- mode watchdog (a backstop for a stuck mode) ------------------------------
     def _reconcile(self, now):
-        """Every RECONCILE_PERIOD, recompute mode from a fresh sway tree
-        against the CURRENT placement/output and compare it to self.mode. If
-        a mode event is ever missed or misapplied (a race between threads:
-        see _on_watched_mode's own fix for the one already found), this
-        eventually notices and corrects it - but only after seeing the SAME
-        disagreement on two consecutive checks, so a single stale read can
-        never fight anything already in flight. In particular it never
-        fights screen_swap.HOLD_S's placement hold: a real transient foreign
-        window (the ES quirk HOLD_S/this watchdog both exist because of)
-        self-reverts well inside one RECONCILE_PERIOD, so it never survives
-        long enough to become a second, confirming sighting.
+        """Every RECONCILE_PERIOD, work the mode out again from a fresh sway tree and compare it to
+        self.mode. It only corrects after the same disagreement shows up twice in a row, so a
+        single stale read or a short ES blip never fights something in flight.
 
-        Skipped entirely (not even counted as a sighting, so a skip during a
-        blip cannot half-arm the confirmation) while: there is no
-        ModeWatcher to correct at all (cc_overlay.py, the game-screen
-        overlay, has none - it has no independent HIDDEN/FULL/BAR judgement
-        to second-guess); CC5's OVERLAY is up (a real window IS there, by
-        design - see hidden_overlay.py); the Command Center is open or
-        opening (self.pull.state != COMPANION - a touch mid-transition must
-        not be yanked out from under a finger); or a rebind's configure has
-        not landed yet (self.layer not configured: a transition in flight)."""
+        Skipped (not even counted) when theres no ModeWatcher (the game-screen overlay), while
+        OVERLAY is up, while the Command Center is open or opening, or before a rebind's configure
+        has landed.
+        """
         if now < self.reconcile_next:
             return
         self.reconcile_next = now + RECONCILE_PERIOD
@@ -1113,15 +1266,14 @@ class App:
         self.state_dirty = True
         self.on_mode(mode, "watchdog: %s" % reason)
 
-    # -- SW2: heartbeat (094-rp5deck's hang detector) -----------------------
+    # -- heartbeat for command-center-app's hang detector ---------------------------
     def heartbeat_path(self):
         return os.path.join(self.run_dir, "heartbeat")
 
     def _touch_heartbeat(self, now):
-        """Touched from the main loop itself (not a thread): a stale file
-        while the process is still alive means the loop is hung, not just
-        busy - 094-rp5deck's hang detector kills and restarts on exactly
-        that (see its own comment)."""
+        """Touched from the main loop itself, so a stale file with the process still alive means the
+        loop is hung, not just busy. command-center-app restarts on exactly that.
+        """
         if now - self.heartbeat_written < HEARTBEAT_PERIOD:
             return
         self.heartbeat_written = now
@@ -1137,12 +1289,12 @@ class App:
 
     def _apply_configure(self):
         new = self.layer.pending_size()
-        if new and new[0] and new[1] and new != (self.w, self.h):
+        if new and new[0] and new[1] and new != self.surface:
             self._resize(*new)
 
     def _render(self):
         if self.cc5 is not None:
-            self.cc5.render_handle()        # CC5: the corner handle's own surface
+            self.cc5.render_handle()  # the corner handle's own surface
         if self.mode == HIDDEN or not self.layer.can_present:
             return
         vnew = self._upload_video_frame()       # may damage the companion (hole)
@@ -1154,24 +1306,50 @@ class App:
             with self.canvas.clipped(dmg):
                 self.ui.root.paint(self.canvas)
             data, stride = self.canvas.pixels()
+            if data is None:
+                # The cairo surface has no pixel buffer (e.g. a layout-size edge case during
+                # configure). We already took the damage, so re-mark the root dirty to repaint
+                # next frame and skip this one instead of crashing on c_void_p(None + ...).
+                if not self._pixels_warned:
+                    log.warning("canvas has no pixel data (layout %dx%d surface %s) - skipping frame",
+                                self.w, self.h, self.surface)
+                    self._pixels_warned = True
+                self.ui.root.damage_all()
+                return
             x, y, w, h = dmg
             rect = sdl.SDL_Rect(x, y, w, h)
             sdl.UpdateTexture(self.tex, byref(rect), c_void_p(data + y * stride + x * 4), stride)
         sdl.RenderClear(self.ren)
         if self._video_visible():
-            sdl.RenderTexture(self.ren, self.vtex, byref(self.video_src), byref(self.video_dst))
+            sdl.RenderTexture(self.ren, self.vtex, byref(self.video_src), byref(self._to_surface(self.video_dst)))
         sdl.RenderTexture(self.ren, self.tex, None, None)
         sdl.RenderPresent(self.ren)
         self.layer.presented()
         self.counts["presents"] += 1
+
+    def _to_surface(self, r):
+        """A rect on the layout canvas -> the same rect on the real surface."""
+        sw, sh = self.surface
+        if (sw, sh) == (self.w, self.h) or not self.w or not self.h:
+            return r
+        fx, fy = sw / float(self.w), sh / float(self.h)
+        return self.sdl.SDL_FRect(r.x * fx, r.y * fy, r.w * fx, r.h * fy)
+
+    def _to_layout(self, x, y):
+        """A pointer position on the real surface -> the layout canvas."""
+        sw, sh = self.surface
+        if (sw, sh) == (self.w, self.h) or not sw or not sh:
+            return x, y
+        return x * self.w / float(sw), y * self.h / float(sh)
 
     def _video_visible(self):
         return bool(self.vtex and self.video_dst is not None and self.companion is not None
                     and self.companion.view.video_on and self.ui.showing == "companion")
 
     def _upload_video_frame(self):
-        """UI thread: copy the video worker's newest frame (if any) into the
-        video's OWN XRGB8888 texture. Never renders video itself."""
+        """UI thread: copy the video worker's newest frame into the video's own XRGB8888 texture.
+        Never renders video itself.
+        """
         c = self.companion
         if self.video is None or c is None or c.video_path is None or \
                 self.ui.showing != "companion":
@@ -1200,8 +1378,9 @@ class App:
         return True
 
     def on_video_frame(self):
-        """Posted by the video worker: nothing to do here - the wake alone
-        makes the loop run _render(), which uploads the frame."""
+        """Posted by the video worker. Nothing to do here, the wake alone makes the loop render and
+        upload the frame.
+        """
 
     def _handle(self, ev):
         sdl = self.sdl
@@ -1212,7 +1391,7 @@ class App:
                  sdl.EV_FINGER_CANCELED):
             f = sdl.TouchFinger.from_buffer(ev)
             if self.cc5 is not None and self.cc5.handle_event(t, f.windowID, ("f", f.fingerID)):
-                return                  # CC5: a touch on the corner handle's window
+                return  # a touch on the corner handle's window
             pid = ("f", f.fingerID)
             x, y = f.x * self.w, f.y * self.h
             self._activity()
@@ -1230,24 +1409,47 @@ class App:
             if m.which == sdl.TOUCH_MOUSEID or m.button != sdl.BUTTON_LEFT:
                 return
             if self.cc5 is not None and self.cc5.handle_event(t, m.windowID, ("m", 0)):
-                return                  # CC5: the corner handle's window
+                return  # the corner handle's window
             self._activity()
+            x, y = self._to_layout(m.x, m.y)
             if m.down:
-                self._down(("m", 0), m.x, m.y, "pointer")
+                self._down(("m", 0), x, y, "pointer")
             else:
-                self.router.up(("m", 0), m.x, m.y)
+                self.router.up(("m", 0), x, y)
         elif t == sdl.EV_MOUSE_MOTION:
             m = sdl.MouseMotion.from_buffer(ev)
             if m.which != sdl.TOUCH_MOUSEID and m.state & sdl.BUTTON_LMASK:
-                self.router.move(("m", 0), m.x, m.y)
+                self.router.move(("m", 0), *self._to_layout(m.x, m.y))
         elif t == sdl.EV_WINDOW_EXPOSED:
             self.ui.root.damage_all()
         elif t == sdl.EV_QUIT:
             if self.stop_reason is None:
                 self.stop_reason = "SDL_EVENT_QUIT"
 
+    def _panel_is_ours_and_docked(self):
+        """The backlight is DSI-1's, only act while the Command Center is on DSI-1 and ES is on the
+        add-on. Undocked ES is on this panel and dims it itself.
+        """
+        if self.output != screen_map.CURRENT.bottom:
+            return False
+        try:
+            c = sway_ipc.Ipc(sway_ipc.find_socket(), 1.0)
+            try:
+                outs = c.request(sway_ipc.GET_OUTPUTS)
+            finally:
+                c.close()
+        except Exception:           # noqa: BLE001
+            return False
+        return any(o.get("name") == self.es_output and o.get("active") for o in outs)
+
     def _down(self, pid, x, y, kind):
         self.counts["input_down"] += 1
+        # a touch on a dimmed panel only wakes it and doesnt press anything
+        if self.screen_idle is not None and self.screen_idle.on_touch():
+            self.last_input = {"kind": kind, "x": round(x), "y": round(y), "mode": self.mode,
+                               "widget": "screen_idle.wake", "t": time.time()}
+            self.state_dirty = True
+            return
         w = self.router.down(pid, x, y)
         self.last_input = {"kind": kind, "x": round(x), "y": round(y), "mode": self.mode,
                            "widget": (w.name if w is not None else None), "t": time.time()}
@@ -1255,12 +1457,10 @@ class App:
 
     # -- debug self-test -----------------------------------------------------
     def _debug_drag(self, v0=None, v1=0.60, dur=0.5, hz=60):
-        """Push DOWN, MOTION x N, UP finger events for the volume slider into
-        SDL's own queue, 1/hz apart. This exercises the real TouchFinger
-        decode -> router -> slider -> throttle -> audio worker path in the
-        running process. It is not system input: nothing reaches sway.
-        The drag starts on the knob (v0 = the slider's value): the slider is
-        relative, so a drag starting elsewhere would not end at v1."""
+        """Pushes DOWN, MOTION x N, UP finger events for the volume slider into SDL's own queue, 1/hz
+        apart, to test the real touch path in the running app (nothing reaches sway). The drag
+        starts on the knob since the slider is relative.
+        """
         s = self.ui.bar.slider
         if self.mode == HIDDEN or not s.shown() or not s.enabled:
             log.warning("DEBUG self-test drag skipped: slider not available")
@@ -1293,30 +1493,30 @@ class App:
     def on_gesture(self, name):
         log.info("gesture %s (pull-down state %s)", name, self.pull.state)
         self.last_gesture = {"name": name, "t": time.time()}
-        # YT3: the tv strip's own swipe-up (gestures.wants(), above) - this is
-        # a park-and-show-home action (main.App.on_tv_home), not a pull-down
-        # STATE transition: self.pull.state is already COMMAND_CENTER while
-        # BAR shows the strip, so pull.handle_gesture()'s swipe_up (which
-        # steps COMMAND_CENTER -> COMPANION) would be the wrong move entirely.
+        # the YouTube TV strip's swipe up parks it and shows Home. pull.state is already
+        # COMMAND_CENTER while BAR shows the strip, so handle_gesture()'s swipe up would be the
+        # wrong move.
         if self.mode == BAR and self.ytauto is not None and self.ytauto.active and \
                 name in ("swipe_up", "swipe_up_from_bottom"):
             self.on_tv_home()
+        elif self.pull.state == summon.PullDownStateMachine.SETTINGS and \
+                name in ("swipe_up", "swipe_down") and self.ui is not None:
+            # a swipe up or down pages through Settings, a swipe up from the bottom edge still closes it
+            self.ui.settings.change_page(1 if name == "swipe_up" else -1)
         else:
             self.pull.handle_gesture(name)
         self.state_dirty = True
 
-    # -- Navigation v2: the pull-down Command Center ------------------------
+    # -- the pull-down Command Center ---------------------------------------------
     def _activity(self):
-        """Any touch while the Command Center is open restarts its
-        auto-close countdown (summon.py's public rearm_timeout(), FX-D)."""
+        """Any touch while the Command Center is open restarts its auto-close countdown."""
         if self.pull is not None and self.pull.is_open():
             self.pull.rearm_timeout()
         if self.cc5 is not None:
-            self.cc5.activity()         # CC5: the overlay's own countdown
+            self.cc5.activity()  # the overlay's own countdown
         if self.ytauto is not None:
-            # AH: every touch that reaches main.App while BAR shows the tv
-            # app IS a touch on the strip/handle - nothing else is mapped on
-            # the surface in that state (bar_autohide.py's module doc).
+            # every touch that gets here while BAR shows the YouTube TV app is on the strip or its
+            # handle, nothing else is mapped then
             self.ytauto.touch()
 
     def on_pull(self, old, new, reason):
@@ -1339,14 +1539,13 @@ class App:
         self._arm_cc_tick()
         self.state_dirty = True
         if self.cc5 is not None:
-            self.cc5.after_pull(old, new, reason)   # CC5: closing it over a game -> HIDDEN
+            self.cc5.after_pull(old, new, reason)  # closing it over a game goes back to HIDDEN
         if self.tabs is not None:
-            self.tabs.after_pull(old, new, reason)  # CC6: refresh the tabs
+            self.tabs.after_pull(old, new, reason)  # refresh the tabs
 
     def _pull_open(self, reason):
-        # The pull tab: always a way in, even with swipe-down disabled and no
-        # hardware button (else Settings would be unreachable). open() is
-        # the public equivalent (FX-D): it already no-ops outside COMPANION.
+        # The pull tab is always a way in, even with swipe-down off and no hardware button,
+        # otherwise Settings could be unreachable.
         if self.mode == FULL:
             self.pull.open(reason)
 
@@ -1360,7 +1559,7 @@ class App:
         self.summon_presses += 1
         if self.cc5 is not None and self.cc5.on_summon(ev):
             self.state_dirty = True
-            return                      # CC5: HIDDEN (open over the game) / OVERLAY (close)
+            return  # HIDDEN opens it over the game, OVERLAY closes it
         self.last_summon = {"binding": ev.binding, "device": ev.device_path, "t": time.time()}
         log.info("summon button %s on %s (mode %s)", ev.binding, ev.device_path, self.mode)
         if self.mode != FULL:
@@ -1378,11 +1577,10 @@ class App:
 
     def _cc_tick(self):
         self.cc_tick_timer = None
-        if self.mode == BAR:
-            # HF1: the strip is all that is on screen while Firefox / a video
-            # fills the panel; the Command Center (e.g. the YouTube results)
-            # must still be there when the window closes, so its countdown
-            # restarts instead of closing it.
+        if self.mode == BAR or self.charge_warning_on:
+            # while Firefox or a video fills the panel the strip is all thats showing, and the Command
+            # Center (say the YouTube results) has to still be there when the window closes, so restart
+            # its countdown instead of closing it.
             self.pull.rearm_timeout()
         else:
             self.pull.tick()
@@ -1401,8 +1599,15 @@ class App:
         log.info("ES %s (%s): system=%r rom=%r name=%r", ev.kind, ev.source, ev.system,
                  ev.rom_path, ev.name)
         self.companion.on_es_event(ev)
+        if self.screen_idle is not None:
+            try:
+                self.screen_idle.on_es_event(ev.kind)
+            except Exception:       # noqa: BLE001
+                log.exception("screen idle: %s", ev.kind)
         if ev.kind == esevents.WAKE and self.rgb is not None:
-            self.rgb.lights.on_es_wake()   # RG: ROCKNIX may have just re-applied its own colour
+            self.rgb.lights.on_es_wake()  # ROCKNIX may have just put its own colour back
+        if ev.kind in (esevents.GAME_START, esevents.GAME_END):
+            self.refresh_es_restart_row()
         self.state_dirty = True
 
     def on_name_guard(self, result):
@@ -1444,22 +1649,78 @@ class App:
     # -- settings ---------------------------------------------------------------
     def open_settings(self):
         self.pull.open_gear()
-        self._probe_charge_limit()   # YT4: show live sysfs values, not a stale cache
+        self._probe_charge_limit()  # show live sysfs values, not a stale cache
+        self._probe_brightness()  # the live backlight too
 
     def close_settings(self):
         self.pull.back_tap()
 
-    # -- YT4: Safe charge (charge_limit.py) --------------------------------------
+    def edit_home_tiles(self):
+        """Settings > Command Center > "Edit buttons..." goes back to the Command Center's Home,
+        straight into Edit tiles (drag to reorder, eye to hide).
+        """
+        self.pull.back_tap()                 # SETTINGS -> COMMAND_CENTER
+        self.ui.close()                      # its Home, not a sheet
+        self.ui.cc.home.enter_edit()
+        self.state_dirty = True
+
+    # -- Safe charge and brightness -------------------------------------------------
+    BRIGHT_KEYS = (("screens", "bottom_brightness"), ("screens", "top_brightness"),
+                   ("screens", "match_brightness"))
+
+    def _apply_top_brightness(self):
+        pct = config.get_value(self.cfg, ("screens", "top_brightness"))
+        if pct < 100:
+            self.top_dim.set_pct(pct)
+
+    def _probe_brightness(self):
+        """On Settings open the bottom slider shows the live backlight (ROCKNIX's own brightness
+        control writes it too).
+        """
+        live = self.bottom_bl.get_pct()
+        if live is None:
+            return
+        config.set_value(self.cfg, ("screens", "bottom_brightness"),
+                         max(brightness.BOTTOM_MIN_PCT, live))
+        self._refresh_rows(("screens", "bottom_brightness"))
+
+    def _refresh_rows(self, *paths):
+        settings = getattr(self.ui, "settings", None)
+        if settings is None:
+            return
+        for p in paths:
+            row = settings.rows.get(p)
+            if row is not None:
+                row.refresh_from_cfg()
+        self.state_dirty = True
+
+    def _on_brightness(self, key_path, value):
+        g = lambda k: config.get_value(self.cfg, ("screens", k))
+        if key_path == ("screens", "bottom_brightness"):
+            self.bottom_bl.set_pct(value)
+            if g("match_brightness"):
+                top = brightness.matched_top(value, g("match_ratio"))
+                config.set_value(self.cfg, ("screens", "top_brightness"), top)
+                self.top_dim.set_pct(top)
+                self._refresh_rows(("screens", "top_brightness"))
+                self._schedule_save()
+        elif key_path == ("screens", "top_brightness"):
+            self.top_dim.set_pct(value)
+            if g("match_brightness"):              # moving top while matched re-sets the ratio
+                config.set_value(self.cfg, ("screens", "match_ratio"),
+                                 brightness.match_ratio(value, g("bottom_brightness")))
+        elif key_path == ("screens", "match_brightness") and value:
+            live = self.bottom_bl.get_pct() or g("bottom_brightness")
+            config.set_value(self.cfg, ("screens", "match_ratio"),
+                             brightness.match_ratio(g("top_brightness"), live))
+            log.info("brightness: match on, ratio %.2f (top %d%% / bottom %d%%)",
+                     g("match_ratio"), g("top_brightness"), live)
+
     def _probe_charge_limit(self):
-        """On every Settings open: read the REAL kernel thresholds (never
-        trust self.cfg's last-saved value alone - the owner may have run
-        095-charge-limit by hand, or this may be the very first open with
-        nothing saved yet) and push them into self.cfg / the sheet's rows,
-        so battery.safe_charge_enabled / safe_charge_end_pct always start
-        an editing session showing what the device is actually doing right
-        now. If the kernel has no charge-limit sysfs at all, the section is
-        shown disabled with a note instead of a control that could never do
-        anything."""
+        """Every time Settings opens, read the real kernel thresholds (someone may have run
+        battery-charge-limit by hand, or nothing's saved yet) so the rows show what the device is
+        actually doing. With no charge limit sysfs at all the section shows disabled with a note.
+        """
         if self.charge_probe_inflight:
             return
         self.charge_probe_inflight = True
@@ -1495,11 +1756,10 @@ class App:
         self.state_dirty = True
 
     def _apply_charge_limit(self):
-        """Both battery.* keys share this: the toggle off means "no limit"
-        (end=100) regardless of whatever percentage the slider is parked
-        at; the toggle on means the slider's own value. Runs off the UI
-        thread (real sysfs I/O); a read-back mismatch shows an error note
-        on the % row for CHARGE_TOAST_S rather than trusting the write."""
+        """Both battery keys use this. Toggle off means no limit (end=100) whatever the slider says,
+        on means the slider's value. Runs off the UI thread, and if the read-back doesnt match it
+        shows an error on the % row instead of trusting the write.
+        """
         if not self.charge_available:
             return
         enabled = config.get_value(self.cfg, ("battery", "safe_charge_enabled"))
@@ -1520,9 +1780,9 @@ class App:
         self.state_dirty = True
 
     def on_setting(self, key_path, value):
-        """SettingsSheet already validated and stored the value in self.cfg
-        (same dict). Save soon; apply live settings now; restart-flagged ones
-        wait (the sheet shows "applies after restart")."""
+        """SettingsSheet already checked and stored the value. Save soon, apply live settings now,
+        restart-flagged ones wait ("applies after restart").
+        """
         key_path = tuple(key_path)
         self.settings_changes += 1
         f = config.field_for(key_path)
@@ -1530,44 +1790,31 @@ class App:
                  " (applies after restart)" if f and f["restart"] else "")
         self._unsaved[key_path] = value
         if key_path[0] == "screens":
-            # SW1: 092 reads the file every poll - write it now, not in 0.8 s
+            # dual-screen-layout-and-power reads the file every poll, so write it now not in 0.8 s
             self.cancel(self.save_timer)
             self._save_now()
         else:
             self._schedule_save()
         if f is None or f["restart"]:
             return
-        if key_path[0] in ("companion", "manuals"):
+        if key_path in self.BRIGHT_KEYS:
+            self._on_brightness(key_path, value)
+            return
+        if key_path[0] in ("companion", "manuals", "steam"):
             self.companion.config_changed()
         elif key_path[0] == "appearance":
-            # Any of the 4 appearance.* keys can change what the effective
-            # theme is (theme_preset directly; the 3 custom_* keys only
-            # while theme_preset == "custom") - palettes.apply_theme()
-            # re-derives the whole 16-key THEME dict from self.cfg every
-            # time rather than patching one key, so there is only one
-            # code path to trust regardless of which of the 4 changed.
+            # Any appearance key can change the theme, so apply_theme() rebuilds the whole THEME from
+            # self.cfg every time instead of patching one key.
             palettes.apply_theme(self.cfg)
-            # Device field test 25 Sep: mutating ui.THEME is not enough -
-            # ui.py's Container/Label already read THEME live at DRAW
-            # time, but a widget only draws again once something marks it
-            # (or an ancestor) damaged (screens.py's own docstring: "the
-            # main loop redraws and uploads only the union of the damaged
-            # rectangles"). A settings row's own CycleButton invalidates
-            # ITSELF on tap (settings_view.CycleButton.clicked()), so it
-            # alone kept updating; nothing else on screen was ever told it
-            # needed a redraw, so the rest of the (already-built, never
-            # rebuilt) Settings sheet just kept showing whatever pixels
-            # were already in the framebuffer from the last time THAT area
-            # was actually repainted - observed on the device as the whole
-            # Settings page freezing at one preset's colours (background,
-            # tabs, other rows, Back, footer) while only the cycle button
-            # itself kept changing. damage_all() is the same fix already
-            # used everywhere else in this file that a change can affect
-            # pixels no single invalidated widget owns (on_mode(),
-            # _rebind(), _output_changed()) - mark the WHOLE surface
-            # damaged so next frame repaints everything with the new THEME,
-            # regardless of which widgets happened to invalidate themselves.
+            if key_path[1] in ("theme_preset", "button_colours"):
+                self._apply_button_colours()
+            # Changing THEME isnt enough on its own, a widget only redraws when something damages it,
+            # so the rest of Settings would keep the old colours. damage_all() repaints everything.
             if self.ui is not None:
+                self.ui.root.damage_all()
+        elif key_path == ("screens", "ui_resolution"):
+            if self.surface[0] and self.win is not None:
+                self._resize(*self.surface)
                 self.ui.root.damage_all()
         elif key_path == ("command_center", "swipe_down_enabled"):
             self.pull.swipe_down_enabled = bool(value)
@@ -1577,21 +1824,20 @@ class App:
             self._arm_cc_tick()
         elif key_path == ("youtube", "tv_bar_hide_s"):
             if self.ytauto is not None:
-                self.ytauto.timeout_s = int(value or 0)   # AH: 0 disables auto-hide
+                self.ytauto.timeout_s = int(value or 0)  # 0 turns auto-hide off
         elif key_path == ("youtube", "tv_swipe_natural"):
             if self.ytapp is not None:
-                self.ytapp.swipe_natural = bool(value)   # YT4: live, no restart needed
+                self.ytapp.swipe_natural = bool(value)  # live, no restart needed
         elif key_path in (("battery", "safe_charge_enabled"), ("battery", "safe_charge_end_pct")):
-            self._apply_charge_limit()                   # YT4
+            self._apply_charge_limit()
         elif key_path == ("command_center", "swipe_sensitivity"):
             kw = summon.swipe_recognizer_kwargs(value)
             self.gestures.edge, self.gestures.distance = kw["edge"], kw["distance"]
         elif key_path in (hidden_overlay.KEY_CORNER_HANDLE, hidden_overlay.KEY_OVERLAY_ON_HIDDEN):
             if self.cc5 is not None:
-                self.cc5.config_changed()   # CC5: read from self.cfg; the handle follows now
-        # audio.show_volume_overlay is read whenever the level changes;
-        # audio.volume_step_pct has no consumer yet (the hardware keys use
-        # /usr/bin/volume's own step of 5).
+                self.cc5.config_changed()  # read from self.cfg, the handle follows right away
+        # audio.show_volume_overlay is read on every level change. audio.volume_step_pct isnt used
+        # yet (the hardware keys use /usr/bin/volume's own step of 5).
         self.state_dirty = True
 
     def _schedule_save(self):
@@ -1599,10 +1845,10 @@ class App:
         self.save_timer = self.call_later(SAVE_DELAY, self._save_now)
 
     def _save_now(self):
-        """Writes only the keys changed since the last save, on top of the
-        file as it is now (config.save_changes): the game-screen overlay is
-        a second writer (its "Swap screens"), and a whole-snapshot save from
-        this process's older copy would put its swap back."""
+        """Writes only the keys changed since the last save on top of the file as it is now. The
+        game-screen overlay writes it too (its "Swap screens"), and saving our whole older copy
+        would undo its swap.
+        """
         self.save_timer = None
         changes, self._unsaved = self._unsaved, {}
         if not changes:
@@ -1621,30 +1867,48 @@ class App:
         if mode == BAR:
             h, zone = BAR_H, BAR_H
             if self.ytauto is not None:
-                # AH: every app but the YouTube TV tile keeps the fixed
-                # reserved strip unchanged (bar_autohide.wants() gates this).
+                # every app but YouTube TV keeps the fixed strip (bar_autohide.wants() decides)
                 h, zone = self.ytauto.geometry(self.ui.cc.bar.app, BAR_H, BAR_H)
             return wl.ANCHOR_BOTTOM | wl.ANCHOR_LEFT | wl.ANCHOR_RIGHT, (0, h), zone
         return wl.ANCHOR_ALL, (0, 0), 0
 
     def _apply_bar_geometry(self):
-        """AH: bar_autohide.BarAutoHide's timer/touch callbacks, and this
-        class's own on_mode() below for the tv app's first BAR entry -
-        geometry() there runs once BEFORE web.on_mode()/ytapp.on_mode() flip
-        screens.Bar.app to "tv", so it must be recomputed and re-pushed once
-        it has. Never touches show()/hide(): only set_geometry() on an
-        already-mapped surface (a no-op call while HIDDEN, nothing is
-        mapped)."""
+        """For the auto-hide timer and touches, and on the YouTube TV app's first BAR entry, since
+        geometry() ran before Bar.app turned "tv" and has to be redone. Only ever calls
+        set_geometry() on an already-mapped surface.
+        """
         if self.mode == HIDDEN:
             return
         anchor, size, zone = self.geometry(self.mode)
         self.layer.set_geometry(anchor, size, zone)
         self.ui.root.damage_all()
 
+    def _refresh_bar_geometry(self):
+        """geometry() runs before the apps flip Bar.app, so the strip can have been sized for the app that
+        was there before (YouTube's auto-hide zone under Discord). Redo it if it now differs.
+        """
+        if self.mode != BAR or self.layer.hidden:
+            return
+        anchor, size, zone = self.geometry(BAR)
+        if self.layer.geometry != (anchor, (int(size[0]), int(size[1])), int(zone)):
+            self._apply_bar_geometry()
+
     def on_mode(self, mode, reason):
         if self.cc5 is not None and self.cc5.intercept_mode(mode, reason):
-            return                      # CC5: the overlay stays up over the game's window
+            return  # the overlay stays up over the game's window
         if mode == self.mode:
+            if mode == BAR and reason != self.mode_reason:
+                # still the bar, but a different window of ours is on it: tell the apps so the strip
+                # controls the one that is showing (web buttons or YouTube's D-pad)
+                self.mode_reason = reason
+                log.info("BAR: now %s", reason)
+                if self.web is not None:
+                    self.web.on_mode(mode, mode, reason)
+                if self.ytapp is not None:
+                    self.ytapp.on_mode(mode, mode, reason)
+                if self.ytauto is not None:
+                    self.ytauto.on_mode(mode, mode, reason)
+                self.state_dirty = True
             return
         old, self.mode, self.mode_reason = self.mode, mode, reason
         log.info("MODE %s -> %s (%s)", old, mode, reason)
@@ -1658,7 +1922,7 @@ class App:
         else:
             anchor, size, zone = self.geometry(mode)
             if self.cc5 is not None:
-                self.cc5.apply_layer(mode)  # CC5: OVERLAY rides the overlay layer, others TOP
+                self.cc5.apply_layer(mode)  # OVERLAY goes on the overlay layer, the rest on TOP
             if self.layer.hidden:
                 self.layer.show(anchor, size, zone)
             else:
@@ -1669,15 +1933,16 @@ class App:
         if self.web is not None:
             self.web.on_mode(old, mode, reason)
         if self.ytapp is not None:
-            self.ytapp.on_mode(old, mode, reason)   # W2b
+            self.ytapp.on_mode(old, mode, reason)
         if self.ytauto is not None:
-            self.ytauto.on_mode(old, mode, reason)  # AH: arms/disarms the auto-hide timer
+            self.ytauto.on_mode(old, mode, reason)  # arms or disarms the auto-hide timer
+        self._refresh_bar_geometry()
         self._update_active()       # video only in FULL, on the companion
         self.state_dirty = True
         if self.cc5 is not None:
-            self.cc5.after_mode(old, mode, reason)  # CC5: the corner handle
+            self.cc5.after_mode(old, mode, reason)  # the corner handle
         if self.tabs is not None:
-            self.tabs.after_mode(old, mode, reason)  # CC6: a tab's follow-up, the tabs
+            self.tabs.after_mode(old, mode, reason)  # a tab's follow-up, and the tabs
 
     # -- periodic ---------------------------------------------------------
     def _clock_tick(self):
@@ -1691,10 +1956,9 @@ class App:
         self.call_later(BATTERY_PERIOD, self._battery_tick)
 
     def _rgb_tick(self):
-        """RG: rgb_leds.Controller.keeper_tick() - cheap (two small sysfs
-        reads) unless ROCKNIX actually stomped the sticks; never acts in
-        mode "rocknix". Re-armed regardless of the previous tick's result,
-        same shape as _clock_tick/_battery_tick."""
+        """Stick lights keeper, cheap unless ROCKNIX actually overwrote the sticks, and never does
+        anything in mode "rocknix". Re-armed every time like the clock and battery ticks.
+        """
         if self.rgb is not None:
             self.rgb.lights.keeper_tick()
         self.rgb_timer = self.call_later(rgb_leds.KEEPER_PERIOD_S, self._rgb_tick)
@@ -1710,7 +1974,7 @@ class App:
         if self._osd_wanted(prev, m):
             self._show_osd(m)
         if self.cc5 is not None:
-            self.cc5.on_master(prev, m)     # CC5: the corner handle shows a changed level
+            self.cc5.on_master(prev, m)  # the corner handle shows a changed level
         if self.ui.bar.slider.dragging:
             log.info("master update while dragging ignored: %s", m)
             return
@@ -1724,13 +1988,10 @@ class App:
         elif kind == "streams" and self.ui.sheet == "mixer":
             self._refresh_streams()
 
-    # Master read-backs (RV2-M1). Each live set during a drag makes pw-mon
-    # report a change; reading back per report queued one get_master (two
-    # wpctl runs) per change on the single audio worker, delaying the commit
-    # and landing stale values after release. Now: at most one read in
-    # flight, plus an "again" flag; no read while the finger is down or
-    # until the commit (or a cancel's restore) has been applied; and a read
-    # that comes back in that window is dropped, never shown.
+    # Volume read-backs. Every live set during a drag makes pw-mon report a change, and reading
+    # back on each one piled up on the audio worker and showed stale values after release. So:
+    # one read in flight plus an "again" flag, no read while the finger is down or until the
+    # commit lands, and a read that comes back in that window is dropped.
     def _master_blocked(self):
         return self.commit_pending or (self.ui is not None and self.ui.bar.slider.dragging)
 
@@ -1771,9 +2032,9 @@ class App:
             self.vol_timer = self.call_at(due, self._vol_due)
 
     def _send_master(self, v):
-        """A live set from the throttle. If wpctl is slower than the throttle
-        interval, sets would pile up on the worker ahead of the commit, so
-        at most one is queued and it sends the newest value when it runs."""
+        """A live set from the throttle. If wpctl is slower than the throttle, sets would pile up
+        ahead of the commit, so only one is queued and it sends the newest value.
+        """
         self.last_set = v
         self.vol_live_sent = True
         with self._set_lock:
@@ -1801,17 +2062,16 @@ class App:
         self.last_commit = v
         log.info("volume released at %.2f -> commit", v)
         self.ui.bar.show_percent(v)
-        self.commit_pending = True      # read-backs wait for it (RV2-M1)
+        self.commit_pending = True  # read-backs wait for it
         self.audio_worker.submit(guarded(self.backend.commit_master, self.faillog), v,
                                  done=self._commit_done)
         self.state_dirty = True
 
     def on_volume_cancel(self, v0, changed=False):
-        """The press ended without a commit (RV1-M1): a stroke that became a
-        swipe, a view closing under the finger, shutdown, or a release that
-        changed nothing. The slider is already back at v0. Nothing is
-        committed; a live change that already went out is undone with one
-        live set back to v0 (the persisted level was never touched)."""
+        """The press ended without a commit (turned into a swipe, the view closed under the finger,
+        shutdown, or nothing changed). The slider's already back at v0, and a live change that
+        already went out gets undone with one set back to v0.
+        """
         self._stop_volume_drag()
         if changed:
             self.ui.bar.show_percent(v0)
@@ -1835,8 +2095,8 @@ class App:
         if not self.backend.dryrun:
             self._request_master()
         else:
-            # In dry-run nothing changed, so a re-read would just undo the UI;
-            # only a change reported meanwhile is worth reading.
+            # In dry-run nothing changed, so a re-read would just undo the UI. Only a change reported
+            # meanwhile is worth reading.
             self._master_resume()
 
     def on_mute_toggle(self, state):
@@ -1882,9 +2142,9 @@ class App:
             self._refresh_streams()
 
     def on_stream_cancel(self, sid, v0, changed=False):
-        """Like on_volume_cancel for a mixer row: undo a live change, commit
-        nothing (a stream's volume has no separate persisted value, so the
-        restore IS the whole undo)."""
+        """Like on_volume_cancel for a mixer row: undo the live change and commit nothing (a stream
+        has no saved volume, so the restore is the whole undo).
+        """
         self.cancel(self.stream_timers.pop(sid, None))
         self._stream_throttle(sid).finish()
         if sid in self.stream_live_sent:
@@ -1919,12 +2179,9 @@ class App:
     # -- navigation --------------------------------------------------------
     def on_battery(self):
         if self.ui.compact:
-            # BAR mode has no HUD, by design: the surface is a 140 px strip
-            # with an exclusive zone, and the rest of DSI-1 belongs to the
-            # rp5deck window above it (Firefox / YouTube). Showing the HUD
-            # would mean re-anchoring the layer surface full-panel over that
-            # window and back, re-flowing it twice - a change to B1's verified
-            # geometry for a sheet that is one close-the-app away in FULL.
+            # BAR has no HUD on purpose. The surface is a 140 px strip and the rest of DSI-1 is the
+            # rp5deck window (Firefox, YouTube). Showing it would mean re-anchoring full panel and back
+            # for a sheet thats one close away in FULL.
             log.info("battery tapped in BAR mode: no HUD in BAR (see on_battery)")
             return
         self.open_hud()
@@ -1936,6 +2193,26 @@ class App:
         log.info("screen -> hud")
         self.state_dirty = True
 
+    def open_notes(self):
+        """The Notes tab. The notebook is read the first time its opened, not at startup, and while
+        a game runs it opens that game's notebook instead.
+        """
+        notes = self.ui.cc.notes
+        if not getattr(notes, "loaded", False):
+            notes.load_current()        # the notebook open last (notes/.current)
+            notes.loaded = True
+            log.info("notes: %s (%s)", notes.book.load_note, notes.book.path)
+            notes._refresh()
+        running = getattr(getattr(self, "companion", None), "running", None)
+        if running is not None and getattr(running, "rom_path", ""):
+            notes.open_for_game(running.system, running.rom_path, running.name)
+        else:
+            notes.open_regular()
+        log.info("notes: open %s", notes.book.path)
+        self.ui.open("notes")
+        log.info("screen -> notes")
+        self.state_dirty = True
+
     def open_mixer(self):
         self.ui.open("mixer")
         self.ui.mixer.streams = "loading"
@@ -1945,7 +2222,7 @@ class App:
         log.info("screen -> mixer")
         self.state_dirty = True
 
-    # -- CC7: Hotkey cheat sheet ------------------------------------------------
+    # -- Hotkey cheat sheet -----------------------------------------------------------
     def open_hotkeys(self):
         info = getattr(self.companion, "info", None)
         running_system = info.get("system") if info and info.get("running") else None
@@ -1955,24 +2232,37 @@ class App:
         log.info("screen -> hotkeys (running_system=%r)", running_system)
         self.state_dirty = True
 
-    # -- CC1: Clean state (cleanstate_view / cleanstate) ------------------------
+    def open_steam_library(self):
+        """The Steam tab: installed games as cover art, a tap starts one in the open Steam."""
+        log.info("tab -> Steam library")
+        self.steam_view.open()
+        self.state_dirty = True
+
+    # -- Clean state --------------------------------------------------------------------
     def open_clean_state(self):
-        """The tile: check what runs + ES's health, then the confirm sheet.
-        Every stop / restart is cleanstate.Helper's, behind that confirm."""
+        """The tile checks whats running and ES's health, then the confirm sheet. Every stop or
+        restart is behind that confirm.
+        """
         log.info("tile -> Clean state")
         self.clean.open()
         self.state_dirty = True
 
-    # -- DS: dual-screen settings guard (dualscreen_keys_view.py) --------------
+    # -- dual-screen settings guard ----------------------------------------------------
     def on_dualscreen_restore(self):
-        """The Home banner's own Restore button (never a tile): opens the
-        confirm sheet naming the missing keys - dualscreen_keys.restore()
-        only ever runs after that confirmation."""
+        """The Home banner's Restore button opens the confirm sheet naming the missing keys, restore
+        only runs after that.
+        """
         log.info("banner -> dual-screen settings")
         if os.environ.get("RP5DECK_DEMO_NOTICE"):
             log.info("demo notice: Restore does nothing")
             return
         self.dualscreen.open()
+
+    def _replug_tick(self):
+        home = getattr(getattr(self, "ui", None), "home", None)
+        if home is not None:
+            home.set_replug_notice(ADDON_REPLUG_TEXT if os.path.exists(ADDON_REPLUG_FLAG) else "")
+        self.call_later(ADDON_REPLUG_POLL_S, self._replug_tick)
 
     def _ds_tick(self):
         if self._demo_notice("dualscreen"):
@@ -1981,19 +2271,16 @@ class App:
             self.dualscreen.poll()
         self.ds_timer = self.call_later(DS_POLL_S, self._ds_tick)
 
-    # -- DEMO: guide screenshots of the two banners ---------------------------
-    # RP5DECK_DEMO_NOTICE=charge|dualscreen (in $RP5DECK_HOME/env, 094 restart)
-    # shows that banner with sample text instead of polling, so the guide can
-    # photograph it on the real screen without breaking system.cfg or the
-    # charger. Its button does nothing in demo mode. Unset = normal polling.
+    # -- demo banners for guide screenshots -------------------------------------------
+    # RP5DECK_DEMO_NOTICE=charge|dualscreen (in $RP5DECK_HOME/env, then restart
+    # command-center-app) shows that banner with sample text instead of polling, so the guide
+    # can photograph it without breaking system.cfg or the charger. Its button does nothing.
     DEMO_NOTICE_TEXT = {
-        "charge": charge_stuck_view.MESSAGE,
         "dualscreen": "Dual-screen settings missing: 3ds.screen_layout, wiiu.gamepad_enabled",
     }
 
     def _demo_notice(self, which):
-        """True if RP5DECK_DEMO_NOTICE names `which`; then (re)shows its
-        sample text on Home instead of the real poll."""
+        """True if RP5DECK_DEMO_NOTICE names `which`, then it shows that sample on Home."""
         if os.environ.get("RP5DECK_DEMO_NOTICE") != which:
             return False
         home = getattr(getattr(self, "ui", None), "home", None)
@@ -2001,41 +2288,56 @@ class App:
             getattr(home, "set_%s_notice" % which)(self.DEMO_NOTICE_TEXT[which])
         return True
 
-    # -- CHG: "charger connected but not charging" (charge_stuck_view.py) ------
-    def on_charge_notice_dismiss(self):
-        """The Home banner's own Dismiss button: hides it until the charger
-        is next unplugged, even if the underlying condition has not
-        actually cleared yet (charge_stuck_view.ChargeStuckController's own
-        re-arm rule)."""
-        log.info("banner -> charger not charging (dismissed)")
-        if os.environ.get("RP5DECK_DEMO_NOTICE"):
-            log.info("demo notice: Dismiss does nothing")
-            return
-        self.charge_stuck.dismiss()
-
+    # -- "charger in but not charging" ------------------------------------------------
     def _charge_stuck_tick(self):
-        if self._demo_notice("charge"):
-            pass
+        if os.environ.get("RP5DECK_DEMO_NOTICE") == "charge":
+            self.set_charge_warning(True)
         elif self.charge_stuck is not None:
             self.charge_stuck.poll()
         self.charge_stuck_timer = self.call_later(CHARGE_STUCK_POLL_S, self._charge_stuck_tick)
 
-    # -- RG: Stick lights (rgb_leds.py / rgb_view.py) ---------------------------
+    def set_charge_warning(self, on):
+        """The big charger warning. On: put it in front in whatever mode were in (every poll, so
+        something that closed it gets it back). Off: take it down and close what it opened."""
+        if not on:
+            if self.charge_warning_on:
+                self.charge_warning_on = False
+                log.info("charge warning closed")
+                if self.ui.sheet == "charge_warning":
+                    self.ui.close()
+                    if self.mode == hidden_overlay.OVERLAY:
+                        self.cc5.dismiss("charge warning closed")
+                    else:
+                        self.pull.close("charge warning closed")
+                    self.state_dirty = True
+            return
+        if not self.charge_warning_on:
+            log.warning("charge warning up")
+        self.charge_warning_on = True
+        if self.mode == BAR:
+            # park the app (it keeps running) so the warning gets the whole screen
+            self.tabs.run(app_tabs.wsw.INTERNAL, lambda: self.set_charge_warning(True), "charge warning")
+            return
+        if self.mode == HIDDEN:
+            self.cc5.open("charge_warning")
+        elif self.mode == FULL:
+            self.pull.open("charge_warning")
+        if self.mode in (FULL, hidden_overlay.OVERLAY) and self.ui.sheet != "charge_warning":
+            self.ui.open("charge_warning")
+            self.ui.root.damage_all()
+            self.state_dirty = True
+
+    # -- stick lights -------------------------------------------------------------------
     def open_lights(self):
         log.info("tile -> Stick lights")
         self.rgb.open()
 
-    # -- Appearance (palettes.py / appearance_view.py) ---------------------------
+    # -- Appearance ---------------------------------------------------------------------
     def close_appearance(self):
-        """Back from the Custom colours editor returns to Settings (it was
-        opened FROM there, via the Appearance page's own button) rather
-        than Home - unlike every other add_sheet() sheet in this file,
-        which all open from a Home tile and so close back to Home via
-        close_sheet(). settings.rows holds every FieldRow by key_path
-        (settings_view.py's own coverage contract) - refresh the "Colour
-        theme" row here because AppearanceController.open() may have just
-        flipped appearance.theme_preset to "custom" behind Settings' back,
-        and SettingsSheet itself is never rebuilt to notice on its own."""
+        """Back from Custom colours goes to Settings, since thats where it opened from. Refresh the
+        "Colour theme" row because opening the editor may have switched the preset to "custom"
+        and Settings isnt rebuilt on its own.
+        """
         self.ui.open("settings")
         row = self.ui.settings.rows.get(("appearance", "theme_preset"))
         if row is not None:
@@ -2043,10 +2345,9 @@ class App:
         self.state_dirty = True
 
     def reset_appearance(self):
-        """Settings > Appearance > "Reset to default": every appearance.*
-        key back to its own schema default, applied live and persisted
-        exactly like any other setting change (on_setting()) - not a
-        special-cased path of its own."""
+        """Settings > Appearance > "Reset to default": every appearance key back to its default,
+        applied and saved like any other setting.
+        """
         for path in (("appearance", "theme_preset"), ("appearance", "custom_accent"),
                     ("appearance", "custom_bg"), ("appearance", "custom_text")):
             default = config.field_for(path)["default"]
@@ -2056,32 +2357,25 @@ class App:
         if row is not None:
             row.refresh_from_cfg()
 
-    # -- Keyboard (rocknix_keyboard.py) ------------------------------------
+    # -- Keyboard -----------------------------------------------------------------------
     def toggle_keyboard(self):
-        """An immediate toggle, not a sheet: signal ROCKNIX's own
-        touchkeyboard.service wvkbd-mobintl directly (rocknix_keyboard.
-        toggle() - it never starts/stops the process, only the same SIGRTMIN
-        input_sense already sends). On success close the Command Center so
-        the keys reach the game/ES underneath, same as the Close button
-        (close_command_center() -> self.pull.back_tap()). If nothing is
-        running (the ES setting is off), leave the Command Center open and
-        show a hint instead - same 2.5 s auto-clear app_tabs.py's own
-        bar.show_hint()/clear_hint() pair uses."""
+        """A toggle, not a sheet. Signals ROCKNIX's own wvkbd (same SIGRTMIN input_sense sends, it
+        never starts or stops it). If that works close the Command Center so the keys reach the
+        game or ES underneath. If nothing's running (the ES setting is off) stay open and show a
+        hint for 2.5 s.
+        """
         log.info("tile -> Keyboard")
         if rocknix_keyboard.toggle():
             self.close_command_center()
         elif self.ui.bar.show_hint("Turn on System Settings > Enable Touchscreen Keyboard in ES"):
             self.call_later(2.5, self.ui.bar.clear_hint)
 
-    # -- YT4: Sleep tile (system_sleep.py) -----------------------------------
+    # -- Sleep tile -----------------------------------------------------------------------
     def open_sleep(self):
-        """Owner-approved: a brief "Sleeping..." hint (state_dirty below
-        gets it painted), then `systemctl suspend` off the UI thread after
-        SLEEP_DELAY_S so that paint has a real chance to land before the
-        panel/whole device freezes for the suspend call. Guarded against a
-        double tap: a second tap while sleep_pending is already set (still
-        in the delay, or the suspend call itself is in flight/blocked for
-        the whole sleep duration) is a no-op."""
+        """Shows a quick "Sleeping..." hint, then runs `systemctl suspend` off the UI thread after
+        SLEEP_DELAY_S so the hint actually paints first. A second tap while its pending does
+        nothing.
+        """
         if self.sleep_pending:
             return
         self.sleep_pending = True
@@ -2106,15 +2400,11 @@ class App:
                 self.call_later(2.5, self.ui.bar.clear_hint)
         self.state_dirty = True
 
-    # -- Tile customisation (screens.Home "Edit tiles" mode) -----------------
+    # -- Tile customisation (Home's Edit tiles) -------------------------------------------
     def on_tile_layout_changed(self, order, hidden):
-        """screens.Home calls this after every committed change (a drag
-        drop, a hide/show tap, Reset tile layout, or Done) - order is
-        always a full permutation of config.HOME_TILE_KEYS, hidden a
-        subset never containing "home.settings" (Home's own guard, backed
-        by config.py's schema refusing to store it either way). Persists
-        immediately, the same one-commit-at-a-time model settings_view.py
-        uses, not just on Done, so a crash mid-session cannot lose it."""
+        """Home calls this after every change (drag, hide/show, reset, Done). order is always every
+        tile, hidden never has "home.settings". Saved right away so a crash cant lose it.
+        """
         changes = {}
         if config.set_value(self.cfg, ("command_center", "tile_order"), order):
             changes[("command_center", "tile_order")] = order
@@ -2124,7 +2414,7 @@ class App:
             config.save_changes(changes)
         self.state_dirty = True
 
-    # -- HF1: Browser / Discord (web_tiles.WebApps) ---------------------------
+    # -- Browser / Discord ----------------------------------------------------------------
     def open_browser(self):
         log.info("tile -> Browser")
         self._web_tile("Browser", None)
@@ -2136,18 +2426,16 @@ class App:
         self.state_dirty = True
 
     def _web_tile(self, label, url):
-        """CC6: an emulator window on this screen is parked first (else
-        Firefox would tile next to it and the panel go HIDDEN) and a parked
-        Firefox comes back; then HF1's open_web, unchanged."""
+        """An emulator window on this screen gets parked first (else Firefox tiles next to it and
+        the panel goes HIDDEN) and a parked Firefox comes back, then open_web.
+        """
         if self.tabs is None:
             self.web.open_web(label, url)
             return
         self.tabs.run(app_tabs.wsw.WEB, lambda: self.web.open_web(label, url), "tile " + label)
 
     def open_ytapp(self):
-        """W2b: the YouTube TV tile's own Home tile (patches/W2b-screens.patch) -
-        same "park whatever else is shown on this screen first" pattern
-        _web_tile() already uses for Browser/Discord, its own window kind."""
+        """The YouTube TV tile, same park-whats-shown-first as the Browser/Discord tiles."""
         log.info("tile -> YouTube App")
         if self.tabs is None:
             self.ytapp.open()
@@ -2162,21 +2450,17 @@ class App:
         elif name == "tv.home":
             self.on_tv_home()
         elif name.startswith("tv.") and self.ytapp is not None:
-            self.ytapp.action(name)             # W2b: the D-pad, its own session
+            self.ytapp.action(name)  # the D-pad, its own session
         else:
             self.web.action(name)
         self.state_dirty = True
 
-    # -- YT3: the tv strip's Close / Home (owner feedback: no way to kill the
-    # YouTube App or tab out of it) ------------------------------------------
+    # -- the YouTube TV strip's Close and Home --------------------------------------------
     def on_tv_close(self):
-        """Ends the YouTube App session outright: YtAppSession.close() asks
-        its Firefox to quit (Marionette:Quit, falling back to SIGTERM); once
-        its window actually leaves DSI-1, sway reports FULL again and
-        rp5deck's normal Command Center follows - the same "nothing here
-        forces the mode itself" pattern web_tiles.WebApps' own Close already
-        uses for Browser/Discord (main.App.on_mode drives the transition,
-        not this handler)."""
+        """Ends the YouTube App session. Its Firefox is asked to quit (Marionette:Quit, then
+        SIGTERM), and once its window leaves DSI-1 sway reports FULL and the Command Center comes
+        back through on_mode, nothing here forces it.
+        """
         log.info("tv strip -> Close")
         if self.ytapp is not None:
             self.ytapp.close()
@@ -2184,12 +2468,9 @@ class App:
             self.ytauto.stop()          # cancel the auto-hide timer right away
 
     def on_tv_home(self):
-        """Parks the YouTube App (same park-not-close app_tabs.py already
-        does for Browser/Discord - the session and its Firefox stay alive)
-        and opens the Command Center's home directly - a single, obvious tap,
-        not the multi-app Tabs picker (show_app_tabs, below) the owner never
-        recognised. The tab strip still lists the YouTube App afterwards
-        (app_tabs.build_tabs), so it is easy to get back to."""
+        """Parks the YouTube App (it keeps running) and opens the Command Center's Home in one tap.
+        The tab strip still lists it so its easy to get back to.
+        """
         log.info("tv strip -> Home")
         if self.tabs is not None:
             self.tabs.select(app_tabs.CC)
@@ -2199,8 +2480,9 @@ class App:
             self.ytauto.stop()          # cancel the auto-hide timer right away
 
     def show_app_tabs(self):
-        """CC6: the BAR strip's Tabs button - park this app's window (it keeps
-        running) and open the Command Center with the tab strip."""
+        """The strip's Tabs button parks this app's window (it keeps running) and opens the Command
+        Center with the tabs.
+        """
         log.info("bar -> Tabs")
         if self.tabs is not None:
             self.tabs.select(app_tabs.CC)
@@ -2218,6 +2500,11 @@ class App:
 
     def manual_page(self, delta):
         self.companion.manual_page(delta)
+        self.state_dirty = True
+
+    def manual_tool(self, name):
+        """The manual viewer's PDF tools."""
+        self.companion.manual_tool(name)
         self.state_dirty = True
 
     def close_sheet(self):
@@ -2242,9 +2529,8 @@ class App:
             return                      # logged (rate-limited); the next tick retries
         running = self.companion.running if self.companion is not None else None
         if running is not None and not s.get("running_game"):
-            # hud.read_running_game() never reports a running game (it only
-            # looks for a "msg" key, which ES sends only when NOTHING runs);
-            # the companion knows, from the hooks / the /runningGame poll.
+            # hud.read_running_game() never sees a running game (ES only sends "msg" when nothing
+            # runs), so ask the companion, it knows from the hooks and the /runningGame poll.
             s = dict(s, running_game=running.name or os.path.basename(running.rom_path))
         self.hud_last = s
         self.ui.hud.set_sample(s)
@@ -2305,7 +2591,8 @@ class App:
             "mode": self.mode,
             "mode_reason": self.mode_reason,
             "surface": {
-                "size": [self.w, self.h],
+                "size": [self.w, self.h],           # the layout canvas (targets are on it)
+                "surface_size": list(self.surface),
                 "configured": bool(self.layer and self.layer.configured),
                 "hidden": bool(self.layer and self.layer.hidden),
                 "can_present": bool(self.layer and self.layer.can_present),
@@ -2329,8 +2616,8 @@ class App:
                 "commit_pending": self.commit_pending,
             },
             "audio_dryrun": self.backend.dryrun,
-            "tabs": self.tabs.state() if self.tabs is not None else None,     # CC6
-            "ytapp": self.ytapp.state() if self.ytapp is not None else None,      # W2b
+            "tabs": self.tabs.state() if self.tabs is not None else None,
+            "ytapp": self.ytapp.state() if self.ytapp is not None else None,
             "audio_calls": [list(c) for c in list(self.backend.calls)[-30:]],
             "hud": {
                 "open": self.ui.sheet == "hud",
@@ -2345,7 +2632,7 @@ class App:
                       "message": self.ui.mixer.msg.text},
             "apps": self.web.state() if self.web else None,
             "clean_state": self.clean.state() if self.clean else None,
-            "lights": self.rgb.lights.state.to_dict() if self.rgb else None,   # RG
+            "lights": self.rgb.lights.state.to_dict() if self.rgb else None,
             "last_input": self.last_input,
             "sway_events_seen": self.watcher.events_seen if self.watcher else 0,
             "targets": self.ui.targets() if self.mode != HIDDEN else {},
@@ -2365,17 +2652,23 @@ class App:
 
     # -- shutdown -------------------------------------------------------------
     def shutdown(self):
-        # A drag in progress is cancelled: its slider goes back to the value
-        # from before the press, a live volume change is undone (queued on
-        # the audio worker, which drains before it stops), nothing is
-        # committed (RV1-M1: only a real release commits).
+        try:
+            self.top_dim.stop()  # sway puts the add-on's gamma back
+        except Exception:           # noqa: BLE001
+            log.exception("top brightness at shutdown")
+        try:
+            if self.screen_idle is not None:
+                self.screen_idle.shutdown()  # never exit with the panel dimmed
+        except Exception:           # noqa: BLE001
+            log.exception("screen idle at shutdown")
+        # A drag in progress gets cancelled: the slider goes back, a live volume change is undone
+        # (queued on the audio worker, which drains before it stops), nothing is committed.
         try:
             if getattr(self, "router", None):
                 self.router.cancel_all()
         except Exception:           # noqa: BLE001
             log.exception("cancel_all at shutdown")
-        # A setting changed less than SAVE_DELAY ago is saved now, before the
-        # io worker stops (RV2-m3).
+        # Save a setting changed less than SAVE_DELAY ago now, before the io worker stops.
         try:
             if self.save_timer is not None and not self.save_timer[3]:
                 self.cancel(self.save_timer)
@@ -2389,6 +2682,7 @@ class App:
                            ("audio subscriber", lambda: self.subscriber and self.subscriber.stop()),
                            ("es events", lambda: self.es_watcher and self.es_watcher.stop()),
                            ("summon reader", self._stop_summon),
+                           ("ytapp", lambda: self.ytapp and self.ytapp.shutdown()),
                            ("web apps", lambda: self.web and self.web.shutdown()),
                            ("video", lambda: self.video and self.video.shutdown()),
                            ("audio worker", lambda: self.audio_worker and self.audio_worker.stop()),
@@ -2412,7 +2706,7 @@ class App:
         sdl = self.sdl
         if self.cc5 is not None:
             try:
-                self.cc5.shutdown()         # CC5: the corner handle's surface and window
+                self.cc5.shutdown()  # the corner handle's surface and window
             except Exception:       # noqa: BLE001
                 log.exception("corner handle shutdown")
         # Order matters: the layer role goes before SDL destroys the wl_surface.

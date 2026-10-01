@@ -1,61 +1,42 @@
-"""companion_modes - CC2 + CC3.
+"""companion_modes: what the bottom screen shows during a one-screen game, the pure logic
+behind `companion.in_game_display`.
 
-CC2 (owner request, TASKS.md): "an option setting to decide what the bottom
-screen shows during a single-screen game" - i.e. any game whose emulator does
-NOT put a real window on DSI-1 (the DS/3DS/Wii U second-screen cases already
-put rp5deck into sway_ipc.HIDDEN before any of this runs - see DESIGN.md
-"Three display modes"). This module is the pure decision logic behind
-`companion.in_game_display`; companion.py's CompanionController is the only
-caller and owns all the side effects (timers, submit jobs, view calls).
+That's any game whose emulator doesnt put a real window on DSI-1. The DS, 3DS and Wii U second
+screen cases already put rp5deck in HIDDEN before any of this runs. companion.py's
+CompanionController is the only caller and owns every side effect (timers, jobs, view calls).
 
-CC3: research/CC3-esde-companion.md researches the ES-DE Companion Android
-app (github.com/RobZombie9043/es-de-companion) and maps its options onto what
-ES's HTTP API / gamelists actually expose on this device (es_api.py). Its
-"Game Playing Screen Behavior" setting is the direct precedent for
-`in_game_display`: On / Dim / Off / Manual / Guide. rp5deck's equivalent
-adds two rp5deck-only choices the owner named directly (HUD, clock) and one
-more from the owner's own list (a slideshow of the system's art) that ES-DE
-Companion does not have:
+The ES-DE Companion Android app (github.com/RobZombie9043/es-de-companion, see
+research/CC3-esde-companion.md) has a "Game Playing Screen Behavior" setting with On, Dim, Off,
+Manual and Guide, which this follows, plus HUD, clock and a system slideshow:
 
-    ES-DE Companion          rp5deck (in_game_display)      note
-    ----------------          --------------------------      ----
-    On                        art                              default; unchanged companion behaviour
-    Dim                       dim                               art stays, forced darker
-    Off                       off                               opaque black, no art decode at all
-    Manual                    manual                            falls back to "art" if this game has none
-    Guide                     (not implemented)                 no GameFAQs-guide media kind exists in ES's
-                                                                  API or gamelists - see the research doc
-    (none)                    hud                               owner-requested: device stats (hud.py)
-    (none)                    clock                             owner-requested: the idle clock view, reused as-is
-    (none)                    slideshow                         owner-requested: a slideshow of the RUNNING
-                                                                  game's OWN SYSTEM (not the whole library -
-                                                                  that is the existing idle slideshow's job)
+    art        ES-DE's On, the default, normal companion behaviour
+    dim        ES-DE's Dim, the art stays but darker
+    off        ES-DE's Off, opaque black, no art decoded at all
+    manual     ES-DE's Manual, falls back to art if this game has no manual
+    hud        device stats (hud.py)
+    clock      the idle clock view as is
+    slideshow  a slideshow of the running game's own system, not the whole library (that's
+               the idle slideshow's job)
+ES-DE's Guide isnt here since no guide media kind exists in ES's API or gamelists.
 
-Video is never one of the choices: DESIGN.md's media budget rule (no
-software-decoded video while a game needs the CPU) applies unconditionally,
-before this module is ever consulted - companion.py's video_allowed() already
-refuses video whenever self.running is not None, regardless of
-in_game_display.
+Video is never a choice. No software decoded video while a game needs the CPU, and
+companion.py's video_allowed() already refuses video whenever a game runs, whatever
+in_game_display says.
 """
 
 IN_GAME_MODES = ("art", "dim", "off", "manual", "hud", "clock", "slideshow")
 
-# How often the in-game HUD (mini device-stats overlay) re-samples. hud.py's
-# sample() shells out (df, iw, ip) and reads a couple dozen sysfs files, so
-# this stays well under 1 Hz to keep the "keep CPU low while a game runs"
-# rule (DESIGN.md media budget) - the Command Center's own full HUD sheet
-# samples at 1 Hz only while that sheet is the visible thing on screen, which
-# this is not.
+# How often the in-game HUD resamples. hud.py's sample() shells out (df, iw, ip) and reads a
+# couple dozen sysfs files, so this stays well under 1 Hz to keep CPU low while a game runs. The
+# Command Center's full HUD sheet samples at 1 Hz, but only while it's on screen.
 HUD_INTERVAL_S = 3.0
 
 
 def effective_in_game_mode(mode, has_manual):
-    """The mode actually applied this refresh. An unknown/missing mode
-    degrades to "art" (never a blank screen because of a typo in a hand-
-    edited config.json - see config.py's own validation philosophy).
-    "manual" degrades to "art" when this particular game has none, rather
-    than opening nothing and leaving the previous view's stale content on
-    screen."""
+    """The mode actually used this refresh. An unknown or missing mode falls back to "art" so a typo
+    in a hand edited config.json never gives a blank screen, and "manual" falls back to "art" when
+    this game has none instead of leaving the last view's stale content up.
+    """
     if mode not in IN_GAME_MODES:
         return "art"
     if mode == "manual" and not has_manual:
@@ -64,13 +45,11 @@ def effective_in_game_mode(mode, has_manual):
 
 
 def in_game_dim(mode, configured_dim):
-    """The darken-overlay fraction (0..1) drawn over the game's art.
-    "off" never actually reaches this - companion.py shows a plain blank
-    view for it, decoding no art at all - but a caller that asks anyway gets
-    the same fully-opaque answer a blank view would. "dim" floors the
-    configured background_dim at a level that reads as "dimmed", matching
-    ES-DE Companion's "Dim" behaviour (a translucent black scrim) rather than
-    the subtle veil background_dim normally provides under legible text."""
+    """The darkening fraction (0..1) drawn over the game's art. "off" never gets here (companion.py
+    shows a plain blank view with no art decoded), but asking anyway gets the same fully opaque
+    answer. "dim" floors background_dim at a level that reads as dimmed, like ES-DE Companion's
+    translucent black scrim, instead of the light veil background_dim normally gives under text.
+    """
     if mode == "off":
         return 1.0
     if mode == "dim":
@@ -78,10 +57,9 @@ def in_game_dim(mode, configured_dim):
     return float(configured_dim)
 
 
-# hud.sample()'s keys this module knows how to format, in display order, as
-# (key, label, formatter). Only keys that exist AND are not None are shown -
-# hud.py's own rule ("never 0, never a fake value") means a None here is a
-# genuinely unavailable reading, not a zero to hide specially.
+# hud.sample()'s keys this knows how to format, in display order, as (key, label, formatter).
+# Only keys that exist and arent None show, hud.py never fakes a value so None really means
+# unavailable.
 def _pct(v):
     return "%d%%" % int(round(v))
 
@@ -123,11 +101,10 @@ _HUD_FIELDS = (
 
 
 def hud_lines(sample):
-    """hud.sample()'s dict (or None, before the first sample arrives) -> a
-    short list of "Label value" strings for the in-game HUD-lite overlay -
-    the Command Center's own HUD sheet (hud.py + ui.py, not this module) is
-    the full version with every field; this is deliberately just enough to
-    glance at while playing."""
+    """hud.sample()'s dict (or None before the first sample) -> a short list of "Label value" lines
+    for the in-game HUD. The Command Center's HUD sheet is the full version with every field, this
+    is just enough to glance at while playing.
+    """
     if not sample:
         return []
     out = []
@@ -145,12 +122,10 @@ def hud_lines(sample):
 
 
 def fmt_playtime(extra):
-    """es_api.Game.extra's playcount / lastplayed / gametime (all optional
-    ES metadata strings) -> a short "Played Nx" style line, "" if nothing
-    usable is present. lastplayed/gametime are shown as ES stores them
-    (gametime as raw seconds is not reliably present across ES forks, so
-    this only ever reports a play COUNT, never a duration it would have to
-    guess the units of)."""
+    """es_api.Game.extra's playcount / lastplayed / gametime (optional ES metadata strings) -> a
+    short "Played Nx" line, "" if nothing usable is there. It only ever shows a play count, since
+    gametime in raw seconds isnt reliably there across ES forks and its units would be a guess.
+    """
     extra = extra or {}
     n = extra.get("playcount")
     try:

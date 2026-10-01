@@ -225,7 +225,8 @@ class TestAppSwipeCancelsSliders(AppCase):
         fx, fy = s.x_for(0.9 if v_before < 0.5 else 0.1), s.rect[1] + s.rect[3] / 2
         self.swipe(app, fx, fy, fx, fy - 400)
         app.post.drain()
-        self.assertNotEqual(app.pull.state, PULL.SETTINGS)      # the swipe was claimed
+        # the swipe was claimed as a gesture (in Settings a swipe up turns the page, 26 Sep)
+        self.assertEqual((app.last_gesture or {}).get("name"), "swipe_up")
         self.assertEqual(app.settings_changes, 0)
         self.assertEqual(json.dumps(app.cfg, sort_keys=True), cfg_before)
         self.assertEqual(s.value, v_before)

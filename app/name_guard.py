@@ -1,76 +1,57 @@
 #!/usr/bin/env python3
-"""name_guard - find game names and paths that EmulationStation's hook
-command line lets the shell re-parse (RV1-M3; owner's decision, 23 Sep).
+"""name_guard: finds game names and paths that EmulationStation's hook command line lets the
+shell reparse.
 
-Why: ES runs event hooks ASYNCHRONOUSLY through `sh -c` (Scripting.cpp
-executeScript(), then Platform.cpp's fork + execl("/bin/sh", "sh", "-c", ...)).
-It builds that command string itself: an argument is wrapped in double quotes
-ONLY if it contains an ASCII space (find(" ")), every '"' is stripped first,
-and nothing is escaped. So before an rp5deck hook ever runs, the shell has
-already parsed the game's name, ROM path and ROM file name:
+ES runs event hooks async through `sh -c` (Scripting.cpp executeScript(), then Platform.cpp's
+fork + execl("/bin/sh", "sh", "-c", ...)) and builds that string itself. An argument only
+gets double quotes if it has an ASCII space, every '"' is stripped first and nothing is
+escaped. So the shell has already parsed the game's name, ROM path and file name before any
+rp5deck hook runs.
 
-  * `$` and backticks are expanded in EVERY value, quoted or not: `$(...)` or
-    `...` in a scraped name EXECUTES AS ROOT whenever the game is highlighted,
-    and `Ma$ter` silently becomes `Ma`.
-  * In a value WITHOUT an ASCII space (left unquoted): `' " & ( ) ; | < > \\`
-    and newlines are shell syntax: `Tom&Jerry` backgrounds a truncated hook
-    and runs `Jerry` as a command, `Disc(1)` is a syntax error (hook never
-    runs), `Sonic's` starts a quote that eats the rest of the line.
-  * "Space" means ASCII 0x20 only. A scraped name whose gaps are U+00A0 or tabs
-    counts as space-less for ES and is passed unquoted.
+`$` and backticks expand in every value, quoted or not. `$(...)` in a scraped name runs as
+root whenever the game is highlighted, and `Ma$ter` quietly becomes `Ma`.
 
-The rp5deck hooks themselves are injection-safe; the damage happens before
-exec, so it cannot be fixed inside a hook. The owner's decision: install
-refuses (tools/install-es-hooks.sh calls `python3 name_guard.py --json`),
-each app start warns in the log and on screen (check_async()), and an
-upstream ES patch that single-quotes each argument is drafted in es-upstream/.
+In a value with no ASCII space (so unquoted), ' " & ( ) ; | < > and backslash and newlines
+are shell syntax. `Tom&Jerry` backgrounds a cut off hook and runs `Jerry`, `Disc(1)` is a
+syntax error so the hook never runs, and `Sonic's` opens a quote that eats the rest.
 
-WHAT IS SCANNED (read-only, never raises, ~100k files in seconds), 24 Sep
-test-day fix (NM2): ES only ever discovers a game through its own
-es_systems.cfg (on the device: /storage/.config/emulationstation/
-es_systems.cfg, falling back to /usr/share/emulationstation/es_systems.cfg -
-the same file ES itself reads at startup). So this guard now scans exactly,
-and only, what that file says ES will show:
+Only 0x20 counts as a space. A scraped name with U+00A0 or tabs in the gaps is space-less to
+ES and goes in unquoted.
 
-  * for every <system>, its <path> (a %ROMPATH%-style variable is expanded if
-    present, though none of the device's 139 systems use one) and its space-
-    separated, case-insensitive <extension> list. A FILE under a system's
-    path counts only if its extension is one of that system's; a DIRECTORY
-    counts only if it holds a matching file at this level or deeper (ES shows
-    sub-folders too, but a folder with nothing playable in it is never a
-    "game" ES passes to a hook - see walk_system()'s docstring for the exact
-    choice made here). This is what makes Steam's ROM-shaped game data
-    (steamapps/, userdata/, the Wine runtime - <system>steam</system>'s real
-    <path> is /storage/.local/share/applications, extension .desktop) and a
-    theme's .svg (no <system> named "themes" exists at all) impossible to
-    reach: they are never under any system's declared path;
-  * every gamelist.xml where ES loads one - <system path>/gamelist.xml, and
-    <gamelist dir>/<system>/gamelist.xml - each <name> and <path> (copies
-    deeper down, e.g. backups, are counted but not read: ES never loads
-    them). Gamelists are read as TEXT, never as one XML document: some have a
-    second root element (<alternativeEmulator> beside <gameList>), ES escapes
-    only '&', and a broken block must not hide the rest. Values are
-    unescaped exactly as an XML parser would (&amp; &lt; &gt; &quot; &apos;
-    and numeric references; CDATA kept literal), because ES passes the
-    DECODED text.
+The hooks themselves are safe, the damage happens before exec so it cant be fixed in a hook.
+So the install refuses (tools/install-es-hooks.sh runs `python3 name_guard.py --json`),
+every app start warns in the log and on screen (check_async()), and an ES patch that single
+quotes each argument is drafted in es-upstream/.
 
-If es_systems.cfg cannot be found or parsed, the guard falls back to the
-pre-NM2 behaviour (scan every file/folder name under --root / the default ROM
-roots, no extension filter) rather than refusing outright - the same
-"nothing scanned is not the same as safe" rule as a missing ROM root, just
-one level up. --root, when es_systems.cfg WAS read, instead narrows which
-systems are scanned (only systems whose path sits under one of the given
-directories); --es-systems-cfg overrides which file is read as ES's system
-list. Two systems (or a system and a --root filter) that turn out to be the
-same physical directory (a bind mount, e.g. /storage/roms and
-/storage/games-internal/roms on this device) are only ever scanned once:
-deduped by realpath AND by (st_dev, st_ino), so a non-realpath alias of the
-same inode cannot double every finding.
+What gets scanned (read only, never raises, ~100k files in seconds) is exactly what ES's own
+es_systems.cfg says it shows (/storage/.config/emulationstation/es_systems.cfg, falling back
+to /usr/share/emulationstation/es_systems.cfg, same as ES):
+
+For every <system>, its <path> (a %ROMPATH% style variable gets expanded, none of the
+device's 139 systems use one) and its <extension> list. A file counts only with one of that
+system's extensions. A folder counts only if it holds a matching file somewhere below it (see
+walk_system()). That keeps Steam's ROM-looking game data and a theme's .svg out, since
+they're never under a system's path.
+
+Every gamelist.xml where ES loads one, <system path>/gamelist.xml and
+<gamelist dir>/<system>/gamelist.xml, each <name> and <path>. Deeper copies like backups are
+counted but not read. Gamelists are read as text, not one XML document: some have a second
+root element (<alternativeEmulator> beside <gameList>), ES escapes only '&', and one broken
+block shouldnt hide the rest. Values get unescaped like an XML parser would (&amp; &lt; &gt;
+&quot; &apos;, numeric references, CDATA kept literal) because ES passes the decoded text.
+
+If es_systems.cfg cant be found or parsed it falls back to scanning every file and folder
+name under --root or the default ROM roots with no extension filter, instead of refusing,
+since nothing scanned isnt the same as safe. When the cfg was read, --root narrows which
+systems get scanned instead. --es-systems-cfg picks which file is read. Two systems that turn
+out to be the same directory (a bind mount, like /storage/roms and
+/storage/games-internal/roms here) are scanned once, deduped by realpath and by
+(st_dev, st_ino).
 
     python3 name_guard.py [--json] [--es-systems-cfg FILE] [--root DIR]...
                           [--gamelist-dir DIR]...
-    exit 0 = nothing dangerous, 1 = findings, 3 = nothing scanned (no root
-    found: a guard that saw nothing must not say "safe"), 2 = usage error.
+    exit 0 = nothing dangerous, 1 = findings, 3 = nothing scanned (a guard that saw
+    nothing cant say safe), 2 = usage error.
 """
 import json
 import logging
@@ -83,17 +64,16 @@ import xml.etree.ElementTree as ET
 
 log = logging.getLogger("rp5deck.name_guard")
 
-# Legacy ROM roots: used only when es_systems.cfg cannot be found/parsed (see
-# the module docstring), or as the fallback --root list in that situation.
+# ROM roots only used when es_systems.cfg cant be found or parsed
 DEFAULT_ROOTS = ("/storage/roms", "/storage/games-internal/roms",
                  "/storage/games-external/roms")
 DEFAULT_GAMELIST_DIRS = ("/storage/.config/emulationstation/gamelists",)
 
-# The file ES itself reads its system list from (checked in order).
+# the file ES reads its system list from, checked in order
 DEFAULT_ES_SYSTEMS_CFG = ("/storage/.config/emulationstation/es_systems.cfg",
                           "/usr/share/emulationstation/es_systems.cfg")
 
-# Folder names that hold ES media, not games: ES never passes these to a hook.
+# folder names that hold ES media, not games, ES never passes these to a hook
 SKIP_DIRS = frozenset(("images", "videos", "manuals", "media", "downloaded_images",
                        "downloaded_videos", "downloaded_manuals", "bios"))
 
@@ -120,8 +100,7 @@ MAX_ERRORS = 50
 
 
 def value_reasons(value):
-    """Why ES's hook command line makes this one argument value dangerous,
-    as a list of human-readable reasons ([] = safe). Pure."""
+    """Why ES's hook command line makes this one value dangerous, as readable reasons ([] = safe)."""
     if not isinstance(value, str) or not value:
         return []
     out = []
@@ -133,10 +112,10 @@ def value_reasons(value):
 
 
 def es_command_line(script, args):
-    """The command string ES builds for one hook: a line-by-line port of
-    ROCKNIX/emulationstation-next es-core/src/Scripting.cpp executeScript()
-    (non-Windows, split form, so no event name is added). Used by the tests
-    and mirrored in sh by tools/install-es-hooks.sh's self-test."""
+    """The command string ES builds for one hook, a line by line port of emulationstation-next's
+    es-core/src/Scripting.cpp executeScript() (non-Windows, split form, no event name added).
+    Used by the tests and copied in sh by tools/install-es-hooks.sh's self-test.
+    """
     cmd = '"%s"' % script if " " in script else script
     for arg in (list(args) + ["", "", ""])[:3]:          # arg1, arg2, arg3
         if not arg:
@@ -151,15 +130,15 @@ def es_command_line(script, args):
 
 
 def es_wrapped(command, logdir):
-    """Platform.cpp ProcessStartInfo::run()'s non-waiting wrapper, as quoted
-    in review/RV1-findings.md; ES hands this string to execl("/bin/sh", "sh",
-    "-c", ...) from a double fork and never waits for it."""
+    """Platform.cpp ProcessStartInfo::run()'s non-waiting wrapper. ES hands this to
+    execl("/bin/sh", "sh", "-c", ...) from a double fork and never waits for it.
+    """
     return ("((((" + command + " 2> " + logdir + "/es_script_stderr.log ; echo $? >&3) | "
             "head -300 > " + logdir + "/es_script_stdout.log) 3>&1) | (read xs; exit $xs))")
 
 
 def xml_text(raw):
-    """Element text as an XML parser returns it (what ES passes)."""
+    """element text the way an XML parser returns it, which is what ES passes"""
     if raw.startswith("<![CDATA[") and raw.endswith("]]>"):
         return raw[9:-3]
 
@@ -175,25 +154,23 @@ def xml_text(raw):
 
 
 # ---------------------------------------------------------------------------
-# es_systems.cfg: ES's own system list (NM2, 24 Sep 2026 test-day fix).
+# es_systems.cfg: ES's own system list
 
 def _expand_path_vars(p):
-    """es_systems.cfg's %VAR%-style substitutions. On this device's real
-    es_systems.cfg (139 systems, checked 24 Sep 2026) every <path> is already
-    a plain absolute path and none use a variable, but the format allows
-    %ROMPATH% (seen in some ES-DE-derived builds); expand it defensively so a
-    future cfg using it is still scanned correctly rather than silently
-    skipped."""
+    """es_systems.cfg's %VAR% substitutions. Every <path> on the device is a plain absolute path,
+    but the format allows %ROMPATH% (some ES-DE based builds use it), so a future cfg with it
+    still gets scanned instead of quietly skipped.
+    """
     if "%ROMPATH%" in p:
         p = p.replace("%ROMPATH%", DEFAULT_ROOTS[0])
     return p
 
 
 def parse_es_systems(cfg_path):
-    """Parse an es_systems.cfg file into [{"name", "path", "extensions"
-    (frozenset, lowercase, with the leading dot)}, ...]. A <system> with no
-    (or empty) <path> is skipped. Never raises: returns ([], error string) on
-    a read/parse failure."""
+    """Parses es_systems.cfg into [{"name", "path", "extensions" (frozenset, lowercase, with the
+    dot)}, ...]. A <system> with no <path> is skipped. Never raises, returns ([], error) on a
+    read or parse failure.
+    """
     try:
         tree = ET.parse(cfg_path)
     except (ET.ParseError, OSError, ValueError) as e:
@@ -215,8 +192,9 @@ def parse_es_systems(cfg_path):
 
 
 def _locate_es_systems_cfg(explicit):
-    """The first existing candidate: `explicit` if given, else
-    DEFAULT_ES_SYSTEMS_CFG in order. None if nothing exists."""
+    """The first candidate that exists: `explicit` if given, else DEFAULT_ES_SYSTEMS_CFG in order.
+    None if nothing exists.
+    """
     for c in ([explicit] if explicit else list(DEFAULT_ES_SYSTEMS_CFG)):
         if c and os.path.isfile(c):
             return c
@@ -224,10 +202,10 @@ def _locate_es_systems_cfg(explicit):
 
 
 def _dedupe_paths(paths):
-    """realpath a list of directories, drop anything that is not a directory
-    (recorded in `missing`), and dedupe by realpath AND by (st_dev, st_ino) -
-    a bind-mounted pair (same underlying directory, different mount path) is
-    kept once. Returns (deduped_realpaths, missing_originals)."""
+    """Realpaths a list of directories, drops anything that isnt one (into `missing`), and dedupes by
+    realpath and by (st_dev, st_ino) so a bind-mounted pair is kept once. Returns
+    (deduped_realpaths, missing_originals).
+    """
     out, missing, seen_rp, seen_key = [], [], set(), set()
     for p in paths or ():
         if not isinstance(p, str) or not p:
@@ -251,10 +229,9 @@ def _dedupe_paths(paths):
 
 
 def _dedupe_systems(systems):
-    """Like _dedupe_paths, but for [{"name", "path", "extensions"}, ...]:
-    keeps each system's name/extensions, keyed off its realpath'd <path>. Two
-    <system>s (or a system and its bind-mounted twin) that resolve to the
-    same physical directory are scanned once - the first one wins."""
+    """Like _dedupe_paths for [{"name", "path", "extensions"}, ...]. Two systems that land on the
+    same directory are scanned once and the first one wins.
+    """
     out, missing, seen_rp, seen_key = [], [], set(), set()
     for sysinfo in systems:
         p = sysinfo.get("path")
@@ -327,22 +304,22 @@ class _Scan:
         self.gamelists += 1
         for m in _FIELD_RE.finditer(text):
             self.entries += 1
-            field, value = m.group(1), xml_text(m.group(2))     # NOT stripped: ES passes it as is
+            field, value = m.group(1), xml_text(m.group(2))  # not stripped, ES passes it as is
             reasons = value_reasons(value)
             if not reasons and field == "path":
-                # game-start/end also pass the bare file name, unquoted when
-                # IT has no space even if the directory part does
+                # game-start/end also pass the bare file name, unquoted when it has no space even if the
+                # folder part does
                 base = value.rsplit("/", 1)[-1]
                 reasons = [r + " (in the file name %r)" % base for r in value_reasons(base)]
             if reasons:
                 self.check("gamelist", path, field, value,
                            line=text.count("\n", 0, m.start()) + 1, reasons=reasons)
 
-    # -- the filesystem, legacy (unscoped) mode -------------------------------
+    # -- the filesystem, fallback (unscoped) mode -------------------------------
     def walk(self, root):
-        """Pre-NM2 behaviour: every file/folder name under `root`, no
-        extension filter. Used only when es_systems.cfg cannot be found or
-        parsed (see the module docstring) - a fallback, not the normal path."""
+        """The fallback: every file and folder name under `root`, no extension filter. Only used when
+        es_systems.cfg cant be found or parsed.
+        """
         stack = [(root, 0)]
         visited = set()
         while stack:
@@ -364,8 +341,8 @@ class _Scan:
                         is_dir = e.is_dir(follow_symlinks=False)
                         if not is_dir and e.is_symlink() and depth == 0:
                             is_dir = e.is_dir()          # a symlinked system folder
-                        # deeper links are not followed: Steam's Wine prefix has
-                        # dosdevices/z: -> / (1320 findings from /var/run on the device)
+                        # deeper links arent followed, Steam's Wine prefix has dosdevices/z: -> / (1320 findings
+                        # from /var/run on the device)
                     except OSError as err:
                         self.error("cannot stat %s: %s" % (e.path, err))
                         continue
@@ -384,31 +361,23 @@ class _Scan:
                         else:
                             self.skipped_gamelists += 1     # a backup copy ES never reads
                         continue
-                    # (the full path is an argument too, but a dangerous full
-                    # path needs a dangerous space-less component, and that is
-                    # already reported as its own dirname / filename finding)
+                    # (the full path is an argument too, but a dangerous full path needs a dangerous space-less
+                    # part, and that gets reported as its own dirname or filename finding)
                     self.check("filesystem", e.path, "filename", name)
 
-    # -- the filesystem, scoped mode (NM2) ------------------------------------
+    # -- the filesystem, scoped mode ------------------------------------------
     def walk_system(self, path, extensions):
-        """Recursive, extension-scoped walk of one ES system directory. The
-        directory itself may be a symlink (the caller has already realpath'd
-        it - reading through it happens naturally); nothing found WHILE
-        SCANNING is ever followed, at any depth, so a deep symlink (Steam's
-        pfx/dosdevices/z: -> /, 1320 findings from /var/run on the device
-        under the old unscoped walk) can never be reached.
+        """Recursive walk of one ES system folder, filtered by extension. The folder itself can be a
+        symlink (the caller already realpathed it), but nothing found while scanning is followed at
+        any depth, so something like Steam's pfx/dosdevices/z: -> / is never reached.
 
-        A FILE counts only if its extension is one of `extensions`
-        (case-insensitive). ES also shows sub-folders (a game can be
-        "<system>/Some Folder/Some Game.ext"), so a DIRECTORY counts too, but
-        only if it holds a matching file at this level or deeper - an empty
-        folder, or one holding only non-ROM litter, is never something ES
-        passes to a hook. (Choice made here, per NM2's brief: "if unsure,
-        include directories that contain at least one matching file at any
-        depth" - this is that choice.)
+        A file counts only if its extension is in `extensions` (any case). ES shows subfolders too
+        ("<system>/Some Folder/Some Game.ext"), so a folder counts, but only if it holds a matching
+        file somewhere below it. An empty folder or one with only non-ROM litter is never passed to
+        a hook.
 
-        Returns True iff `path` itself qualifies (has a match at or below
-        it), so the caller can decide whether to check ITS OWN name too."""
+        Returns True if `path` itself qualifies, so the caller knows whether to check its name too.
+        """
         return self._walk(path, 0, extensions, set())
 
     def _walk(self, d, depth, extensions, visited):
@@ -459,25 +428,19 @@ class _Scan:
 
 
 def scan(es_systems_cfg=None, roots=None, gamelist_dirs=DEFAULT_GAMELIST_DIRS):
-    """Scan what ES's own es_systems.cfg says it will show, plus gamelists.
-    Never raises. Returns a JSON-able dict:
+    """Scans what ES's es_systems.cfg says it shows, plus gamelists. Never raises. Returns a
+    JSON-able dict:
 
-    ok (True only if something was scanned and nothing is dangerous),
-    nothing_scanned, roots (the directories actually walked - system paths in
-    the normal case, legacy ROM roots if es_systems.cfg could not be used),
-    roots_missing, systems ([{name, path, extensions}] actually scanned - []
-    in legacy mode), es_systems_cfg (the file read, or None), es_systems_cfg_error,
-    legacy_scan (True if es_systems.cfg could not be found/parsed and the
-    pre-NM2 unscoped walk ran instead), files_checked, gamelists,
-    entries_checked, findings [{source, file, field, value, reasons, line?}],
-    errors (first MAX_ERRORS), error_count, elapsed_s.
+    ok (True only if something was scanned and nothing is dangerous), nothing_scanned, roots
+    (the folders walked), roots_missing, systems ([{name, path, extensions}] scanned, [] in
+    fallback mode), es_systems_cfg (the file read, or None), es_systems_cfg_error, legacy_scan
+    (True if the fallback ran), files_checked, gamelists, entries_checked, findings [{source,
+    file, field, value, reasons, line?}], errors (first MAX_ERRORS), error_count, elapsed_s.
 
-    es_systems_cfg: explicit path to ES's system list (default: try
-    DEFAULT_ES_SYSTEMS_CFG in order).
-    roots: when es_systems.cfg was read, narrows scanning to only the
-    systems whose path sits under one of these directories (default: every
-    system). When es_systems.cfg could NOT be read, this is instead the list
-    of ROM roots to scan the old, unscoped way (default: DEFAULT_ROOTS)."""
+    es_systems_cfg: the system list to read (default DEFAULT_ES_SYSTEMS_CFG in order).
+    roots: with the cfg read, only systems under one of these get scanned (default all). With
+    no cfg, the ROM roots for the fallback scan (default DEFAULT_ROOTS).
+    """
     t0 = time.monotonic()
     s = _Scan()
     rts, missing, systems_info = [], [], []
@@ -556,26 +519,26 @@ def describe(f):
 
 
 def _can_run_commands(value):
-    """True only for the subset of dangerous values that can actually EXECUTE
-    something: $( ) command substitution or a backtick. Plain '$' (variable
-    expansion, e.g. 'Ma$ter') and the space-less metacharacters ('&', ';', ...)
-    are garbled/mangled by ES's quoting but do not run arbitrary commands."""
+    """True only for the dangerous values that can actually run something: $( ) or a backtick.
+    A plain '$' (like 'Ma$ter') and the space-less metacharacters ('&', ';', ...) get mangled by
+    ES's quoting but dont run anything.
+    """
     return isinstance(value, str) and ("$(" in value or "`" in value)
 
 
 def summary(result):
-    """One short line for the UI ("" when there is nothing to warn about).
+    """One short line for the UI ("" when there's nothing to warn about).
 
-    Most findings are names ES's hook quoting GARBLES (apostrophes, '&',
-    ';', ...): the name is mangled, nothing runs. Only $( ) or a backtick in
-    an actual value can execute a command, so that stronger wording is added
-    only when a finding actually contains one."""
+    Most findings are names ES's quoting mangles (apostrophes, '&', ';', ...), nothing runs.
+    Only $( ) or a backtick can run a command, so the stronger wording only shows when a finding
+    has one.
+    """
     if not result or result.get("ok"):
         return ""
     findings = result.get("findings") or ()
     n = len(findings)
     if not n:
-        return ""                              # nothing_scanned or otherwise: nothing to say
+        return ""  # nothing_scanned or anything else, nothing to say
     plural = n != 1
     msg = ("%d game name%s %s garbled by ES's hook quoting - see log"
            % (n, "s" if plural else "", "are" if plural else "is"))
@@ -586,7 +549,7 @@ def summary(result):
 
 def check(log_fn=None, es_systems_cfg=None, roots=None, gamelist_dirs=DEFAULT_GAMELIST_DIRS,
          show=10):
-    """Scan and log a warning if anything is dangerous. Returns the result."""
+    """Scans and logs a warning if anything is dangerous. Returns the result."""
     log_fn = log_fn or log.warning
     r = scan(es_systems_cfg, roots, gamelist_dirs)
     try:
@@ -610,8 +573,9 @@ def check(log_fn=None, es_systems_cfg=None, roots=None, gamelist_dirs=DEFAULT_GA
 
 def check_async(on_done=None, log_fn=None, es_systems_cfg=None, roots=None,
                 gamelist_dirs=DEFAULT_GAMELIST_DIRS):
-    """check() on a daemon thread (a cold SD card can take a while), then
-    on_done(result) FROM THAT THREAD - the app posts it to its UI loop."""
+    """check() on a daemon thread (a cold SD card can take a while), then on_done(result) from that
+    thread, the app posts it to its UI loop.
+    """
     def run():
         try:
             r = check(log_fn, es_systems_cfg, roots, gamelist_dirs)

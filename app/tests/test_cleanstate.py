@@ -548,8 +548,8 @@ class TestConfirmAndDryRun(Case):
         self.assertEqual(plan.stop_list(), [
             "Game: Super Metroid (snes) - ES's /emukill first, then ROCKNIX's kill target "
             "retroarch (SIGTERM)",
-            "On-screen keyboard (wvkbd) - pid 4100",
-            "Browser / Discord: Firefox (rp5deck-web) - pid 4000",
+            "On-screen keyboard - running",
+            "Browser / Discord - running",
             "Built-in touch screen - turn it back on (it is off)"])
 
 
@@ -600,7 +600,7 @@ class TestRestart(Case):
         self.assertEqual([c for c in self.runner.calls if c in cleanstate.MUTATING_COMMANDS],
                          [CMD_RESTART_ES])
         self.assertTrue(steps[0].ok, steps)
-        self.assertEqual(steps[0].text, "ES restarted (pid 1500)")
+        self.assertEqual(steps[0].text, "EmulationStation restarted")
         self.assertFalse(any(a in ("sway", "sway.service") for c in self.runner.calls for a in c))
 
     def test_healthy_es_is_not_restarted(self):

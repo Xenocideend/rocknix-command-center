@@ -1,48 +1,46 @@
-"""osk - the on-screen keyboard for typing into Firefox on the bottom screen.
+"""osk: the on-screen keyboard for typing into Firefox on the bottom screen.
 
-rp5deck's own text fields (YouTube search) use ui.Keyboard, drawn on the
-layer surface. Typing into FIREFOX is different: the keys must reach
-Firefox's text field, and Firefox only takes keys while it has keyboard
-focus. The owner gives it focus by tapping the page (sway focuses a window
-on a tap; nothing in rp5deck sends focus commands).
+rp5deck's own text fields use ui.Keyboard, drawn on the layer surface. Typing into Firefox is
+different, the keys have to reach Firefox's text field, and Firefox only takes keys while it
+has keyboard focus. You give it focus by tapping the page (sway focuses a window on a tap,
+rp5deck never sends focus commands).
 
-Backend: `wvkbd-mobintl`, ROCKNIX's own on-screen keyboard, already on the
-device. It is a zwlr_layer_surface_v1 with keyboard interactivity off that
-types through zwp_virtual_keyboard_v1 into whatever has focus. Proven on this
-device by E1b (experiments/e1b-layer.sh): with `-L 300 --output DSI-1` it
-drew on DSI-1's bottom 300 px, received the taps, and focus never moved -
-so showing it cannot take focus from Firefox (or from a game).
+The backend is `wvkbd-mobintl`, ROCKNIX's own on-screen keyboard. It's a
+zwlr_layer_surface_v1 with keyboard interactivity off that types through
+zwp_virtual_keyboard_v1 into whatever has focus. On this device with `-L 300 --output DSI-1`
+it drew on DSI-1's bottom 300 px, got the taps, and focus never moved, so showing it cant take
+focus from Firefox or a game (experiments/e1b-layer.sh).
 
-Only the two flags E1b proved are used (`-L <height>`, `--output <name>`).
-Show = start the process, hide = stop it: no reliance on --hidden or on
-SIGUSR1/SIGUSR2, which this build has not been checked for.
+Only those two flags are used (`-L <height>`, `--output <name>`). Show starts the process and
+hide stops it, with no reliance on --hidden or SIGUSR1/SIGUSR2, which this build hasnt been
+checked for.
 
-Not covering the field: wvkbd anchors to the bottom edge and (upstream
-main.c) sets an exclusive zone equal to its height, so sway shrinks the
-Firefox window above it instead of drawing over it; rp5deck's BAR strip has
-its own exclusive zone, so the keyboard stacks above the strip. After the
-keyboard appears, rp5deck also asks Firefox (Marionette) to scroll the
-focused element into view. The exclusive zone is UNVERIFIED on the device:
-see the HF1 device checklist (step K3).
+wvkbd anchors to the bottom edge and sets an exclusive zone equal to its height, so sway
+shrinks the Firefox window above it instead of drawing over the field, and rp5deck's BAR strip
+has its own zone so the keyboard stacks above the strip. After it appears rp5deck also asks
+Firefox (Marionette) to scroll the focused element into view. The exclusive zone hasnt been
+checked on the device yet.
 
 When to show it (OskPolicy, pure):
-  auto    Firefox has sway focus AND its active element is editable (a
-          Marionette probe) - or the owner pressed Keyboard. Pressing
-          Keyboard while it is up hides it until the next text field.
-  button  only the Keyboard button shows / hides it
-  off     never; the Keyboard button is not offered
-It is shown only while Firefox itself is focused: with ES or a game focused
-the keys would go to them instead.
+  auto    Firefox has sway focus and its active element is editable (a Marionette probe),
+          or you pressed Keyboard. Pressing Keyboard while it's up hides it until the next
+          text field.
+  button  only the Keyboard button shows and hides it
+  off     never, and the Keyboard button isnt offered
+It only shows while Firefox itself is focused, with ES or a game focused the keys would go
+there.
 """
 import os
 import signal
 import subprocess
 
+import screen_map
+
 WVKBD_BIN = "wvkbd-mobintl"
-DEFAULT_HEIGHT = 360            # px on the 1080 px panel: Firefox keeps 1080-140-360
+DEFAULT_HEIGHT = 360  # px on the 1080 px panel, Firefox keeps 1080-140-360
 MODES = ("auto", "button", "off")
 DEFAULT_MODE = "auto"
-HIDE_AFTER = 2                  # consecutive "not wanted" polls before an auto hide
+HIDE_AFTER = 2  # "not wanted" polls in a row before an auto hide
 STOP_WAIT = 1.0
 
 
@@ -56,19 +54,18 @@ def resolve_mode(cfg_value=None, env=None):
 
 
 class OskPolicy:
-    """Decides whether the keyboard should be up. Pure: no process, no clock.
+    """Decides whether the keyboard should be up. Pure, no process, no clock.
 
-    update(focused, editable) is fed by the poll (Firefox focused in sway,
-    Marionette says the active element takes text) and returns the wanted
-    visibility. toggle(focused) is the Keyboard button; it returns
-    (wanted, hint) where hint is a short message for the strip or None.
-    Showing is immediate; an auto hide needs HIDE_AFTER polls in a row, so
-    a field-to-field hop does not make the keyboard flicker. A toggle or
-    reset() applies at once."""
+    update(focused, editable) is fed by the poll (Firefox focused in sway, Marionette says the
+    active element takes text) and returns whether it's wanted. toggle(focused) is the Keyboard
+    button, returning (wanted, hint) with a short message for the strip or None. Showing is
+    immediate, and an auto hide needs HIDE_AFTER polls in a row so hopping between fields doesnt
+    make it flicker. A toggle or reset() applies right away.
+    """
 
     def __init__(self, mode=DEFAULT_MODE):
         self.mode = mode if mode in MODES else DEFAULT_MODE
-        self.manual = None          # True: owner asked for it; False: owner hid it
+        self.manual = None  # True means you asked for it, False means you hid it
         self.wanted = False
         self._misses = 0
         self._last_editable = False
@@ -97,7 +94,7 @@ class OskPolicy:
             return False
         editable = bool(editable) and bool(focused)
         if self.manual is False and editable and not self._last_editable:
-            self.manual = None      # a NEW text field: the owner's "hide" is over
+            self.manual = None  # a new text field, so your "hide" is over
         self._last_editable = editable
         want = self._want(focused, editable)
         if want:
@@ -128,14 +125,14 @@ class OskPolicy:
 
 
 class Wvkbd:
-    """Runs wvkbd-mobintl on one output. show() starts it (idempotent),
-    hide() stops it with a bounded wait and a SIGKILL fallback, so a hidden
-    keyboard never lingers as a process - or as a surface over the panel.
-    popen is injectable for tests."""
+    """Runs wvkbd-mobintl on one output. show() starts it (safe twice), hide() stops it with a bounded
+    wait and a SIGKILL fallback, so a hidden keyboard never hangs around as a process or a surface
+    over the panel. popen can be swapped for tests.
+    """
 
-    def __init__(self, output="DSI-1", height=DEFAULT_HEIGHT, binary=WVKBD_BIN,
+    def __init__(self, output=None, height=DEFAULT_HEIGHT, binary=WVKBD_BIN,
                  popen=subprocess.Popen):
-        self.output = output
+        self.output = output or screen_map.CURRENT.bottom
         self.height = int(height)
         self.binary = binary
         self.popen = popen

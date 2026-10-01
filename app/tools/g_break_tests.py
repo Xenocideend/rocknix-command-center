@@ -31,13 +31,13 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BREAKS = [
     ("config.py",
-     '    ("companion", "system_bg_source"),               # companion.py CompanionController (CC4): self._c("system_bg_source") - theme_colour.theme_background_color()/SampleCache\n',
-     '    ("companion", "system_bg_source"),               # companion.py CompanionController (CC4): self._c("system_bg_source") - theme_colour.theme_background_color()/SampleCache\n'
+     '    ("companion", "system_bg_source"),  # companion' "'" 's system background (theme_colour)\n',
+     '    ("companion", "system_bg_source"),  # companion' "'" 's system background (theme_colour)\n'
      '    ("lights", "left"),                              # BREAK: RG root cause re-introduced\n',
      "tests.test_settings_view"),
     ("screens.py",
      '    def _toggle_hidden(self, name):\n'
-     '        if name == "home.settings":            # can never be hidden - see __init__\n'
+     '        if name == "home.settings":  # can never be hidden, see __init__\n'
      '            return\n'
      '        if name in self.hidden:\n',
      '    def _toggle_hidden(self, name):\n'
@@ -58,11 +58,9 @@ BREAKS = [
      "tests.test_rocknix_keyboard.TestFindPid.test_requires_hidden_and_simple_together"),
     ("config.py",
      '    if t == "tile_set":\n'
-     '        # Like array_enum\'s membership check, but a SUBSET (order does not\n'
-     '        # matter, dropping members is the whole point) - hidden_tiles: any\n'
-     '        # key not in field["values"] is refused outright, which is how\n'
-     '        # "home.settings" (never in HIDEABLE_TILE_KEYS) can never be stored\n'
-     '        # here even by a hand-edited config.json.\n'
+     '        # Like array_enum\'s check but a subset (dropping members is the point). Anything not in\n'
+     '        # field["values"] is refused, which is how "home.settings" can never end up hidden even from\n'
+     '        # a hand-edited file.\n'
      '        if not isinstance(value, list):\n'
      '            return (False, value)\n'
      '        vals = set(field["values"])\n'

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""
-HUD statistics module for Retroid Pocket 5 running ROCKNIX.
-Reads device stats from sysfs/procfs and EmulationStation API.
-All values are None if they cannot be read (never 0 or empty string).
+"""HUD stats for the RP5 on ROCKNIX, read from sysfs, procfs and the EmulationStation API.
+Every value is None when it cant be read, never 0 or an empty string.
 """
 
 import json
@@ -14,7 +12,7 @@ import sys
 
 
 def read_file(path: str) -> str | None:
-    """Read a single file; return None on any error."""
+    """Reads one file, None on any error."""
     try:
         with open(path, 'r') as f:
             return f.read().strip()
@@ -23,10 +21,8 @@ def read_file(path: str) -> str | None:
 
 
 def find_sysfs_by_name(base_path: str, name_value: str, sub_file: str = 'type') -> str | None:
-    """
-    Find a sysfs directory by checking a name field.
-    Example: find_sysfs_by_name('/sys/class/thermal', 'battery', 'type')
-    returns the path to thermal_zone* with type == 'battery'.
+    """Finds a sysfs folder by a name field, like find_sysfs_by_name('/sys/class/thermal',
+    'battery', 'type') for the thermal_zone* with type == 'battery'.
     """
     try:
         entries = os.listdir(base_path)
@@ -52,7 +48,7 @@ def find_thermal_by_type(type_value: str) -> str | None:
 
 
 def read_temperature_c(thermal_path: str) -> float | None:
-    """Read temperature from thermal zone; convert m°C to °C."""
+    """Temperature from a thermal zone, m°C to °C."""
     val = read_file(os.path.join(thermal_path, 'temp'))
     if val is None:
         return None
@@ -76,7 +72,6 @@ def read_battery_stats() -> dict:
 
     batt_base = '/sys/class/power_supply/battery'
 
-    # Capacity
     cap = read_file(os.path.join(batt_base, 'capacity'))
     if cap is not None:
         try:
@@ -84,12 +79,10 @@ def read_battery_stats() -> dict:
         except Exception:
             pass
 
-    # Status
     status = read_file(os.path.join(batt_base, 'status'))
     if status is not None:
         result['battery_status'] = status
 
-    # Voltage: convert µV to V
     volt_uv = read_file(os.path.join(batt_base, 'voltage_now'))
     if volt_uv is not None:
         try:
@@ -97,7 +90,6 @@ def read_battery_stats() -> dict:
         except Exception:
             pass
 
-    # Current: convert µA to A
     curr_ua = read_file(os.path.join(batt_base, 'current_now'))
     if curr_ua is not None:
         try:
@@ -105,11 +97,10 @@ def read_battery_stats() -> dict:
         except Exception:
             pass
 
-    # Power = voltage × current
     if result['battery_voltage_v'] is not None and result['battery_current_a'] is not None:
         result['battery_power_w'] = result['battery_voltage_v'] * result['battery_current_a']
 
-    # Temperature: convert 0.1°C to °C
+    # the battery reports tenths of a degree
     temp_01c = read_file(os.path.join(batt_base, 'temp'))
     if temp_01c is not None:
         try:
@@ -117,7 +108,6 @@ def read_battery_stats() -> dict:
         except Exception:
             pass
 
-    # Charger
     charger = read_file('/sys/class/power_supply/pm8150b-charger/online')
     if charger is not None:
         try:
@@ -140,7 +130,6 @@ def read_cpu_stats() -> dict:
     for policy_num in [0, 4, 7]:
         policy_path = f'/sys/devices/system/cpu/cpufreq/policy{policy_num}'
 
-        # Get CPUs in this policy
         cpus_line = read_file(os.path.join(policy_path, 'related_cpus'))
         if cpus_line is None:
             continue
@@ -150,7 +139,7 @@ def read_cpu_stats() -> dict:
         except Exception:
             continue
 
-        # Get current frequency (in kHz; convert to MHz)
+        # kHz to MHz
         cur_khz = read_file(os.path.join(policy_path, 'scaling_cur_freq'))
         cur_mhz = None
         if cur_khz is not None:
@@ -159,7 +148,6 @@ def read_cpu_stats() -> dict:
             except Exception:
                 pass
 
-        # Get max frequency
         max_khz = read_file(os.path.join(policy_path, 'cpuinfo_max_freq'))
         max_mhz = None
         if max_khz is not None:
@@ -168,7 +156,6 @@ def read_cpu_stats() -> dict:
             except Exception:
                 pass
 
-        # Get governor
         governor = read_file(os.path.join(policy_path, 'scaling_governor'))
 
         clusters.append({
@@ -181,26 +168,25 @@ def read_cpu_stats() -> dict:
     if clusters:
         result['cpu_clusters'] = clusters
 
-    # GPU frequency
     gpu_devfreq = '/sys/class/devfreq/3d00000.gpu'
     gpu_cur = read_file(os.path.join(gpu_devfreq, 'cur_freq'))
     if gpu_cur is not None:
         try:
-            result['gpu_mhz'] = int(gpu_cur) // 1_000_000  # Convert Hz to MHz
+            result['gpu_mhz'] = int(gpu_cur) // 1_000_000  # Hz to MHz
         except Exception:
             pass
 
-    # GPU load: busy-time delta between this call and the previous one
-    # (stateful; see GpuLoadSampler). None on the first call and whenever
-    # the fdinfo totals cannot be read - never 0.
+    # GPU load is the busy time change between this call and the last one (GpuLoadSampler keeps
+    # the state). None on the first call and whenever the fdinfo totals cant be read, never 0.
     result['gpu_load_percent'] = _GPU_LOAD.sample()
 
     return result
 
 
 def parse_drm_fdinfo(text: str):
-    """Parse one /proc/<pid>/fdinfo/<fd> text. Returns
-    (driver, client_id, engine_gpu_ns); any missing field is None."""
+    """Parses one /proc/<pid>/fdinfo/<fd> text into (driver, client_id, engine_gpu_ns), any missing
+    field is None.
+    """
     driver = client = ns = None
     for line in text.split('\n'):
         key, _, val = line.partition(':')
@@ -220,13 +206,13 @@ def parse_drm_fdinfo(text: str):
 
 
 def dedupe_gpu_totals(records) -> dict | None:
-    """records: iterable of (driver, client_id, engine_ns) from every DRM fd.
+    """records: (driver, client_id, engine_ns) from every DRM fd.
 
-    One DRM client (one open of the device) shows up once per fd that refers
-    to it - sway alone had three fds for client 6, each reporting the same
-    26 s total - so summing per fd triple-counts. Keep one value per
-    drm-client-id (the largest, in case two reads straddle an update).
-    Returns None if no msm client was readable at all."""
+    One DRM client shows up once per fd that points at it (sway alone had three fds for one
+    client, each with the same 26 s total), so summing per fd counts it three times. This keeps
+    one value per drm-client-id, the largest in case two reads straddle an update. None if no msm
+    client could be read.
+    """
     totals = {}
     for driver, client, ns in records:
         if driver != 'msm' or client is None or ns is None:
@@ -236,8 +222,9 @@ def dedupe_gpu_totals(records) -> dict | None:
 
 
 def read_gpu_engine_totals() -> dict | None:
-    """drm-engine-gpu busy nanoseconds per drm-client-id, across all
-    processes. Only fds whose link points into /dev/dri are read."""
+    """drm-engine-gpu busy nanoseconds per drm-client-id across all processes. Only fds linking into
+    /dev/dri get read.
+    """
     records = []
     try:
         pids = [p for p in os.listdir('/proc') if p.isdigit()]
@@ -262,9 +249,9 @@ def read_gpu_engine_totals() -> dict | None:
 
 
 class GpuLoadSampler:
-    """GPU load % from the change in de-duplicated drm-engine-gpu totals
-    between successive calls. sample() is called repeatedly (1 Hz by the HUD
-    sheet), so the previous totals are kept here."""
+    """GPU load % from the change in the de-duplicated drm-engine-gpu totals between calls. The HUD
+    sheet calls sample() every second, so the last totals are kept here.
+    """
 
     def __init__(self, reader=None, clock=None):
         import time as _time
@@ -288,10 +275,9 @@ class GpuLoadSampler:
         busy = 0
         for client, ns in totals.items():
             old = prev[1].get(client)
-            # A client that appeared since the last call is skipped rather
-            # than counted from zero: its total may predate the interval
-            # (fd passed between processes, or missed by a racing scan),
-            # and counting it would show a false spike.
+            # A client that showed up since the last call is skipped instead of counted from zero, since
+            # its total may be older than the interval (an fd passed between processes, or missed by a scan)
+            # and counting it would show a fake spike.
             if old is not None and ns >= old:
                 busy += ns - old
         pct = busy / dt_ns * 100.0
@@ -305,7 +291,6 @@ def read_temperatures() -> dict:
     """Read all available temperatures."""
     result = {}
 
-    # Check for thermal zones by type name
     thermal_types = [
         'battery',
         'cpu0-thermal', 'cpu1-thermal', 'cpu2-thermal', 'cpu3-thermal',
@@ -332,7 +317,7 @@ def read_temperatures() -> dict:
             if temp is not None:
                 result[tz_type] = temp
 
-    # Also check pm8150 variants
+    # pm8150 variants too
     pm8150_variants = [
         'pm8150-thermal',
         'pm8150b-thermal',
@@ -421,7 +406,7 @@ def read_storage_stats() -> dict:
             if len(parts) >= 4:
                 total_kb = int(parts[1])
                 free_kb = int(parts[3])
-                # Convert KB to GiB (1 GiB = 1024^2 KB = 1048576 KB)
+                # KB to GiB (1 GiB = 1048576 KB)
                 result['storage_total_gb'] = total_kb / 1_048_576
                 result['storage_free_gb'] = free_kb / 1_048_576
     except Exception:
@@ -438,7 +423,7 @@ def read_network_stats() -> dict:
         'ip_address': None,
     }
 
-    # WiFi: iw dev wlan0 link
+    # Wi-Fi from `iw dev wlan0 link`
     try:
         output = subprocess.check_output(['iw', 'dev', 'wlan0', 'link'], text=True, timeout=5)
         lines = output.strip().split('\n')
@@ -456,7 +441,7 @@ def read_network_stats() -> dict:
     except Exception:
         pass
 
-    # IP: ip -4 -o addr show wlan0
+    # IP from `ip -4 -o addr show wlan0`
     try:
         output = subprocess.check_output(['ip', '-4', '-o', 'addr', 'show', 'wlan0'], text=True, timeout=5)
         lines = output.strip().split('\n')
@@ -484,12 +469,11 @@ def read_uptime() -> int | None:
 
 
 def read_running_game() -> str | None:
-    """Check EmulationStation API for running game."""
+    """Asks EmulationStation's API what game is running."""
     try:
         req = urllib.request.Request('http://127.0.0.1:1234/runningGame')
         with urllib.request.urlopen(req, timeout=1) as response:
             data = response.read().decode('utf-8')
-            # Try to parse as JSON first
             try:
                 parsed = json.loads(data)
                 if isinstance(parsed, dict) and 'msg' in parsed:
@@ -498,7 +482,6 @@ def read_running_game() -> str | None:
                     return parsed.get('msg')
                 return None
             except json.JSONDecodeError:
-                # If not JSON, check for text
                 if 'NO GAME RUNNING' in data:
                     return None
                 return None
@@ -507,44 +490,32 @@ def read_running_game() -> str | None:
 
 
 def sample() -> dict:
-    """
-    Collect all HUD statistics.
-    Returns a dict with all keys; values are None if they cannot be read.
-    """
+    """All HUD stats as a dict with every key, a value is None when it cant be read."""
     result = {}
 
-    # Battery
     battery_stats = read_battery_stats()
     result.update(battery_stats)
 
-    # CPU and GPU
     cpu_gpu_stats = read_cpu_stats()
     result.update(cpu_gpu_stats)
 
-    # Temperatures
     temps = read_temperatures()
     result['temps_c'] = temps
 
-    # Fan
     fan_stats = read_fan_stats()
     result.update(fan_stats)
 
-    # Memory
     memory_stats = read_memory_stats()
     result.update(memory_stats)
 
-    # Storage
     storage_stats = read_storage_stats()
     result.update(storage_stats)
 
-    # Network
     network_stats = read_network_stats()
     result.update(network_stats)
 
-    # Uptime
     result['uptime_s'] = read_uptime()
 
-    # Running game
     result['running_game'] = read_running_game()
 
     return result
@@ -553,7 +524,7 @@ def sample() -> dict:
 def main():
     """CLI: print sample() as JSON."""
     if '--json' in sys.argv:
-        # gpu_load_percent needs a baseline: prime it, wait, then sample.
+        # gpu_load_percent needs a baseline, so prime it, wait, then sample
         _GPU_LOAD.sample()
         import time as _time
         _time.sleep(0.5)

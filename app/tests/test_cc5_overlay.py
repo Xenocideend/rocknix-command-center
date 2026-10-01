@@ -318,9 +318,15 @@ class TestSummonInHidden(Harness):
         # nothing in the overlay path can talk to sway except the read-only query
         self.assertTrue(sway_ipc.RUN_COMMAND not in sway_ipc.READ_ONLY_TYPES)
 
-    def test_undocked_hidden_is_refused(self):
+    def test_undocked_hidden_opens_the_overlay(self):
         app = self.make_cc5_app()
         self.query_result = (HIDDEN, "undocked: DP-1 absent")
+        self.back(app)
+        self.assertEqual(app.mode, OVERLAY)
+
+    def test_panel_output_absent_is_refused(self):
+        app = self.make_cc5_app()
+        self.query_result = (HIDDEN, "DSI-1 absent")
         self.back(app)
         self.assertEqual(app.mode, HIDDEN)
         self.assertTrue(app.layer.hidden)
@@ -328,10 +334,10 @@ class TestSummonInHidden(Harness):
         self.assertIn("not an emulator window", app.cc5.last_refusal)
 
     def test_a_stale_watcher_reason_is_rechecked(self):
-        # the watcher said "window" when the game started; undocking since
-        # left the mode HIDDEN, so no new reason was ever reported
+        # the watcher said "window" when the game started; the panel's output
+        # went away since, so no new reason was ever reported
         app = self.make_cc5_app()
-        self.query_result = (HIDDEN, "undocked: DP-1 absent")
+        self.query_result = (HIDDEN, "DSI-1 absent")
         self.back(app)
         self.assertEqual(app.mode, HIDDEN)
         self.assertEqual(app.mode_reason, WINDOW_REASON)
@@ -479,7 +485,7 @@ class TestModeChangesWhileOpen(Harness):
         app.on_mode(FULL, "no window on DSI-1")
         self.swipe(app, 700, 20, 700, 400)
         t = app.ui.targets()
-        self.assertIn("home.browser", t)
+        self.assertIn("home.hotkeys", t)            # the normal grid (batch 1: no Browser tile)
         self.assertNotIn("home.overlay_close", t)
 
 
@@ -565,7 +571,7 @@ class TestCornerHandle(Harness):
         self.assertEqual(self.handles, [])
         self.assertIsNone(app.cc5.handle)
 
-    def test_shown_only_in_hidden_by_a_window(self):
+    def test_shown_in_hidden_by_a_window_or_undocked(self):
         app = self.make_cc5_app({"command_center": {"corner_handle": "top-right"}})
         self.assertEqual(len(self.handles), 1)
         h = self.handles[0]
@@ -578,7 +584,7 @@ class TestCornerHandle(Harness):
         app.on_mode(FULL, "no window on DSI-1")
         self.assertFalse(h.visible)
         app.on_mode(HIDDEN, "undocked: DP-1 absent")
-        self.assertFalse(h.visible)
+        self.assertTrue(h.visible)
 
     def test_a_tap_opens_the_overlay_even_with_the_button_path_off(self):
         app = self.make_cc5_app({"command_center": {"corner_handle": "bottom-left",
@@ -589,13 +595,13 @@ class TestCornerHandle(Harness):
         self.assertEqual(app.mode, OVERLAY)
         self.assertFalse(app.cc5.handle_event("up", 5, ("f", 1)))   # another window: not ours
 
-    def test_recheck_hides_it_after_an_undock_the_watcher_cannot_report(self):
+    def test_recheck_hides_it_when_the_panel_output_goes(self):
         app = self.make_cc5_app({"command_center": {"corner_handle": "top-left"}})
         h = self.handles[0]
-        self.query_result = (HIDDEN, "undocked: DP-1 absent")
+        self.query_result = (HIDDEN, "DSI-1 absent")
         self.run_timers(app, hidden_overlay.HANDLE_RECHECK_S + 0.1)
         self.assertFalse(h.visible)
-        self.assertIn("undocked", app.cc5.handle_blocked)
+        self.assertIn("absent", app.cc5.handle_blocked)
         app.on_mode(FULL, "no window on DSI-1")
         app.on_mode(HIDDEN, WINDOW_REASON)             # the next game: back again
         self.assertTrue(h.visible)

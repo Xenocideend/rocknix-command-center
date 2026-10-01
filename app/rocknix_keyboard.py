@@ -1,43 +1,34 @@
-"""rocknix_keyboard - toggle ROCKNIX's own on-screen keyboard (owner
-request: a Command Center control to "type into emulator settings").
+"""rocknix_keyboard: toggles ROCKNIX's own on-screen keyboard, so you can type into emulator
+settings from the Command Center.
 
-There is no on-screen keyboard while a game or emulator has focus (rp5deck's
-own osk.py only ever drives wvkbd-mobintl FOR FIREFOX, with `-L <height>
---output <name>`, drawn on the layer surface - a completely different
-process from this module's target and never touched here).
+There's no on-screen keyboard while a game or emulator has focus. rp5deck's osk.py only runs
+wvkbd-mobintl for Firefox (`-L <height> --output <name>`), a different process that's never
+touched here.
 
-Device facts (read on the device 24 Sep 2026):
-  ROCKNIX runs `touchkeyboard.service` -> `/usr/bin/rocknix-touchscreen-
-  keyboard`, a loop: while `rocknix.touchscreen-keyboard.enabled == 1` (an
-  ES menu toggle, "ENABLE TOUCHSCREEN KEYBOARD"), each iteration runs
-      wvkbd-mobintl ... -l simple --hidden
-  in the foreground (with DEVICE_HAS_DUAL_SCREEN=false pinned on this
-  device, that is no `--output`, no `-H 400`). Caution: if the loop finds a
-  wvkbd-mobintl ALREADY running when it iterates, it `killall`s it - so this
-  module must never start or stop that process itself, only ever signal the
-  one instance the service already owns.
-  input_sense's own FN(BTN_MODE=Home)+BTN_TOUCH toggle sends it
-  `kill -34 $(pidof wvkbd-mobintl)` - SIGRTMIN+0 on this device's glibc
-  (used here as the literal signal number 34, not the symbolic
-  `signal.SIGRTMIN`, since that constant's value is not guaranteed to be 34
-  off-device and this module only ever needs to match what input_sense
-  itself already sends).
+On the device, ROCKNIX runs `touchkeyboard.service` -> `/usr/bin/rocknix-touchscreen-keyboard`,
+a loop that, while `rocknix.touchscreen-keyboard.enabled == 1` (ES's "ENABLE TOUCHSCREEN
+KEYBOARD"), runs
+    wvkbd-mobintl ... -l simple --hidden
+in the foreground (with DEVICE_HAS_DUAL_SCREEN=false pinned here, no `--output` and no
+`-H 400`). If the loop finds a wvkbd-mobintl already running it killalls it, so this never
+starts or stops that process, it only signals the one the service owns. input_sense's
+FN(Home)+BTN_TOUCH toggle sends it `kill -34 $(pidof wvkbd-mobintl)`, SIGRTMIN+0 on this
+glibc. The literal 34 is used, not signal.SIGRTMIN, since that constant isnt guaranteed to be
+34 elsewhere and this only has to match what input_sense sends.
 
-Identifying THE keyboard process: matching on the binary name alone is not
-enough - rp5deck's own osk.py starts a wvkbd-mobintl too (for Firefox, with
-different flags and no --hidden), and two rp5deck processes could plausibly
-run at once. find_pid() only accepts a /proc entry whose cmdline names the
-same binary AND carries both `--hidden` and `-l simple` (an adjacent
-`"-l", "simple"` pair, not just "-l" and "simple" appearing anywhere) -
-exactly ROCKNIX's own service invocation. toggle() then signals ONLY that
-one pid; nothing here ever starts, stops or kills any other process."""
+Matching the binary name isnt enough, since osk.py starts a wvkbd-mobintl too (for Firefox,
+other flags, no --hidden). find_pid() only takes a /proc entry whose cmdline names the same
+binary and has both `--hidden` and `-l simple` (as an adjacent pair), exactly ROCKNIX's own
+service command. toggle() then signals only that pid, and nothing here ever starts, stops or
+kills anything else.
+"""
 import logging
 import os
 
 log = logging.getLogger("rp5deck.rocknix_keyboard")
 
 WVKBD_BIN = "wvkbd-mobintl"
-TOGGLE_SIGNAL = 34              # SIGRTMIN+0 on this device: input_sense's own `kill -34`
+TOGGLE_SIGNAL = 34  # SIGRTMIN+0 on this device, input_sense's own `kill -34`
 
 
 def _cmdline_tokens(proc_dir, pid):
@@ -64,10 +55,10 @@ def _is_rocknix_keyboard(tokens):
 
 
 def find_pid(proc_dir="/proc"):
-    """The pid of ROCKNIX's own touchkeyboard.service wvkbd-mobintl, or
-    None if it is not running (the ES setting is off, or the service has
-    not started it yet). Never raises: a /proc entry that disappears mid-
-    scan (a process exiting) or one this user cannot read is just skipped."""
+    """The pid of ROCKNIX's own touchkeyboard.service wvkbd-mobintl, or None if it isnt running (the
+    ES setting is off, or the service hasnt started it yet). Never raises, a /proc entry that
+    vanishes mid-scan or cant be read is just skipped.
+    """
     try:
         entries = os.listdir(proc_dir)
     except OSError:
@@ -82,12 +73,11 @@ def find_pid(proc_dir="/proc"):
 
 
 def toggle(proc_dir="/proc", kill_fn=None):
-    """Send TOGGLE_SIGNAL to ROCKNIX's own keyboard process if it is
-    running. Returns True if a signal was sent, False if no such process
-    was found (the caller shows a hint in that case - see main.py
-    App.toggle_keyboard()) or the signal failed to send (logged, not
-    raised: a stale pid disappearing between find_pid() and the signal is
-    not this module's problem to solve)."""
+    """Sends TOGGLE_SIGNAL to ROCKNIX's keyboard process if it's running. True if a signal was sent,
+    False if there was no such process (the caller shows a hint, see main.py App.toggle_keyboard())
+    or the signal failed (logged, not raised, a pid vanishing between find_pid() and the signal is
+    fine).
+    """
     kill_fn = kill_fn or os.kill
     pid = find_pid(proc_dir)
     if pid is None:

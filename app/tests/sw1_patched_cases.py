@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SW1 cases that need the PATCHED main.py / screens.py / 094-rp5deck.
+"""SW1 cases that need the PATCHED main.py / screens.py / command-center-app.
 
 I2 (24 Sep): patches/SW1-*.patch are merged into the real files;
 tests/test_sw1_merged.py runs this module against the working tree.
@@ -221,7 +221,7 @@ def _es_tree(es_output):
 class TestModeRaceFix(PanelCase):
     """SW2 (24 Sep): the exact incident from the real device log in the bug
     report. After a game exits, ES briefly re-maps its window on the OTHER
-    output (a known ES quirk); 092-dual-screen-persist moves it back at its
+    output (a known ES quirk); dual-screen-layout-and-power moves it back at its
     next poll (~3s). A background sway_ipc.ModeWatcher event computed
     against the OLD output pairing can still be sitting in main.App's post
     queue when main.on_placement's own (fresh, correct) mode recompute for
@@ -370,7 +370,7 @@ class TestReconcileWatchdog(PanelCase):
 
 class TestHeartbeat(PanelCase):
     """SW2: main.py's main loop touches its heartbeat file about every
-    HEARTBEAT_PERIOD seconds; 094-rp5deck's hang detector restarts a child
+    HEARTBEAT_PERIOD seconds; command-center-app's hang detector restarts a child
     whose pid is alive but whose heartbeat has gone stale."""
 
     def test_panel_heartbeat_path_and_write(self):
@@ -641,7 +641,7 @@ class TestSupervisorOverlayLoop(unittest.TestCase):
             self.skipTest("no WSL and not on Linux")
 
     def harness(self, body, timeout=40, overlay=True):
-        sup = tsup.wslify(os.path.join(os.path.dirname(HERE), "094-rp5deck"))
+        sup = tsup.wslify(os.path.join(os.path.dirname(HERE), "command-center-app"))
         fix = lambda n: tsup.wslify(os.path.join(tsup.FIX, n))
         ov = 'export RP5DECK_OVERLAY="$D/home/overlay_stub.sh"' if overlay else \
             'export RP5DECK_OVERLAY="$D/home/nope.py"'
@@ -664,7 +664,7 @@ export RP5DECK_GUARD_DISABLE="$D/.disable-guard" RP5DECK_OVERLAY_DISABLE="$D/.di
 export RP5DECK_FLAG_FILE="$D/flag"
 export RP5DECK_RAPID_SECS=1 RP5DECK_RAPID_MAX=3 RP5DECK_BACKOFF_MAX=1
 APP_STUB="$D/home/app_stub.sh"; OV_STUB="$D/home/overlay_stub.sh"
-LOCK="$RP5DECK_LOCK"; LOG="$D/log/094-rp5deck.log"
+LOCK="$RP5DECK_LOCK"; LOG="$D/log/command-center-app.log"
 starts() { cat "$1.starts" 2>/dev/null || echo 0; }
 wait_for() { i=0; while [ "$i" -lt "$2" ]; do if eval "$1"; then return 0; fi; i=$((i + 1)); sleep 0.1; done; return 1; }
 kill_stub_now() { p=$(pgrep -f "$1" | head -1); [ -n "$p" ] && kill -TERM "$p" 2>/dev/null; }

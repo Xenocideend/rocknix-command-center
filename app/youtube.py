@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
-"""
-YouTube backend for rp5deck (Retroid Pocket 5 / ROCKNIX / mpv + yt-dlp + Deno).
+"""YouTube backend for rp5deck (mpv + yt-dlp + Deno), checked on the RP5, see YOUTUBE-NOTES.md.
 
-Verified on a real RP5, ROCKNIX 20260923, per YOUTUBE-NOTES.md:
+yt-dlp needs an outside JavaScript runtime for full YouTube support. This points it at Deno
+with `--js-runtimes deno:<path>` for search calls and `ytdl_hook-ytdl_raw_options=js-runtimes=
+deno:<path>` when mpv's ytdl hook does the resolving.
 
-- yt-dlp needs an external JavaScript runtime for full YouTube support; Deno
-  is the one this module points it at, via `--js-runtimes deno:<path>` for
-  standalone search calls and `ytdl_hook-ytdl_raw_options=js-runtimes=deno:
-  <path>` when mpv's built-in ytdl hook does the resolving.
-- Playback always goes through mpv's ytdl hook (never a Python-side resolve
-  of the googlevideo URL): the hook keeps mpv, yt-dlp and the CDN URL's
-  matching request context together in one process. A one-off "HTTP error
-  403" was seen resolving a raw URL by hand; the ytdl-hook path was 3/3
-  clean in repro runs (see notes).
-- Every external call has a timeout: search() and fetch_thumbnail() must
-  never block the caller forever if yt-dlp, Deno or the network wedge.
-- A dead mpv is reported, not left as a zombie: Player.is_alive() checks the
-  actual process, get_status() reflects a dead process as an explicit
-  "mpv not running" error rather than stale/fake numbers, and stop() escalates
-  from SIGTERM to SIGKILL with a wait() so no child is ever abandoned.
-- RP5DECK_YT_HEADLESS=1 adds --vo=null --ao=null so tests (and this module's
-  own on-device end-to-end check) never open a window or make sound while
-  another agent owns the display and the owner is listening.
-- Owner request 2 (test day, 24 Sep): tapping the video pauses it. mpv itself
-  binds the tap (--input-conf=youtube-input.conf, MBTN_LEFT -> cycle pause;
-  --native-touch=no so a touch arrives as MBTN_LEFT) rather than rp5deck
-  reading the tap and calling toggle_pause() over IPC - simpler, and it keeps
-  working even if rp5deck's own poll loop is behind. No MBTN_LEFT_DBL binding
-  exists, so a double tap never reaches mpv's normal "cycle fullscreen" (a
-  fullscreen mpv would cover rp5deck's strip). UNVERIFIED on the device (PC/
-  WSL only, per the PC-only constraint) - see W-NOTES.md.
+Playback always goes through mpv's ytdl hook, never a googlevideo URL resolved in Python. The
+hook keeps mpv, yt-dlp and the CDN URL's request context together in one process. Resolving
+a raw URL by hand hit an HTTP 403 once, and the hook path was clean 3 of 3 times.
+
+Every outside call has a timeout, so search() and fetch_thumbnail() never block forever if
+yt-dlp, Deno or the network hang.
+
+A dead mpv gets reported, not left as a zombie. Player.is_alive() checks the real process,
+get_status() gives an explicit "mpv not running" error instead of stale numbers, and stop()
+goes from SIGTERM to SIGKILL with a wait() so no child gets abandoned.
+
+RP5DECK_YT_HEADLESS=1 adds --vo=null --ao=null so tests never open a window or make sound.
+
+Tapping the video pauses it. mpv binds the tap itself (--input-conf=youtube-input.conf,
+MBTN_LEFT -> cycle pause, with --native-touch=no so a touch arrives as MBTN_LEFT) instead of
+rp5deck reading it and calling toggle_pause() over IPC, which is simpler and still works if
+rp5deck's loop is behind. There's no MBTN_LEFT_DBL binding, so a double tap never hits mpv's
+"cycle fullscreen" (a fullscreen mpv would cover the strip). Only tried on the PC so far,
+see W-NOTES.md.
 """
 
 from __future__ import annotations
@@ -44,47 +38,42 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-# YT2 (Phase 1, research/YT1-youtube-full-design.md): everything
-# cookie-gated (subscriptions/history feeds, resume-position store)
-# lives in yt_feeds.py, never here - this stays the plain
-# mpv/Player/search module. Import guarded so youtube.py keeps
-# working standalone (own tests, a partial deployment) even if
-# yt_feeds.py is ever missing - every call site below treats
-# _yt_feeds is None as "feature not available", not an error.
+# Everything that needs cookies (subscription and history feeds, the resume position store)
+# lives in yt_feeds.py, this stays the plain mpv/Player/search module. The import is guarded
+# so youtube.py still works on its own if yt_feeds.py is missing, and every caller below
+# treats _yt_feeds being None as the feature not being there, not an error.
 try:
     import yt_feeds as _yt_feeds
 except ImportError:
     _yt_feeds = None
 
 # --------------------------------------------------------------------------
-# Tunables / device paths
+# Settings and device paths
 # --------------------------------------------------------------------------
 
-# Where STEP 1 downloaded and verified the binaries on the device.
+# where the binaries were downloaded and checked on the device
 YTDLP_PATH = "/storage/rp5deck-bin/yt-dlp"
 DENO_PATH = "/storage/rp5deck-bin/deno"
 MPV_BIN = "mpv"
 
-# Owner request 2 (test day, 24 Sep): "tapping the video should pause it."
-# Shipped alongside youtube.py (not the owner's own mpv config - see
-# build_command) so it deploys with the rest of rp5deck wherever that lands.
+# Tapping the video pauses it. This ships with youtube.py (not in your own mpv config, see
+# build_command) so it deploys with the rest of rp5deck.
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT_CONF_PATH = os.path.join(HERE, "youtube-input.conf")
 
-SEARCH_TIMEOUT = 20.0   # yt-dlp ytsearch + deno JS eval measured ~3.5s; generous margin
+SEARCH_TIMEOUT = 20.0  # yt-dlp ytsearch + deno JS eval took about 3.5 s, plenty of margin here
 THUMB_TIMEOUT = 10.0
 IPC_TIMEOUT = 3.0
 SOCKET_WAIT_TIMEOUT = 10.0
 STOP_WAIT_TIMEOUT = 3.0
-RESUME_SEEK_WAIT_TIMEOUT = 5.0  # YT2: bound on waiting for mpv to report seekable
+RESUME_SEEK_WAIT_TIMEOUT = 5.0  # how long to wait for mpv to report seekable
 
 DEFAULT_IPC_SOCKET = "/run/rp5deck/mpv-yt.sock"
 
-# Prefer avc1 (H.264): mpv --hwdec=help on this device lists h264_v4l2m2m AND
-# h264-vulkan, the two hwdec paths that actually exist here (av01/vp9 only
-# have a vulkan path, and that vulkan hwaccel failed to even set up under
-# --vo=null in testing - see YOUTUBE-NOTES.md). Fall back to any codec at
-# <=1080p, then to a single progressive stream, rather than failing outright.
+# Prefer avc1 (H.264). mpv --hwdec=help here lists h264_v4l2m2m and h264-vulkan, the two hwdec
+# paths that exist (av01/vp9 only have vulkan, and that vulkan hwaccel wouldnt even set up
+# under --vo=null, see YOUTUBE-NOTES.md). Falls back to any codec at 1080p or less, then a
+# single progressive stream, instead of failing.
 DEFAULT_FORMAT = (
     "bv*[vcodec^=avc1][height<=1080]+ba/"
     "bv*[height<=1080]+ba/"
@@ -97,11 +86,11 @@ DEFAULT_FORMAT = (
 # --------------------------------------------------------------------------
 
 def _run_yt_dlp(args: list[str], timeout: float):
-    """Run yt-dlp as `python3 <zipapp> ...`. Never raises, never hangs.
+    """Runs yt-dlp as `python3 <zipapp> ...`. Never raises, never hangs.
 
-    Returns (returncode, stdout, stderr). returncode is None if the process
-    never produced a result (missing interpreter/zipapp, timeout, or any
-    other OS-level failure) - callers must treat that as a hard failure.
+    Returns (returncode, stdout, stderr). returncode is None if the process never gave a result
+    (missing interpreter or zipapp, timeout, any OS failure), and callers must treat that as a
+    failure.
     """
     cmd = ["python3", YTDLP_PATH] + args
     try:
@@ -112,21 +101,20 @@ def _run_yt_dlp(args: list[str], timeout: float):
 
 
 def search(query: str, n: int = 20) -> list[dict]:
-    """Search YouTube via `yt-dlp ytsearchN:<query> --flat-playlist -J`.
+    """Searches YouTube with `yt-dlp ytsearchN:<query> --flat-playlist -J`.
 
-    Returns a list of {id, title, channel, duration_s, thumbnail_url} in
-    result order. Returns [] (never raises, never hangs) if yt-dlp is
-    missing, times out, or produces anything that doesn't parse as the
-    expected JSON shape.
+    Returns a list of {id, title, channel, duration_s, thumbnail_url} in result order, or [] if
+    yt-dlp is missing, times out or gives anything that doesnt parse as the expected JSON.
+    Never raises or hangs.
     """
     return search_detailed(query, n) or []
 
 
 def search_detailed(query: str, n: int = 20) -> Optional[list[dict]]:
-    """Like search(), but a failure (yt-dlp missing, timed out, nonzero
-    exit, unparseable output) is None, and only a search that really ran and
-    found nothing is []. The UI says "Search failed" for one and "No
-    results" for the other (HF1)."""
+    """Like search(), but a failure (yt-dlp missing, timed out, bad exit, unparseable output) is
+    None and only a search that ran and found nothing is []. The UI says "Search failed" for one
+    and "No results" for the other.
+    """
     if not query or n <= 0:
         return []
 
@@ -155,8 +143,7 @@ def search_detailed(query: str, n: int = 20) -> Optional[list[dict]]:
         thumbnails = e.get("thumbnails")
         thumbnail_url = None
         if isinstance(thumbnails, list) and thumbnails:
-            # yt-dlp lists thumbnails smallest-first; the last one is the
-            # highest resolution available.
+            # yt-dlp lists thumbnails smallest first, so the last one is the biggest
             last = thumbnails[-1]
             if isinstance(last, dict):
                 thumbnail_url = last.get("url")
@@ -171,13 +158,10 @@ def search_detailed(query: str, n: int = 20) -> Optional[list[dict]]:
 
 
 # --------------------------------------------------------------------------
-# YT2 entry points: cookie-gated feeds (subscriptions/history), for the
-# YouTube view's "Subscriptions"/"History" buttons. Same contract as
-# search_detailed() (None = failed, [] = empty, a list = ok) - everything
-# cookie-gated actually lives in yt_feeds.py; these are thin delegates so
-# this module stays the one youtube.py callers already import from. See
-# patches/YT2-NOTES.md for where the buttons themselves should be added
-# (screens.py's YouTubeSheet - out of this patch's scope).
+# Cookie feeds (subscriptions, history) for the YouTube view's buttons. Same contract as
+# search_detailed() (None = failed, [] = empty, a list = ok). The real work is in yt_feeds.py,
+# these just pass through so callers keep importing from here. patches/YT2-NOTES.md has
+# where the buttons would go in screens.py.
 # --------------------------------------------------------------------------
 
 def subscriptions_detailed(n: int = 20, cfg: Optional[dict] = None) -> Optional[list[dict]]:
@@ -197,9 +181,8 @@ def history_detailed(n: int = 20, cfg: Optional[dict] = None) -> Optional[list[d
 # --------------------------------------------------------------------------
 
 def fetch_thumbnail(url: str, cache_dir: str, timeout: float = THUMB_TIMEOUT) -> Optional[str]:
-    """Download `url` into `cache_dir`, keyed by a hash of the URL so repeat
-    calls are cache hits. Returns the local path, or None on any failure
-    (never raises).
+    """Downloads `url` into `cache_dir`, named by a hash of the URL so repeat calls are cache hits.
+    Returns the local path, or None on any failure (never raises).
     """
     if not url:
         return None
@@ -248,17 +231,15 @@ def fetch_thumbnail(url: str, cache_dir: str, timeout: float = THUMB_TIMEOUT) ->
 # --------------------------------------------------------------------------
 
 class Player:
-    """Drives one mpv instance over its JSON IPC socket.
+    """Drives one mpv over its JSON IPC socket.
 
-    mpv is launched with `--idle=yes`, so a single instance survives across
-    play() calls: the first play() launches mpv with the video as its
-    initial file, later play() calls reuse the same process via a
-    `loadfile ... replace` IPC command. If the running mpv or its socket is
-    unhealthy, play() falls back to a fresh restart rather than failing.
+    mpv runs with `--idle=yes` so one instance lasts across play() calls. The first play()
+    launches mpv with the video as its first file, later ones reuse it with `loadfile ...
+    replace`. If the running mpv or its socket is unhealthy, play() restarts it fresh instead of
+    failing.
 
-    Nothing here ever touches a real window/speaker unless
-    RP5DECK_YT_HEADLESS is unset: with RP5DECK_YT_HEADLESS=1, --vo=null
-    --ao=null are added so tests are silent and headless.
+    Nothing touches a real window or speaker when RP5DECK_YT_HEADLESS=1, that adds --vo=null
+    --ao=null so tests are silent.
     """
 
     def __init__(
@@ -280,7 +261,7 @@ class Player:
         self._proc: Optional[subprocess.Popen] = None
         self._sock: Optional[socket.socket] = None
         self._req_id = 0
-        self._current_video_id: Optional[str] = None   # YT2: for resume-on-play/record-on-stop
+        self._current_video_id: Optional[str] = None  # for resume on play and record on stop
 
     # -- command line -------------------------------------------------
 
@@ -288,42 +269,33 @@ class Player:
         return os.environ.get("RP5DECK_YT_HEADLESS") == "1"
 
     def build_command(self, url: Optional[str] = None) -> list[str]:
-        """Build the mpv argv. Exposed (not just used internally) so tests
-        can check the exact flags without launching a real process."""
+        """Builds the mpv argv. Public so tests can check the exact flags without starting mpv."""
         raw_opts = "js-runtimes=deno:%s,format=%s" % (self.deno_path, self.format_str)
         script_opts = "ytdl_hook-ytdl_path=%s,ytdl_hook-ytdl_raw_options=%s" % (
             self.yt_dlp_path, raw_opts,
         )
-        # HF1 (the window must leave rp5deck's BAR strip visible and usable):
-        #  - NOT --fullscreen: sway draws fullscreen windows ABOVE the layer
-        #    shell's TOP layer (where rp5deck lives) and ignores exclusive
-        #    zones for them, so a fullscreen mpv would hide the transport
-        #    strip. A plain tiled window fills DSI-1 above the strip.
-        #  - --force-window=immediate: the window maps at once (rp5deck goes
-        #    BAR while yt-dlp resolves) and stays across `loadfile replace`.
-        #  - --keep-open=yes: at the end of a video mpv pauses on the last
-        #    frame instead of going idle and dropping its window.
-        #  - --input-default-bindings=no, --no-config: no bindings at all
-        #    except our own --input-conf (below) - not mpv's stock keymap,
-        #    not the owner's own ~/.config/mpv/input.conf.
-        #  - --input-conf=INPUT_CONF_PATH (owner request 2): one binding,
-        #    MBTN_LEFT -> cycle pause, so tapping the video pauses it; no
-        #    MBTN_LEFT_DBL binding at all, so a double tap never reaches
-        #    mpv's normal "cycle fullscreen" - a fullscreen mpv is drawn
-        #    ABOVE rp5deck's own layer-shell strip (see the top-layer note
-        #    above) and would hide it. Everything else (seek, the strip's own
-        #    Pause button) still goes through the JSON IPC.
-        #  - --native-touch=no: a tap on the touchscreen arrives as a plain
-        #    MBTN_LEFT click (what the input.conf binding above matches)
-        #    instead of a native touch event mpv would otherwise handle on
-        #    its own (e.g. for pinch/pan), which the binding cannot see.
-        #  - --input-vo-keyboard=no: no keyboard shortcuts either.
+        # The window has to leave rp5deck's BAR strip visible and usable:
+        # not --fullscreen, sway draws fullscreen windows above the layer shell's TOP layer (where
+        # rp5deck is) and ignores exclusive zones for them, so a fullscreen mpv hides the strip. A
+        # plain tiled window fills DSI-1 above the strip.
+        # --force-window=immediate maps the window right away (rp5deck goes BAR while yt-dlp
+        # resolves) and keeps it across `loadfile replace`.
+        # --keep-open=yes pauses on the last frame at the end instead of going idle and dropping the
+        # window.
+        # --input-default-bindings=no and --no-config: no bindings but our own --input-conf, not mpv's
+        # stock keys and not your ~/.config/mpv/input.conf.
+        # --input-conf=INPUT_CONF_PATH has one binding, MBTN_LEFT -> cycle pause. No MBTN_LEFT_DBL, so
+        # a double tap never reaches "cycle fullscreen". Seek and the strip's own Pause button go
+        # through the JSON IPC.
+        # --native-touch=no makes a tap arrive as a plain MBTN_LEFT click, which the binding sees,
+        # instead of a native touch mpv handles itself (pinch, pan).
+        # --input-vo-keyboard=no, no keyboard shortcuts either.
         cmd = [
             self.mpv_bin,
             "--idle=yes",
             "--no-config",
             "--border=no",
-            "--osc=no",                          # no on-screen controller to invite touches
+            "--osc=no",  # no on-screen controller inviting touches
             "--force-window=immediate",
             "--keep-open=yes",
             "--input-default-bindings=no",
@@ -331,7 +303,7 @@ class Player:
             "--native-touch=no",
             "--input-conf=%s" % INPUT_CONF_PATH,
             "--wayland-app-id=rp5deck-yt",
-            "--audio-client-name=YouTube",        # per-app PipeWire/Pulse mixer shows "YouTube"
+            "--audio-client-name=YouTube",  # the per-app mixer shows "YouTube"
             "--input-ipc-server=%s" % self.ipc_socket,
             "--ytdl=yes",
             "--script-opts=%s" % script_opts,
@@ -349,13 +321,13 @@ class Player:
         return self._proc is not None and self._proc.poll() is None
 
     def pid(self) -> Optional[int]:
-        """mpv's process id while it runs, else None."""
+        """mpv's pid while it runs, else None."""
         return self._proc.pid if self.is_alive() else None
 
     def terminate_now(self) -> None:
-        """SIGTERM mpv at once, from any thread (one kill(2), no socket): a
-        Close must not wait behind play()'s up-to-10 s socket wait. stop(),
-        run afterwards on the control thread, cleans up the rest."""
+        """SIGTERMs mpv right away from any thread (one kill(2), no socket), so a Close doesnt wait
+        behind play()'s socket wait of up to 10 s. stop() on the control thread cleans up after.
+        """
         proc = self._proc
         if proc is not None and proc.poll() is None:
             try:
@@ -389,22 +361,21 @@ class Player:
         return False
 
     def play(self, video_id: str) -> bool:
-        """Play a YouTube video id. Reuses a live mpv via IPC `loadfile` if
-        one is already running and healthy; otherwise (re)launches mpv fresh
-        with the video as its initial file. Returns True if playback was
-        (re)started, False if mpv could not be launched or never exposed a
-        connectable IPC socket."""
+        """Plays a YouTube video id. Reuses a healthy running mpv with IPC `loadfile`, otherwise starts
+        mpv fresh with the video as its first file. True if playback (re)started, False if mpv
+        couldnt start or never opened an IPC socket.
+        """
         url = "https://www.youtube.com/watch?v=%s" % video_id
-        self._record_current_position()          # YT2: persist whatever was playing before this call
+        self._record_current_position()  # save whatever was playing before this call
 
         if self.is_alive() and self._sock is not None:
             resp = self._send_ipc(["loadfile", url, "replace"], timeout=5.0)
             if resp is not None and resp.get("error") == "success":
                 self._current_video_id = video_id
-                self._maybe_resume(video_id)      # YT2
+                self._maybe_resume(video_id)
                 return True
-            # The running instance or its socket is unhealthy - fall through
-            # to a full restart rather than leaving the caller stuck.
+            # the running instance or its socket is unhealthy, fall through to a full restart instead of
+            # leaving the caller stuck
 
         self.stop()
         self._ensure_socket_dir()
@@ -426,14 +397,14 @@ class Player:
         self._current_video_id = video_id
         ok = self._connect_socket()
         if ok:
-            self._maybe_resume(video_id)          # YT2
+            self._maybe_resume(video_id)
         return ok
 
     def stop(self) -> None:
-        """Terminate mpv if running. Always leaves no process behind:
-        escalates SIGTERM -> SIGKILL with a bounded wait either way, so a
-        wedged mpv is never left as a zombie."""
-        self._record_current_position()          # YT2: last chance before mpv goes away
+        """Stops mpv if running and never leaves a process behind: SIGTERM then SIGKILL with a bounded
+        wait, so a hung mpv never becomes a zombie.
+        """
+        self._record_current_position()  # last chance before mpv goes away
         if self._sock is not None:
             try:
                 self._send_ipc(["quit"], timeout=1.0)
@@ -464,15 +435,15 @@ class Player:
                 os.remove(self.ipc_socket)
         except OSError:
             pass
-        self._current_video_id = None             # YT2: nothing to resume into until the next play()
+        self._current_video_id = None  # nothing to resume into until the next play()
 
-    # -- YT2: resume-on-play / record-on-stop ------------------------------
+    # -- resume on play / record on stop -----------------------------------
 
     def _record_current_position(self) -> None:
-        """Best-effort write-through of the outgoing video's last known
-        position, via yt_feeds.record(). Never raises and never blocks
-        longer than one get_status() IPC round-trip - a lookup/record
-        failure here must never break play()/stop() themselves."""
+        """Saves the outgoing video's last position through yt_feeds.record() if it can. Never raises
+        and never blocks longer than one get_status() round trip, a failure here must not break
+        play()/stop().
+        """
         if _yt_feeds is None or not self._current_video_id or not self.is_alive():
             return
         try:
@@ -484,14 +455,12 @@ class Player:
             pass
 
     def _maybe_resume(self, video_id: str) -> None:
-        """After a successful play(), seek to the last recorded position
-        for this video if there is one worth resuming (yt_feeds.resume_for()
-        already filters "too close to the start" / "basically finished").
-        Waits briefly for mpv to report the file seekable - a seek sent
-        before that is silently lost - bounded by
-        RESUME_SEEK_WAIT_TIMEOUT so a slow-to-load stream can never hang
-        play(). Best-effort only: by the time this runs play() has already
-        returned True, so any failure here must never undo that."""
+        """After play() works, seeks to the last saved position for this video if there's one worth
+        resuming (yt_feeds.resume_for() already skips too close to the start or basically done).
+        Waits a moment for mpv to say the file is seekable, since a seek sent before that just gets
+        lost, capped by RESUME_SEEK_WAIT_TIMEOUT so a slow stream cant hang play(). play() already
+        returned True by now, so a failure here never undoes that.
+        """
         if _yt_feeds is None:
             return
         try:
@@ -510,9 +479,9 @@ class Player:
     # -- IPC --------------------------------------------------------------
 
     def _send_ipc(self, command: list, timeout: float = IPC_TIMEOUT) -> Optional[dict]:
-        """Send one mpv IPC command, return the matching reply dict, or None
-        on any failure (no socket, send error, timeout, or a reply that
-        never arrives). Never raises."""
+        """Sends one mpv IPC command and returns the matching reply dict, or None on any failure (no
+        socket, send error, timeout, no reply). Never raises.
+        """
         if self._sock is None:
             return None
 
@@ -568,16 +537,15 @@ class Player:
         return bool(resp and resp.get("error") == "success")
 
     def set_volume(self, pct: float) -> bool:
-        """mpv's own internal volume (0-150, softvol-style), independent of
-        the system per-app mixer that audio.py drives."""
+        """mpv's own volume (0-150, softvol style), separate from the per-app mixer audio.py drives."""
         pct = max(0.0, min(150.0, float(pct)))
         resp = self._send_ipc(["set_property", "volume", pct])
         return bool(resp and resp.get("error") == "success")
 
     def get_status(self) -> dict:
-        """Returns {title, time_pos, duration, paused}. If mpv is not
-        running, all four are None and an "error" key explains why - never a
-        stale or fake-looking value."""
+        """Returns {title, time_pos, duration, paused}. If mpv isnt running all four are None and an
+        "error" key says why, never a stale or fake value.
+        """
         if not self.is_alive():
             return {
                 "title": None, "time_pos": None, "duration": None,

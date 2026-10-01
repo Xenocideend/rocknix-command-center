@@ -699,6 +699,37 @@ class TestEviction(unittest.TestCase):
         # the second (newer) render must be the one that survived
         self.assertEqual(len(os.listdir(cache_dir)), 1)
 
+class TestSpreadFitsTheScreen(unittest.TestCase):
+    """Batch 1: pages wider than portrait used to run off both edges."""
+
+    def inside(self, rect, screen=(1920, 1000)):
+        x, y, w, h = rect
+        self.assertGreaterEqual(x, 0, rect)
+        self.assertGreaterEqual(y, 0, rect)
+        self.assertLessEqual(x + w, screen[0], rect)
+        self.assertLessEqual(y + h, screen[1], rect)
+
+    def test_two_landscape_pages(self):
+        r = manuals.spread_layout((1333, 1000), (1333, 1000), screen=(1920, 1000))
+        self.inside(r["left"])
+        self.inside(r["right"])
+        self.assertAlmostEqual(r["left"][2] / r["left"][3], 1.333, places=2)   # aspect kept
+
+    def test_one_landscape_page(self):
+        r = manuals.spread_layout((2600, 1000), screen=(1920, 1000))
+        self.inside(r["left"])
+        self.assertEqual(r["left"][2], 1920)
+
+    def test_wide_portrait_pair(self):
+        r = manuals.spread_layout((1100, 1000), (1100, 1000), screen=(1920, 1000))
+        self.inside(r["left"])
+        self.inside(r["right"])
+        self.assertEqual(r["right"][0] - (r["left"][0] + r["left"][2]), 8)   # the gap survives
+
+    def test_fitting_pair_is_not_scaled(self):
+        r = manuals.spread_layout((700, 1000), (700, 1000), screen=(1920, 1000))
+        self.assertEqual((r["left"][2], r["left"][3]), (700, 1000))
+
 
 if __name__ == "__main__":
     unittest.main()

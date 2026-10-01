@@ -1,0 +1,5 @@
+#!/bin/sh
+# ROCKNIX's start_steam.sh passes `--prefer-output $SDL_VIDEO_DISPLAY_PRIORITY` to gamescope whenever
+# DEVICE_HAS_DUAL_SCREEN is true, and nothing on the RP5 sets the variable, so gamescope took -W as the
+# output name and tried to run "1080" as the game. Top screen first, then the built-in panel.
+SDL_VIDEO_DISPLAY_PRIORITY="DP-1,DSI-1"

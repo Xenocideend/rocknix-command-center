@@ -56,8 +56,8 @@ BREAKS = [
      '            return',
      "tests.test_web_tiles.TestYouTubeTvTile.test_mine_bar_entry_arms_the_swipe_poll"),
     ("web_tiles.py",
-     "        self._cancel_swipe_poll()\n        # leaving BAR because of THIS tile specifically",
-     "        # leaving BAR because of THIS tile specifically",
+     "        self._cancel_swipe_poll()\n        # leaving BAR because of this tile closes nothing by itself",
+     "        # leaving BAR because of this tile closes nothing by itself",
      "tests.test_web_tiles.TestYouTubeTvTile."
      "test_another_app_shown_in_bar_cancels_the_swipe_poll"),
     ("web_tiles.py",
@@ -95,8 +95,8 @@ BREAKS = [
      "tests.test_charge_limit.TestApply.test_readback_mismatch_is_reported"),
     ("charge_limit.py",
      "    if not _write_int(end_path, end):\n"
-     "        # 095's own fallback on a rejected END: force back to \"no limit\"\n"
-     "        # rather than leave the kernel holding a stale, unknown value.\n"
+     "        # the script's own fallback on a refused END: back to no limit instead of leaving the kernel on\n"
+     "        # a stale unknown value\n"
      "        _write_int(end_path, 100)\n"
      '        return {"ok": False, "end": end, "start": start,\n'
      '               "detail": "kernel rejected end=%d" % end}\n'

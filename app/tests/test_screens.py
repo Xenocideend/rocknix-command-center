@@ -16,9 +16,12 @@ import screens  # noqa: E402
 import ui       # noqa: E402
 
 W, H = 1920, 1080
-HOME_TILE_NAMES = ("home.mixer", "home.hud", "home.browser",
-                   "home.discord", "home.ytapp", "home.hotkeys", "home.clean", "home.settings",
-                   "home.swap", "home.lights", "home.keyboard", "home.sleep")
+# Batch 1: HUD/Browser/Discord/YouTube App tiles removed (their tabs open them);
+# Top screen and Performance added.
+HOME_TILE_NAMES = ("home.mixer", "home.hotkeys", "home.clean", "home.settings",
+                   "home.swap", "home.lights", "home.keyboard", "home.power",
+                   "home.topscreen", "home.perf")
+REMOVED_TAB_TILES = ("home.hud", "home.browser", "home.discord", "home.ytapp")
 
 
 class FakeHost:
@@ -101,7 +104,7 @@ def tap(router, home, name):
 
 
 class TestConstruction(unittest.TestCase):
-    def test_twelve_tiles_in_the_expected_order(self):
+    def test_ten_tiles_in_the_expected_order(self):
         home, _h = make_home()
         self.assertEqual(tuple(t.name for t in home.tiles), HOME_TILE_NAMES)
         self.assertEqual(home.order, list(HOME_TILE_NAMES))
@@ -114,9 +117,34 @@ class TestConstruction(unittest.TestCase):
             if name != "home.settings":
                 self.assertIn(name, home.badges, name)
 
-    def test_grid_is_6_cols_for_12_tiles(self):
+    def test_grid_is_5_cols_2_rows_for_10_tiles(self):
         home, _h = make_home()
-        self.assertEqual(home.grid_cols(), 6)
+        self.assertEqual((home.grid_cols(), home.grid_rows()), (5, 2))
+
+    def test_more_than_twelve_tiles_use_three_rows(self):
+        """Batch 1: 14 tiles as 2 x 7 cut most subtitles off; past 12 it is 3 rows."""
+        home, _h = make_home()
+        fourteen = list(home.tiles) + list(home.tiles[:4])
+        home.visible_tiles = lambda: fourteen
+        self.assertEqual((home.grid_rows(), home.grid_cols()), (3, 5))
+        home.visible_tiles = lambda: fourteen[:12]
+        self.assertEqual((home.grid_rows(), home.grid_cols()), (2, 6))
+
+    def test_tab_tiles_are_not_on_home(self):
+        home, _h = make_home()
+        names = {t.name for t in home.tiles}
+        for n in REMOVED_TAB_TILES:
+            self.assertNotIn(n, names)
+
+    def test_hud_survives_for_the_overlay_only(self):
+        home, _h = make_home()
+        self.assertEqual([t.name for t in home.overlay_only], ["home.hud", "home.notes", "home.quitgame"])
+        self.assertFalse(home.overlay_only[0].visible)
+        home.set_overlay(True)
+        self.assertIn("home.hud", [t.name for t in home.overlay_shown_tiles()])
+        self.assertTrue(home.overlay_only[0].visible)
+        home.set_overlay(False)
+        self.assertFalse(home.overlay_only[0].visible)
 
 
 class TestNormalModeTapping(unittest.TestCase):
@@ -130,13 +158,13 @@ class TestNormalModeTapping(unittest.TestCase):
         self.assertFalse(self.home.edit_mode)
 
     def test_release_before_the_long_press_threshold_still_opens_it(self):
-        t = self.home._tiles_by_name["home.hud"]
+        t = self.home._tiles_by_name["home.hotkeys"]
         x, y, w, h = t.rect
         pid = ("f", 1)
         self.router.down(pid, x + w / 2, y + h / 2)
         self.h.tick(screens.EDIT_LONG_PRESS_S - 0.1)
         self.router.up(pid, x + w / 2, y + h / 2)
-        self.assertEqual(self.h.opened, ["open_hud"])
+        self.assertEqual(self.h.opened, ["open_hotkeys"])
         self.assertFalse(self.home.edit_mode)
 
 
@@ -153,13 +181,13 @@ class TestLongPressEntersEdit(unittest.TestCase):
         return x + w / 2, y + h / 2
 
     def test_holding_past_the_threshold_enters_edit_mode(self):
-        cx, cy = self._press_and_hold("home.browser", screens.EDIT_LONG_PRESS_S + 0.05)
+        cx, cy = self._press_and_hold("home.lights", screens.EDIT_LONG_PRESS_S + 0.05)
         self.assertTrue(self.home.edit_mode)
         self.router.up(("f", 1), cx, cy)
         self.assertEqual(self.h.opened, [])          # the same touch never opens Browser
 
     def test_moving_off_the_tile_before_the_threshold_cancels_it(self):
-        t = self.home._tiles_by_name["home.browser"]
+        t = self.home._tiles_by_name["home.lights"]
         x, y, w, h = t.rect
         pid = ("f", 1)
         self.router.down(pid, x + w / 2, y + h / 2)
@@ -168,7 +196,7 @@ class TestLongPressEntersEdit(unittest.TestCase):
         self.assertFalse(self.home.edit_mode)
 
     def test_a_second_finger_elsewhere_does_not_also_arm(self):
-        self._press_and_hold("home.discord", 0.1, pid=("f", 1))
+        self._press_and_hold("home.keyboard", 0.1, pid=("f", 1))
         t2 = self.home._tiles_by_name["home.hotkeys"]
         x2, y2, w2, h2 = t2.rect
         self.router.down(("f", 2), x2 + w2 / 2, y2 + h2 / 2)
@@ -215,7 +243,7 @@ class TestEditMode(unittest.TestCase):
         self.assertEqual(hidden, [])
 
     def test_drag_follows_the_finger_during_the_move(self):
-        t = self.home._tiles_by_name["home.hud"]
+        t = self.home._tiles_by_name["home.hotkeys"]
         x0, y0, w, h = t.rect
         pid = ("f", 1)
         self.router.down(pid, x0 + w / 2, y0 + h / 2)
@@ -228,7 +256,7 @@ class TestEditMode(unittest.TestCase):
         t1 = self.home._tiles_by_name["home.mixer"]
         x1, y1, w1, h1 = t1.rect
         self.router.down(("f", 1), x1 + w1 / 2, y1 + h1 / 2)
-        t2 = self.home._tiles_by_name["home.hud"]
+        t2 = self.home._tiles_by_name["home.hotkeys"]
         x2, y2, w2, h2 = t2.rect
         self.router.down(("f", 2), x2 + w2 / 2, y2 + h2 / 2)
         self.assertIs(self.home.dragging_tile, t1)
@@ -236,27 +264,27 @@ class TestEditMode(unittest.TestCase):
         self.router.up(("f", 2), x2 + w2 / 2, y2 + h2 / 2)
 
     def test_hide_badge_hides_a_tile_and_it_disappears_in_normal_mode(self):
-        tap(self.router, self.home, "home.browser.hide")
-        self.assertIn("home.browser", self.home.hidden)
+        tap(self.router, self.home, "home.lights.hide")
+        self.assertIn("home.lights", self.home.hidden)
         self.home.exit_edit()
-        self.assertNotIn(self.home._tiles_by_name["home.browser"], self.home.visible_tiles())
-        self.assertTrue(self.home._tiles_by_name["home.browser"].visible is False)
+        self.assertNotIn(self.home._tiles_by_name["home.lights"], self.home.visible_tiles())
+        self.assertTrue(self.home._tiles_by_name["home.lights"].visible is False)
 
     def test_hidden_tile_still_shown_and_toggleable_in_edit_mode(self):
-        self.home._toggle_hidden("home.browser")
-        self.assertIn(self.home._tiles_by_name["home.browser"], self.home.visible_tiles())
-        tap(self.router, self.home, "home.browser.hide")
-        self.assertNotIn("home.browser", self.home.hidden)
+        self.home._toggle_hidden("home.lights")
+        self.assertIn(self.home._tiles_by_name["home.lights"], self.home.visible_tiles())
+        tap(self.router, self.home, "home.lights.hide")
+        self.assertNotIn("home.lights", self.home.hidden)
 
     def test_settings_cannot_be_hidden_even_by_direct_call(self):
         self.home._toggle_hidden("home.settings")
         self.assertNotIn("home.settings", self.home.hidden)
 
     def test_grid_shrinks_in_normal_mode_when_tiles_are_hidden(self):
-        for name in ("home.browser", "home.discord", "home.ytapp", "home.sleep"):
+        for name in ("home.lights", "home.keyboard", "home.topscreen", "home.power"):
             self.home._toggle_hidden(name)
         self.home.exit_edit()
-        self.assertEqual(home_visible_count(self.home), 8)
+        self.assertEqual(home_visible_count(self.home), 6)     # 10 tiles, 4 hidden
         self.assertEqual(self.home.grid_cols(), 4)
 
     def test_reset_tile_layout_restores_defaults(self):
@@ -266,7 +294,7 @@ class TestEditMode(unittest.TestCase):
         self.router.down(pid, x + w / 2, y + h / 2)
         self.router.move(pid, x + w / 2 + 1200, y + h / 2)
         self.router.up(pid, x + w / 2 + 1200, y + h / 2)
-        self.home._toggle_hidden("home.browser")
+        self.home._toggle_hidden("home.lights")
         self.assertNotEqual(self.home.order, list(HOME_TILE_NAMES))
         self.home.reset_layout()
         self.assertEqual(self.home.order, list(HOME_TILE_NAMES))
@@ -298,7 +326,9 @@ class TestPersistedStateIn(unittest.TestCase):
         # instance now), every real tile stays, nothing crashes. YT4: this
         # same stored order predates the Sleep tile too - a genuinely new
         # tile is appended, never dropped (set_order()'s other own rule).
-        expected = [n for n in stored if n != "home.youtube"] + ["home.sleep"]
+        # Batch 1: the removed tab tiles are unknown names now and dropped the
+        # same way; the newer tiles are appended in construction order.
+        expected = [n for n in stored if n in HOME_TILE_NAMES] +             [n for n in HOME_TILE_NAMES if n not in stored]
         home.set_hidden(["home.mixer"])
         self.assertEqual(home.order, expected)
         self.assertEqual(set(home.order), set(HOME_TILE_NAMES))
@@ -402,71 +432,32 @@ class TestDualScreenNotice(unittest.TestCase):
         self.assertTrue(home.banner_action.visible)
 
 
-class TestChargeNotice(unittest.TestCase):
-    """screens.Home.set_charge_notice (CHG): same shared banner, but its own
-    action label (Dismiss) and its own CC5 OVERLAY rule (stays up)."""
+class TestReplugNotice(unittest.TestCase):
+    """The add-on replug notice: text only (the fix is a replug by hand), over a game too, and it
+    beats the dual-screen settings notice for the one banner slot."""
+    TEXT = "The Dual Screen add-on isnt answering. Unplug it and plug it back in."
 
-    def test_setting_text_shows_dismiss(self):
+    def test_text_with_no_button(self):
         home, _h = make_home()
-        home.set_charge_notice("Charger connected but not charging.")
+        home.set_replug_notice(self.TEXT)
         self.assertTrue(home.banner_label.visible)
-        self.assertEqual(home.banner_action.text, "Dismiss")
-        self.assertIn("not charging", home.banner_label.text)
+        self.assertIn("isnt answering", home.banner_label.text)
+        self.assertFalse(home.banner_action.visible)
 
-    def test_tapping_dismiss_calls_the_host(self):
-        home, h = make_home()
-        home.set_charge_notice("Charger connected but not charging.")
-        home.banner_action.clicked()
-        self.assertIn("on_charge_notice_dismiss", h.opened)
-
-    def test_clearing_hides_it(self):
+    def test_shows_over_a_game(self):
         home, _h = make_home()
-        home.set_charge_notice("Charger connected but not charging.")
-        home.set_charge_notice("")
-        self.assertFalse(home.banner_label.visible)
-
-    def test_stays_visible_during_cc5_overlay(self):
-        home, _h = make_home()
-        home.set_charge_notice("Charger connected but not charging.")
+        home.set_replug_notice(self.TEXT)
         home.set_overlay(True)
         self.assertTrue(home.banner_label.visible)
-        self.assertTrue(home.banner_action.visible)
-        self.assertEqual(home.banner_action.text, "Dismiss")
 
-
-class TestBannerPriority(unittest.TestCase):
-    """Both notices active at once: CHG (charge) always outranks DS
-    (dualscreen) for the one shared banner slot - the owner's own rule."""
-
-    def test_charge_wins_when_both_are_active(self):
+    def test_beats_the_dualscreen_notice_and_hands_back(self):
         home, _h = make_home()
         home.set_dualscreen_notice("Dual-screen settings missing: 3ds.screen_layout")
-        home.set_charge_notice("Charger connected but not charging.")
-        self.assertIn("not charging", home.banner_label.text)
-        self.assertEqual(home.banner_action.text, "Dismiss")
-
-    def test_dualscreen_reappears_once_charge_clears(self):
-        home, _h = make_home()
-        home.set_dualscreen_notice("Dual-screen settings missing: 3ds.screen_layout")
-        home.set_charge_notice("Charger connected but not charging.")
-        home.set_charge_notice("")
+        home.set_replug_notice(self.TEXT)
+        self.assertIn("isnt answering", home.banner_label.text)
+        home.set_replug_notice("")
         self.assertIn("3ds.screen_layout", home.banner_label.text)
         self.assertEqual(home.banner_action.text, "Restore")
-
-    def test_order_of_arrival_does_not_matter(self):
-        home, _h = make_home()
-        home.set_charge_notice("Charger connected but not charging.")
-        home.set_dualscreen_notice("Dual-screen settings missing: wiiu.gamepad_enabled")
-        self.assertIn("not charging", home.banner_label.text)
-
-    def test_neither_active_hides_the_banner(self):
-        home, _h = make_home()
-        home.set_dualscreen_notice("Dual-screen settings missing: 3ds.screen_layout")
-        home.set_charge_notice("Charger connected but not charging.")
-        home.set_dualscreen_notice("")
-        home.set_charge_notice("")
-        self.assertFalse(home.banner_label.visible)
-        self.assertFalse(home.banner_action.visible)
 
 
 if __name__ == "__main__":

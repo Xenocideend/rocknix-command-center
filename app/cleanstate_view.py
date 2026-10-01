@@ -1,35 +1,32 @@
-"""cleanstate_view - the "Clean state" tile's sheet and controller (CC1).
+"""cleanstate_view: the Clean up tile's sheet and controller.
 
 One sheet, four states:
-  checking   "Checking what is running..." while cleanstate.Helper.discover()
-             runs on a worker (the stop-list scan plus es_health.check(): a
-             ~5 s observation, longer when ES's process or window is missing)
-  confirm    the EXACT stop-list the helper will act on, what ES's health
-             check found, and what is never touched; buttons:
+  checking   "Checking what is running..." while cleanstate.Helper.discover() runs on a
+             worker (the stop list scan plus es_health.check(), about 5 s, longer when ES's
+             process or window is missing)
+  confirm    the exact stop list the helper will act on, what ES's health check found, and
+             what's never touched, with buttons:
                Clean up                 stop the listed apps (CLEAN_ACTIONS)
                Restart ES / Clean up + restart ES
-                                        only when es_health offers a restart
-                                        (NOT_RUNNING / NO_WINDOW / FROZEN) -
-                                        this dialog, which says what was
-                                        found, is the confirmation
-               Restart anyway           SUSPECT only (one signal): opens a
-                                        second confirm first
+                                        only when es_health offers a restart (NOT_RUNNING /
+                                        NO_WINDOW / FROZEN), and this dialog saying what was
+                                        found is the confirmation
+               Restart anyway           SUSPECT only (one signal), opens a second confirm
                Cancel
   running    "Working..."
-  result     one line per step (OK / failed), Done -> back to the companion
+  result     one line per step (OK / failed), Done goes back to the companion
 
-Every process / command action is cleanstate.Helper's; this module only
-drives it. The live Browser / YouTube session is ended through
-WebApps.end_session() on the UI thread before the helper's registry stop, so
-the strip and the web worker agree with what is running.
+Every process and command action is cleanstate.Helper's, this only drives it. The live
+Browser/YouTube session is ended through WebApps.end_session() on the UI thread before the
+helper's registry stop, so the strip and the web worker agree with what's running.
 
-Threads: discover() and execute() run on `submit` (a worker); results come
-back through host.post with a generation number, so an answer to a sheet the
-owner already left is dropped.
+discover() and execute() run on `submit` (a worker) and results come back through host.post
+with a generation number, so an answer for a sheet you already left gets dropped.
 """
 import logging
 
 import cleanstate
+import screen_map
 import ui
 from ui import Button, Label, Sheet
 
@@ -41,8 +38,9 @@ MAX_LINES = 10         # game + 3 children + touch + notes + ES + 2 ES notes fit
 
 
 class CleanStateSheet(Sheet):
-    """Widgets only; CleanStateController fills them. on_action(name) gets
-    "clean.primary", "clean.restart", "clean.cancel"."""
+    """Widgets only, CleanStateController fills them. on_action(name) gets "clean.primary",
+    "clean.restart", "clean.cancel".
+    """
 
     def __init__(self, on_action):
         Sheet.__init__(self, "Clean state", on_close=lambda: on_action("clean.cancel"),
@@ -100,16 +98,16 @@ class CleanStateSheet(Sheet):
 
 
 class CleanStateController:
-    """host: main.App (ui, post, web, es_watcher, es_output, close_sheet,
-    close_command_center, _activity, state_dirty). submit(fn, *args,
-    done=cb) runs fn on a worker and posts cb(result) to the UI thread.
-    helper_factory() -> cleanstate.Helper (tests inject fakes)."""
+    """host is main.App (ui, post, web, es_watcher, es_output, close_sheet, close_command_center,
+    _activity, state_dirty). submit(fn, *args, done=cb) runs fn on a worker and posts cb(result)
+    to the UI thread. helper_factory() -> cleanstate.Helper (tests pass fakes).
+    """
 
     def __init__(self, host, submit, helper_factory=None):
         self.host = host
         self.submit = submit
         self.helper_factory = helper_factory or (
-            lambda: cleanstate.Helper(es_output=getattr(host, "es_output", "DP-1")))
+            lambda: cleanstate.Helper(es_output=getattr(host, "es_output", screen_map.CURRENT.top)))
         self.sheet = CleanStateSheet(self.action)
         self.phase = None
         self.gen = 0
@@ -175,12 +173,9 @@ class CleanStateController:
         self._show_confirm()
 
     def _show_confirm(self):
-        # Bare THEME keys throughout this method (not resolved tuples):
-        # CleanStateSheet.show() -> Label.set_text(text, col) freezes
-        # whatever colour it is handed until show() runs again, which is
-        # only ever triggered by a fresh discover/confirm/result, never by
-        # a theme change on its own - same class of bug the volume readout
-        # had (screens.py Bar.set_master()'s comment has the full story).
+        # Bare THEME keys here, not resolved tuples. show() -> Label.set_text(text, col) keeps whatever
+        # colour it gets until show() runs again, which only a new discover/confirm/result triggers,
+        # never a theme change (screens.py Bar.set_master() has the same story).
         p = self.plan
         lines, colors = [], []
         for line in p.stop_list():
@@ -223,7 +218,7 @@ class CleanStateController:
                 self._show_confirm()
                 return
             if self.phase == RUNNING:
-                return              # cannot be interrupted; the result will say what happened
+                return  # cant be interrupted, the result says what happened
             done = self.phase == RESULT
             self.gen += 1
             self.phase = None
@@ -231,7 +226,7 @@ class CleanStateController:
             if done:
                 close = getattr(self.host, "close_command_center", None)
                 if close:
-                    close()         # "clean state": back to the companion view
+                    close()  # clean state, back to the companion view
             self._dirty()
             return
         if self.plan is None:
@@ -292,7 +287,7 @@ class CleanStateController:
         self.steps = steps
         ok = all(s.ok for s in steps)
         lines = [("OK  " if s.ok else "FAILED  ") + s.text for s in steps]
-        colors = ["ok" if s.ok else "danger" for s in steps]   # bare THEME keys - see _show_confirm()
+        colors = ["ok" if s.ok else "danger" for s in steps]  # bare THEME keys, see _show_confirm()
         if ok:
             lines.append("ES keeps (or gets back) the controls; this screen goes back "
                          "to the companion.")

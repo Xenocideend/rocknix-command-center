@@ -21,7 +21,7 @@ if python3 -B -m py_compile ./*.py ./tools/*.py ./tests/*.py; then
 else
     echo "FAIL: py_compile"; exit 4
 fi
-for f in 094-rp5deck tools/install-es-hooks.sh es-hooks/*.sh testday/*.sh; do
+for f in command-center-app tools/install-es-hooks.sh es-hooks/*.sh testday/*.sh; do
     sh -n "$f" || { echo "FAIL: sh -n $f"; exit 5; }
 done
 echo "sh -n: OK"

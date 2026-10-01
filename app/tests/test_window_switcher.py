@@ -21,7 +21,7 @@ import window_switcher as ws  # noqa: E402
 from cc6_sway_sim import Sim, serve  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(APP))
-F092 = os.path.join(os.path.dirname(APP), "scripts", "092-dual-screen-persist")
+F092 = os.path.join(os.path.dirname(APP), "scripts", "dual-screen-layout-and-power")
 KNOBS = [dict(park_on=p, focus_follows_source=f)
          for p, f in itertools.product(("focused", "source"), (False, True))]
 
@@ -345,8 +345,9 @@ class TestSwitchInTheSim(unittest.TestCase):
     def test_undocked_or_bad_layout_refuses(self):
         s, w1, w2 = ds_game()
         s.undock("DP-1")
-        res = switch(s, "internal")
-        self.assertIn("undocked", res["refused"])
+        res = switch(s, "emu:%d" % w2)
+        self.assertIn("add-on", res["refused"])
+        self.assertEqual(s.received, [])
         s, w1, w2 = ds_game()
         self.assertIn("same screen", switch(s, "internal", cc="DP-1", es="DP-1")["refused"])
         self.assertIn("not DSI-1 or DP-1", switch(s, "internal", cc="HDMI-A-1")["refused"])
@@ -386,6 +387,150 @@ class TestSwitchInTheSim(unittest.TestCase):
         pad = s.map("DSI-1", title="GamePad View", focus=True)
         self.check(switch(s, "internal"), s, sway_ipc.FULL, g)
         self.assertEqual(s.ws_name_of(pad), ws.PARK_WS)
+
+
+def undocked_es(**knobs):
+    """One screen: ES fullscreen and focused on DSI-1's workspace 1, nothing else."""
+    s = Sim(outputs=("DSI-1",), **knobs)
+    es_id = s.map("DSI-1", app_id="emulationstation", title="EmulationStation", fullscreen=True,
+                  focus=True)
+    return s, es_id
+
+
+class TestUndockedWebApps(unittest.TestCase):
+    """One screen, ES fullscreen on it: a web app is shown by switching to a workspace of its own and
+    hidden by switching back to ES's. ES is never moved."""
+
+    def test_es_alone_is_hidden_and_a_web_window_on_top_is_the_bar(self):
+        s, es_id = undocked_es()
+        self.assertEqual(mode(s), sway_ipc.HIDDEN)
+        web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        self.assertEqual(mode(s), sway_ipc.HIDDEN)              # behind ES on workspace 1 still
+        switch(s, "web")
+        self.assertEqual(mode(s), sway_ipc.BAR)
+        self.assertEqual(s.ws_name_of(web), ws.UNDOCKED_WS[ws.WEB])
+        self.assertEqual(s.ws_name_of(es_id), "1")              # ES never moved
+
+    def test_show_hide_show_again(self):
+        for k in KNOBS:
+            with self.subTest(**k):
+                s, es_id = undocked_es(**k)
+                web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+                res = switch(s, "web")
+                self.assertTrue(res["ok"], res)
+                self.assertEqual(res["expect"], sway_ipc.BAR)
+                self.assertEqual(mode(s), sway_ipc.BAR)
+                self.assertEqual(focused(s), web)
+                res = switch(s, "internal")
+                self.assertTrue(res["ok"], res)
+                self.assertEqual(mode(s), sway_ipc.HIDDEN)
+                self.assertEqual(focused(s), es_id)
+                self.assertEqual(s.ws_name_of(web), ws.UNDOCKED_WS[ws.WEB])  # kept, parked
+                snap = ws.Switcher(connect=s.connection, log_fn=lambda m: None).snapshot("DSI-1", "DP-1")
+                self.assertEqual(snap.by_id(web).where, ws.PARKED)
+                res = switch(s, "web")                          # no move this time, only the switch
+                self.assertTrue(res["ok"], res)
+                self.assertEqual(s.received[-1], "workspace %s; %s" % (
+                    ws.UNDOCKED_WS[ws.WEB], ws.build_focus(web)))
+                self.assertEqual(mode(s), sway_ipc.BAR)
+
+    def test_no_window_yet_sends_nothing_and_promises_hidden(self):
+        s, es_id = undocked_es()
+        res = switch(s, "web")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["expect"], sway_ipc.HIDDEN)
+        self.assertIsNone(res["sent"])
+        self.assertEqual(s.received, [])
+
+    def test_home_with_nothing_showing_sends_nothing(self):
+        s, es_id = undocked_es()
+        res = switch(s, "internal")
+        self.assertTrue(res["ok"], res)
+        self.assertIsNone(res["sent"])
+
+    def test_the_youtube_app_has_its_own_workspace(self):
+        s, es_id = undocked_es()
+        web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        switch(s, "web")
+        yt = s.map("DSI-1", app_id="rp5deck-ytapp", title="YouTube on TV")
+        res = switch(s, "ytapp")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(s.ws_name_of(yt), ws.UNDOCKED_WS[ws.YTAPP])
+        self.assertEqual(s.ws_name_of(web), ws.UNDOCKED_WS[ws.WEB])
+        self.assertEqual(mode(s), sway_ipc.BAR)
+        self.assertEqual(s.current["DSI-1"], ws.UNDOCKED_WS[ws.YTAPP])
+
+    def test_the_add_on_only_targets_are_refused(self):
+        s, es_id = undocked_es()
+        s.map("DSI-1", app_id="rp5deck-yt", title="mpv")
+        s.map("DSI-1", title="Secondary Window")
+        for target in ("yt", "emu:%d" % 101):
+            res = switch(s, target)
+            self.assertFalse(res["ok"])
+            self.assertIn("add-on", res["refused"])
+        self.assertEqual(s.received, [])
+
+    def test_a_game_on_the_one_screen_is_the_home_window(self):
+        s = Sim(outputs=("DSI-1",))
+        game = s.map("DSI-1", app_id="com.libretro.RetroArch", title="RetroArch", fullscreen=True,
+                     focus=True)
+        web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        self.assertTrue(switch(s, "web")["ok"])
+        self.assertTrue(switch(s, "internal")["ok"])
+        self.assertEqual(focused(s), game)
+        self.assertEqual(s.ws_name_of(game), "1")
+
+    def test_sway_lying_is_an_error(self):
+        s, es_id = undocked_es()
+        s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        s.lie = True
+        res = switch(s, "web")
+        self.assertFalse(res["ok"])
+        self.assertIn("sway said yes but", res["error"])
+
+
+class TestUndockedAllowList(unittest.TestCase):
+    """The one-screen commands are allowed only undocked, only for web windows, only to places the tree
+    backs up."""
+
+    def bad(self, payload, sim):
+        ipc = sim.connection()
+        with self.assertRaises(ws.CommandRefused, msg=payload):
+            ipc.run_command(payload, ipc.get_tree(), "DSI-1", "DP-1")
+        self.assertEqual(sim.received, [])
+
+    def test_refused_while_docked(self):
+        s, es_id, web = browsing()
+        self.bad(ws.build_undocked_move(web, ws.WEB), s)
+        self.bad("workspace %s" % ws.UNDOCKED_WS[ws.WEB], s)
+        self.bad("workspace number 1", s)
+
+    def test_only_web_windows_and_only_their_own_workspace(self):
+        s, es_id = undocked_es()
+        web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        yt = s.map("DSI-1", app_id="rp5deck-ytapp", title="YouTube")
+        self.bad(ws.build_undocked_move(es_id, ws.WEB), s)           # ES is never moved
+        self.bad(ws.build_undocked_move(web, ws.YTAPP), s)           # the wrong kind's workspace
+        self.bad(ws.build_undocked_move(web, ws.WEB) + "; " + ws.build_undocked_move(web, ws.WEB) +
+                 "; workspace %s" % ws.UNDOCKED_WS[ws.WEB], s)       # moved twice
+        self.assertEqual(ws.build_undocked_move(yt, ws.YTAPP),
+                         "[con_id=%d] move container to workspace rp5deck-undocked-ytapp" % yt)
+
+    def test_workspace_switches_need_a_window_or_the_home_workspace(self):
+        s, es_id = undocked_es()
+        self.bad("workspace %s" % ws.UNDOCKED_WS[ws.WEB], s)         # no web window yet
+        self.bad("workspace number 7", s)                           # ES is on 1
+        self.bad("workspace nonsense", s)
+        self.bad("workspace number 1; exit", s)
+
+    def test_focus_after_a_switch_only_for_web_windows_or_home(self):
+        s, es_id = undocked_es()
+        web = s.map("DSI-1", app_id="rp5deck-web", title="Discord")
+        other = s.map("DSI-1", app_id="foot", title="foot")
+        s.add_ws("9", "DSI-1")
+        s.command("[con_id=%d] move container to workspace 9" % other)      # a window nobody sees
+        self.bad("workspace %s; %s" % (ws.UNDOCKED_WS[ws.WEB], ws.build_focus(other)), s)
+        self.bad(ws.build_focus(web), s)                            # no switch: moves nothing
 
 
 class TestRealWire(unittest.TestCase):
