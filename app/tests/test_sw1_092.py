@@ -67,7 +67,8 @@ OLD_092 = os.path.join(HERE, "fixtures", "dual-screen-layout-and-power-pre-SW1-c
 # 26 Sep: re-pinned for the sway-restart re-layout (was fd3d4104...).
 # 26 Sep: re-pinned for the touchscreen watch (was 9d3a12b0...).
 # 26 Sep: re-pinned for the keyboard-screen rule (was f7c9840f...).
-OLD_SHA = "6e25936e647da2776599ed9dda8344114d5567b52435418299f9185f1816561c"   # ... + touch watch + keyboard on the Command Center screen + add-on replug notice + keyboard service restart + cheaper poll (fewer processes per poll)
+# 1 Oct: re-pinned for the device-profile file (was 6e25936e...).
+OLD_SHA = "3f6fe44cdea0b05c17249c44d4137a28aae449a80381149c12bd42d3dce7120c"   # ... + touch watch + keyboard on the Command Center screen + add-on replug notice + keyboard service restart + cheaper poll (fewer processes per poll)
 SIM = os.path.join(HERE, "sw1_sway_sim.py")
 LINUX = sys.platform.startswith("linux")
 
@@ -434,6 +435,8 @@ SUBS = [
     ("find /run /tmp -name 'sway-ipc", "find @T@ -name 'sway-ipc"),
 ]
 SUB_NEW_ONLY = [("RP5_CONFIG=/storage/rp5deck/config.json", "RP5_CONFIG=@T@/config.json")]
+# only in daemons newer than the profile file (an older committed copy used as a control has none)
+SUB_IF_PRESENT = [("PROFILE_FILE=/storage/rp5deck/device-profile.env", "PROFILE_FILE=@T@/device-profile.env")]
 
 ES_HOME_PAIR = '[app_id="^emulationstation$"] move container to workspace number 1\nworkspace number 1\n'
 ROCKNIX_ES_RULE = 'for_window [app_id="emulationstation"] move output DP-1'
@@ -470,6 +473,8 @@ def prepare_script(src_text, t, new=True, mutate=None):
     for a, b in SUBS + (SUB_NEW_ONLY if new else []):
         assert s.count(a) == 1, a
         s = s.replace(a, b)
+    for a, b in SUB_IF_PRESENT:
+        s = s.replace(a, b)
     s = s.replace("@T@", to_sh_path(t))
     s = s.replace("#!/bin/bash", "#!/bin/dash", 1)
     if mutate:
@@ -478,7 +483,7 @@ def prepare_script(src_text, t, new=True, mutate=None):
 
 
 class LoopSim(TmpDir):
-    def simulate(self, st, script_text, new=True, config_obj=None, mutate=None):
+    def simulate(self, st, script_text, new=True, config_obj=None, mutate=None, profile=None):
         t = self.mk()
         b = os.path.join(t, "bin")
         os.makedirs(b)
@@ -502,6 +507,9 @@ class LoopSim(TmpDir):
         if config_obj is not None:
             with open(os.path.join(t, "config.json"), "w", encoding="utf-8") as f:
                 json.dump(config_obj, f)
+        if profile is not None:
+            with open(os.path.join(t, "device-profile.env"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(profile)
         with open(os.path.join(t, "state.json"), "w", encoding="utf-8") as f:
             json.dump(st, f)
         script = os.path.join(t, "092")

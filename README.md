@@ -1,6 +1,6 @@
 # ROCKNIX Command Center (rp5deck)
 
-*Formerly the Dual Screen Command Center.* Version 1.6.2, patch notes in
+*Formerly the Dual Screen Command Center.* Version 1.9.0, patch notes in
 [app/CHANGELOG.md](app/CHANGELOG.md).
 
 A touch app for the Retroid Pocket 5's built-in (bottom) screen when the
@@ -21,10 +21,16 @@ Alongside the app, this repo ships two small system-level scripts that keep
 the dual-screen layout working across a reboot and a suspend/resume cycle
 (see `scripts/`).
 
+**Other handhelds.** Since 1.8.0 the app also has profiles for the ROCKNIX handhelds with two built-in screens
+(AYN Thor and Thor Lite, AYANEO Pocket DS, Anbernic RG DS and RG DS Plus), written from ROCKNIX's own scripts, with a
+small helper that keeps the second screen on for the Command Center. **None of this has been run on a real one.**
+If you have one and want to help, [docs/TESTER-GUIDE.md](docs/TESTER-GUIDE.md) walks through a ten minute test that
+writes a log you can send back.
+
 ## Requirements
 
-- A Retroid Pocket 5
-- The official Retroid Dual Screen add-on
+- A Retroid Pocket 5 and the official Retroid Dual Screen add-on (the tested setup), or one of the built-in
+  two-screen handhelds above (untested)
 - ROCKNIX (this was built and tested against a specific ROCKNIX/kernel build
   on the RP5 - see "Status and known limitations" below)
 - Python 3 (device default; no extra Python packages needed on-device)
@@ -46,7 +52,15 @@ the dual-screen layout working across a reboot and a suspend/resume cycle
   unit that turns the add-on's DisplayPort output off before suspend and
   back on at resume (on the tested kernel, suspending with DP lit resets the
   device instead of resuming).
-- `scripts/install.sh` - installs the two scripts above on the device.
+- `scripts/install.sh` - installs the two scripts above on the device. On a handheld with two built-in screens it
+  hands over to `install-layout-daemon.sh` instead.
+- `scripts/dual-screen-builtin-layout` - the helper for the built-in two-screen handhelds: keeps the second screen
+  on, turns its touch screen on if ROCKNIX left it off, and switches ROCKNIX's own bottom-screen app (lowerdeck)
+  off through its setting. It never moves windows or turns a screen off. Untested on real devices.
+- `scripts/install-layout-daemon.sh` - installs whichever of the two layout scripts the device's profile calls for
+  and never leaves both installed.
+- `app/tools/device-probe.sh` - a read-only report of a device's screens, touch screens and seats.
+  `app/tools/tester-run.sh` - the guided test the tester guide describes.
 - `scripts/migrate-old-daemon-names.sh` - for an install from the first
   release (25 Sep): stops and moves aside the old `092-dual-screen-persist`
   and `094-rp5deck` autostart files before the new ones go in.
@@ -64,7 +78,8 @@ Experienced users: [docs/QUICK-INSTALL.md](docs/QUICK-INSTALL.md) has just the
 commands. The full walkthrough is in [docs/COMMAND-CENTER-GUIDE.md](docs/COMMAND-CENTER-GUIDE.md).
 Both installers refuse to run unless the device is a Retroid Pocket 5 with
 the add-on attached and showing a picture (set `TD_ALLOW_UNDOCKED=1`, or pass
-`--undocked` to `deploy_rp5deck.py`, to install without the add-on). With SSH
+`--undocked` to `deploy_rp5deck.py`, to install without the add-on), or one of the built-in two-screen handhelds
+the app knows (it says it is untested there; `TD_ALLOW_ANY_DEVICE=1` tries any other model at your own risk). With SSH
 enabled on the device:
 
 0. Upgrading from the first release (25 Sep)? Copy `scripts/` to the device and
@@ -85,7 +100,8 @@ enabled on the device:
    `systemctl restart essway`, so the Companion view follows the selected
    game.
 6. Copy `scripts/` to the device and run `sh install.sh` there once, to
-   install `dual-screen-layout-and-power` and `dp-sleep-guard`.
+   install `dual-screen-layout-and-power` and `dp-sleep-guard` (on a built-in two-screen handheld it installs
+   `dual-screen-builtin-layout` instead).
 7. Optional, for Steam: `sh /storage/rp5deck/steam/install-steam-nested.sh install`
    then `systemctl restart essway`. It runs Steam inside the desktop so the
    Command Center stays up (details in `app/steam/INSTALL.md`).
@@ -99,7 +115,8 @@ To roll back: `sh /storage/rp5deck/testday/td3-install.sh rollback <backup dir>`
   ROCKNIX/kernel build. Other ROCKNIX versions, kernels, or other
   Retroid-Dual-Screen-capable devices have not been tried and may need
   changes (sysfs paths, sway/wlroots behaviour, and EmulationStation's HTTP
-  API can all differ or move between releases).
+  API can all differ or move between releases). The built-in two-screen handhelds are supported from ROCKNIX's
+  scripts only, and the ES hooks, focus guard and game-screen overlay have not been checked on them.
 - `dual-screen-layout-and-power` and `dp-sleep-guard` work around specific stock
   ROCKNIX/kernel behaviour observed on that one build; a future ROCKNIX or
   kernel update could change or remove the underlying issue, or need a
@@ -127,6 +144,8 @@ Not in this version:
 - **Hibernate**: shown greyed out in the Power sheet for now, suspend is the low-power mode.
 - **A one-script installer**: installing is still copy, verify, install, hooks, scripts and an optional Steam step.
 - **Steam library paging** tried on a library bigger than twelve games (covered by tests, not yet tried on a device).
+- **Testing on the built-in two-screen handhelds**: the profiles, the helper and the brightness controls need someone
+  with the device ([tester guide](docs/TESTER-GUIDE.md)). Single-screen handhelds come after that.
 - **ROCKNIX fixes**: the charger follow-ups and a USB suspend crash fix are going to ROCKNIX as pull requests after
   its code freeze. Until they are merged, the charging behaviour in the guide needs the project's kernel.
 

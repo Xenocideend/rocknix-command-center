@@ -375,7 +375,7 @@ WIRED = frozenset([
     ("command_center", "corner_handle"),  # hidden_overlay corner(), live via main.App.on_setting
     ("audio", "show_volume_overlay"),  # main.App's volume overlay
     ("screens", "bottom_brightness"),  # brightness.BottomBacklight
-    ("screens", "top_brightness"),  # brightness.TopDim
+    ("screens", "top_brightness"),  # brightness.TopDim, or TopBacklight where the top panel has a backlight
     ("screens", "match_brightness"),  # main.App match_ratio
     ("screens", "ui_resolution"),  # screen_presets.layout_size via main.App._resize
     ("screens", "es_screen"),  # dual-screen-layout-and-power moves ES, screen_swap.read_setting()

@@ -1,0 +1,281 @@
+#!/bin/bash
+# Handhelds with two built-in panels (AYN Thor and Thor Lite, AYANEO Pocket DS, Anbernic RG DS and DS Plus): keeps the
+# bottom panel on and its touch screen working for the Command Center, and turns off ROCKNIX's own bottom-screen UI
+# (lowerdeck). The Retroid Pocket 5 with the Dual Screen add-on uses dual-screen-layout-and-power instead.
+#
+# Install to: /storage/.config/autostart/dual-screen-builtin-layout   (chmod +x), with the device's names in
+# /storage/rp5deck/device-profile.env (the Command Center installer writes it).
+#
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS
+#
+# ROCKNIX's 111-sway-init and vertical-check leave these devices with ES on one panel and the other ("bottom") one
+# switched off (`output <bottom> power off`), with its touch screen disabled on some of them, until a game's second-screen
+# window or lowerdeck needs it. The Command Center draws on that bottom panel, so something has to keep it on and
+# touchable. Nothing else is changed: ES, the game and the layout are ROCKNIX's.
+#
+# What it does, every POLL seconds (two small sway queries):
+#   1. BOTTOM_OUTPUT is powered off: power it on (unless the file below says ROCKNIX owns its power).
+#   2. TOUCH_BOTTOM is disabled: enable it and map it to BOTTOM_OUTPUT. The mapping is also sent when sway starts or
+#      restarts (a reload resets it).
+# And once per sway start:
+#   3. Switch lowerdeck off by setting rocknix.bottomscreen.type to "none" (ROCKNIX's own switch, it only starts
+#      lowerdeck when the setting is "vc" or empty). The old value is kept so --restore-lowerdeck can give it back.
+#
+# SAFETY
+#
+# It never disables an output, moves a window or kills a process. If it crashes, hangs or is killed, ROCKNIX's behaviour
+# is what you get. With no profile file (no BOTTOM_OUTPUT) it does nothing at all.
+#
+# Switches (files): /storage/.disable-dualscreen (this and the add-on daemon exit at the next start),
+# /storage/.bottom-screen-power-rocknix (leave the bottom panel's power to ROCKNIX),
+# /storage/.keep-lowerdeck (leave lowerdeck alone).
+#
+# Usage: dual-screen-builtin-layout            start in the background (autostart)
+#        dual-screen-builtin-layout --fg       run in the foreground, with the lock and the log file
+#        dual-screen-builtin-layout --polls N  N polls in the foreground, printing to the terminal, no lock
+#        dual-screen-builtin-layout --once     one poll (same as --polls 1)
+#        dual-screen-builtin-layout --status   what it sees, changes nothing
+#        dual-screen-builtin-layout --restore-lowerdeck   give the lowerdeck setting back and exit
+
+set -u
+
+LOG=${RP5DECK_BUILTIN_LOG:-/storage/.config/autostart/dual-screen-builtin-layout.log}
+LOCK=${RP5DECK_BUILTIN_LOCK:-/run/dual-screen-builtin-layout.pid}
+DISABLE=${RP5DECK_DISABLE_FILE:-/storage/.disable-dualscreen}
+PROFILE_FILE=${RP5DECK_PROFILE_FILE:-/storage/rp5deck/device-profile.env}
+POWER_FLAG=${RP5DECK_POWER_FLAG:-/storage/.bottom-screen-power-rocknix}
+KEEP_LOWERDECK=${RP5DECK_KEEP_LOWERDECK:-/storage/.keep-lowerdeck}
+LOWERDECK_PREV=${RP5DECK_LOWERDECK_PREV:-/storage/rp5deck/lowerdeck-setting.previous}
+PROFILE_SH=${RP5DECK_PROFILE_SH:-/etc/profile}
+LOWERDECK_KEY=rocknix.bottomscreen.type
+POLL=${RP5DECK_BUILTIN_POLL:-4}
+MAX_LOG=262144
+
+BOTTOM_OUTPUT=""
+TOP_OUTPUT=""
+TOUCH_BOTTOM=""
+TOUCH_TOP=""
+
+# The device's names, from the profile file: NAME='value' lines, only these four names, a value with anything but letters,
+# digits and : _ . , ( ) space - is ignored.
+load_device_profile() {
+    local line name val
+    [ -r "$PROFILE_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            BOTTOM_OUTPUT=\'*\'|TOP_OUTPUT=\'*\'|TOUCH_BOTTOM=\'*\'|TOUCH_TOP=\'*\') ;;
+            *) continue ;;
+        esac
+        name=${line%%=*}
+        val=${line#*=}
+        val=${val#\'}
+        val=${val%\'}
+        case "$val" in
+            ""|*[!A-Za-z0-9:_.,\(\)\ -]*) continue ;;
+        esac
+        case "$name" in
+            BOTTOM_OUTPUT) BOTTOM_OUTPUT=$val ;;
+            TOP_OUTPUT) TOP_OUTPUT=$val ;;
+            TOUCH_BOTTOM) TOUCH_BOTTOM=$val ;;
+            TOUCH_TOP) TOUCH_TOP=$val ;;
+        esac
+    done < "$PROFILE_FILE"
+}
+
+log() { echo "$(date '+%H:%M:%S') $*"; }
+
+rotate_log() {
+    local sz
+    sz=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+    if [ "$sz" -gt "$MAX_LOG" ]; then
+        tail -c 65536 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+# --- what sway says ------------------------------------------------------------
+# "true" or "false" for the output's power, "absent" if sway does not list it, nothing if sway did not answer
+output_power() {
+    local json
+    json=$(swaymsg -r -t get_outputs 2>/dev/null) || return 0
+    [ -n "$json" ] || return 0
+    printf '%s\n' "$json" | awk -v n="$1" '
+        /^    "name": / { s = $0; sub(/^    "name": "/, "", s); sub(/",?$/, "", s); cur = s }
+        cur == n && /^    "power": / { p = $0; sub(/^    "power": /, "", p); sub(/,.*$/, "", p); print p; found = 1; exit }
+        END { if (!found) print "absent" }'
+}
+
+# the touch screen's send_events ("enabled" / "disabled"), nothing if sway does not list it
+touch_send_events() {
+    swaymsg -r -t get_inputs 2>/dev/null | awk -v id="$1" '
+        /^    "identifier": / { s = $0; sub(/^    "identifier": "/, "", s); sub(/",?$/, "", s); found = (s == id); next }
+        found && /"send_events": / { s = $0; sub(/^.*"send_events": "/, "", s); sub(/".*$/, "", s); print s; exit }'
+}
+
+# --- ROCKNIX's settings ----------------------------------------------------------
+# get_setting and set_setting are shell functions from /etc/profile
+setting_get() { ( . "$PROFILE_SH" >/dev/null 2>&1; get_setting "$1" 2>/dev/null ); }
+setting_set() { ( . "$PROFILE_SH" >/dev/null 2>&1; set_setting "$1" "$2" >/dev/null 2>&1 ); }
+
+# Turns lowerdeck off through ROCKNIX's own switch. Only a value of "vc" or an empty one is changed, any other choice is
+# the user's.
+lowerdeck_off() {
+    local cur
+    [ -e "$KEEP_LOWERDECK" ] && return 0
+    cur=$(setting_get "$LOWERDECK_KEY")
+    case "$cur" in
+        ""|vc) ;;
+        *) return 0 ;;
+    esac
+    if [ ! -e "$LOWERDECK_PREV" ]; then
+        mkdir -p "$(dirname "$LOWERDECK_PREV")" 2>/dev/null
+        printf '%s\n' "${cur:-vc}" > "$LOWERDECK_PREV" 2>/dev/null
+    fi
+    setting_set "$LOWERDECK_KEY" none
+    log "lowerdeck switched off ($LOWERDECK_KEY none, was '${cur:-empty}')"
+}
+
+restore_lowerdeck() {
+    local prev cur
+    [ -r "$LOWERDECK_PREV" ] || { echo "nothing to restore"; return 0; }
+    prev=$(head -n 1 "$LOWERDECK_PREV")
+    cur=$(setting_get "$LOWERDECK_KEY")
+    if [ "$cur" = none ]; then
+        setting_set "$LOWERDECK_KEY" "$prev"
+        echo "$LOWERDECK_KEY set back to '$prev'"
+    else
+        echo "$LOWERDECK_KEY is '$cur', left alone"
+    fi
+    rm -f "$LOWERDECK_PREV"
+}
+
+# --- one poll ------------------------------------------------------------------
+SWAY_SEEN=""
+SAID_ABSENT=""
+
+sway_started() {
+    # a new sway (or the first look): the touch mapping goes out again, lowerdeck is looked at again
+    if [ -n "$TOUCH_BOTTOM" ]; then
+        swaymsg input "$TOUCH_BOTTOM" map_to_output "$BOTTOM_OUTPUT" >/dev/null 2>&1
+    fi
+    lowerdeck_off
+}
+
+poll() {
+    local now p ts
+    now=$(pidof sway 2>/dev/null | cut -d' ' -f1)
+    [ -n "$now" ] || return 0
+    if [ "$now" != "$SWAY_SEEN" ]; then
+        [ -n "$SWAY_SEEN" ] && log "sway restarted (pid $SWAY_SEEN -> $now)"
+        SWAY_SEEN=$now
+        sway_started
+    fi
+
+    p=$(output_power "$BOTTOM_OUTPUT")
+    case "$p" in
+        false)
+            if [ ! -e "$POWER_FLAG" ]; then
+                swaymsg output "$BOTTOM_OUTPUT" power on >/dev/null 2>&1
+                log "bottom panel $BOTTOM_OUTPUT was off, powered on"
+            fi
+            ;;
+        absent)
+            if [ -z "$SAID_ABSENT" ]; then
+                log "sway does not list $BOTTOM_OUTPUT: wrong names for this device? (run device-probe.sh)"
+                SAID_ABSENT=1
+            fi
+            ;;
+    esac
+
+    if [ -n "$TOUCH_BOTTOM" ]; then
+        ts=$(touch_send_events "$TOUCH_BOTTOM")
+        if [ "$ts" = disabled ]; then
+            swaymsg input "$TOUCH_BOTTOM" events enabled >/dev/null 2>&1
+            swaymsg input "$TOUCH_BOTTOM" map_to_output "$BOTTOM_OUTPUT" >/dev/null 2>&1
+            log "bottom touch screen was disabled, enabled and mapped to $BOTTOM_OUTPUT"
+        fi
+    fi
+}
+
+status() {
+    echo "profile file: $PROFILE_FILE"
+    echo "bottom output: ${BOTTOM_OUTPUT:-unset}  top output: ${TOP_OUTPUT:-unset}"
+    echo "bottom touch: ${TOUCH_BOTTOM:-unset}  top touch: ${TOUCH_TOP:-unset}"
+    [ -n "$BOTTOM_OUTPUT" ] && echo "bottom power in sway: $(output_power "$BOTTOM_OUTPUT")"
+    [ -n "$TOUCH_BOTTOM" ] && echo "bottom touch send_events: $(touch_send_events "$TOUCH_BOTTOM")"
+    echo "$LOWERDECK_KEY: '$(setting_get "$LOWERDECK_KEY")'"
+    [ -e "$POWER_FLAG" ] && echo "bottom panel power is left to ROCKNIX ($POWER_FLAG)"
+    [ -e "$KEEP_LOWERDECK" ] && echo "lowerdeck is left alone ($KEEP_LOWERDECK)"
+    return 0
+}
+
+# --- main ----------------------------------------------------------------------
+MODE=bg
+POLLS=0
+case "${1:-}" in
+    --fg) MODE=fg ;;
+    --once) MODE=polls; POLLS=1 ;;
+    --polls) MODE=polls; POLLS=${2:-1} ;;
+    --status) MODE=status ;;
+    --restore-lowerdeck) MODE=restore ;;
+    "") MODE=bg ;;
+    *) echo "usage: $0 [--fg | --polls N | --once | --status | --restore-lowerdeck]"; exit 2 ;;
+esac
+
+if [ "$MODE" = restore ]; then restore_lowerdeck; exit 0; fi
+
+if [ "$MODE" = bg ]; then
+    nohup "$0" --fg >/dev/null 2>&1 &
+    exit 0
+fi
+
+[ -e "$DISABLE" ] && exit 0
+load_device_profile
+if [ -z "$BOTTOM_OUTPUT" ]; then
+    [ "$MODE" = fg ] || echo "no BOTTOM_OUTPUT in $PROFILE_FILE: nothing to do"
+    [ "$MODE" = status ] && status
+    exit 0
+fi
+
+if [ "$MODE" = status ]; then status; exit 0; fi
+
+if [ "$MODE" = polls ]; then
+    n=0
+    while [ "$n" -lt "$POLLS" ]; do
+        poll
+        n=$((n + 1))
+        [ "$n" -lt "$POLLS" ] && sleep "$POLL"
+    done
+    exit 0
+fi
+
+# the daemon: one instance, its own log file
+if [ -f "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null)
+    if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+        exit 0
+    fi
+fi
+echo $$ > "$LOCK"
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') dual-screen-builtin-layout starting (pid $$) ==="
+log "bottom $BOTTOM_OUTPUT, top ${TOP_OUTPUT:-unset}, bottom touch ${TOUCH_BOTTOM:-unset}"
+
+for i in $(seq 1 60); do
+    SWAYSOCK=$(find /run /tmp -name 'sway-ipc.*.sock' 2>/dev/null | head -1)
+    [ -n "$SWAYSOCK" ] && export SWAYSOCK && break
+    sleep 1
+done
+if [ -z "${SWAYSOCK:-}" ]; then
+    log "FATAL: no sway IPC socket after 60s - doing nothing"
+    rm -f "$LOCK"
+    exit 1
+fi
+log "sway socket: $SWAYSOCK"
+
+while true; do
+    [ -e "$DISABLE" ] && { log "kill switch present - exiting"; rm -f "$LOCK"; exit 0; }
+    poll
+    rotate_log
+    sleep "$POLL"
+done

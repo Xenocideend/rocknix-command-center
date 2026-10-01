@@ -81,6 +81,7 @@ print("carried over %d file(s) the device created (notes, logs, ...)" % n)
 CARRY
     # env: the focus guard logs what it WOULD do until step 8 (FX-E's first pass)
     printf 'RP5DECK_GUARD_ARGS=--dry-run\n' > "$HOME_DIR/env"
+    td_write_device_profile
     cp -p "$HOME_DIR/command-center-app" "$AUTOSTART/command-center-app" && chmod +x "$AUTOSTART/command-center-app"
     echo "installed $AUTOSTART/command-center-app ($(md5sum "$AUTOSTART/command-center-app" | cut -c1-32))"
     "$AUTOSTART/command-center-app"            # self-backgrounds

@@ -140,5 +140,111 @@ class TestTheAppUsesIt(unittest.TestCase):
         self.assertLess(src.index("_touch_wanted(f.touchID)"), src.index("self.cc5.handle_event("))
 
 
+class TestTwinFilter(unittest.TestCase):
+    """A device whose touch can come through either seat: the first device to report a finger id owns it, its twin from the
+    other device is dropped."""
+    MS = 1_000_000
+
+    def test_the_first_device_owns_the_finger_and_the_twin_is_dropped(self):
+        f = touch_seats.TwinFilter()
+        self.assertTrue(f.accept(11, 7, 100 * self.MS))
+        self.assertFalse(f.accept(12, 7, 100 * self.MS + 1))
+
+    def test_the_owner_keeps_being_heard_through_the_whole_touch(self):
+        f = touch_seats.TwinFilter()
+        self.assertTrue(f.accept(11, 7, 0))
+        for i in range(1, 6):
+            self.assertTrue(f.accept(11, 7, i * 40 * self.MS))
+            self.assertFalse(f.accept(12, 7, i * 40 * self.MS + 1))
+
+    def test_either_seat_can_be_the_one_that_wins(self):
+        f = touch_seats.TwinFilter()
+        self.assertTrue(f.accept(12, 7, 0))
+        self.assertFalse(f.accept(11, 7, 1))
+
+    def test_a_lift_lets_the_next_touch_come_from_either_device(self):
+        f = touch_seats.TwinFilter()
+        f.accept(11, 7, 0)
+        self.assertTrue(f.accept(11, 7, 50 * self.MS, ends=True))
+        self.assertTrue(f.accept(12, 7, 60 * self.MS))
+
+    def test_the_twins_lift_does_not_release_the_finger(self):
+        f = touch_seats.TwinFilter()
+        f.accept(11, 7, 0)
+        self.assertFalse(f.accept(12, 7, 10, ends=True))
+        self.assertFalse(f.accept(12, 7, 20))                # still owned by 11
+
+    def test_a_finger_that_went_quiet_is_up_for_grabs(self):
+        f = touch_seats.TwinFilter(idle_ns=500 * self.MS)
+        f.accept(11, 7, 0)
+        self.assertFalse(f.accept(12, 7, 400 * self.MS))
+        self.assertTrue(f.accept(12, 7, 600 * self.MS))
+
+    def test_other_finger_ids_are_independent(self):
+        f = touch_seats.TwinFilter()
+        f.accept(11, 7, 0)
+        self.assertTrue(f.accept(12, 8, 1))
+
+    def test_a_lift_that_was_never_seen_does_not_grow_the_table_for_ever(self):
+        f = touch_seats.TwinFilter()
+        for i in range(500):
+            f.accept(11, i, i)
+        self.assertLessEqual(len(f.owner), touch_seats.TwinFilter.MAX_OWNED)
+
+    def test_the_same_device_is_never_dropped(self):
+        f = touch_seats.TwinFilter()
+        for i in range(20):
+            self.assertTrue(f.accept(11, 7, i))
+
+
+class TestTheSeatRuleInTheApp(unittest.TestCase):
+    def setUp(self):
+        import main
+        self.main = main
+        from test_companion import AppCase
+
+        class Case(AppCase):
+            def runTest(self):
+                pass
+        self.case = Case()
+        self.case.setUp()
+        self.addCleanup(self.case.tearDown)
+        self.app = self.case.make_app()
+
+    def test_with_the_any_rule_every_device_is_used_without_reading_the_list(self):
+        self.app._twins = touch_seats.TwinFilter()
+        self.app._read_touch_devices = lambda: self.fail("the device list should not be read")
+        self.assertTrue(self.app._touch_wanted(11))
+        self.assertTrue(self.app._touch_wanted(12))
+
+    def test_with_the_first_seat_rule_there_is_no_twin_filter(self):
+        import screen_map
+        if screen_map.CURRENT.touch_seat == "seat0":
+            self.assertIsNone(self.app._twins)
+
+    def test_the_finger_handler_drops_twins_after_the_seat_check_and_before_the_corner_handle(self):
+        import inspect
+        src = inspect.getsource(self.main.App._handle)
+        a = src.index("_touch_wanted(f.touchID)")
+        b = src.index("self._twins.accept(")
+        c = src.index("self.cc5.handle_event(")
+        self.assertLess(a, b)
+        self.assertLess(b, c)
+
+    def test_a_lift_and_a_cancel_both_end_a_touch(self):
+        import inspect
+        src = inspect.getsource(self.main.App._handle)
+        self.assertIn("t in (sdl.EV_FINGER_UP, sdl.EV_FINGER_CANCELED)", src)
+
+
+class TestTheProfileSaysWhichRule(unittest.TestCase):
+    def test_the_rp5_uses_the_first_seat_and_the_built_in_dual_screens_use_any(self):
+        import screen_map
+        self.assertEqual(screen_map.RP5.touch_seat, "seat0")
+        self.assertEqual(screen_map.BUILTIN_DUAL.touch_seat, "any")
+        self.assertEqual(screen_map.for_device("AYN Thor", env={}).touch_seat, "any")
+        self.assertEqual(screen_map.for_device("Retroid Pocket 5", env={}).touch_seat, "seat0")
+
+
 if __name__ == "__main__":
     unittest.main()

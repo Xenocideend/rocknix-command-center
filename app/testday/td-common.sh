@@ -14,12 +14,25 @@ SYSCFG=/storage/.config/system/configs/system.cfg
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}
 export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1}
 
-# Hard stop unless this is the RP5 with the add-on screen lit.
+# Hard stop unless this is the RP5 with the add-on screen lit, or a handheld with two built-in panels that the app's profile
+# list names (untested on it, built from ROCKNIX's scripts), or the person installing says go on (TD_ALLOW_ANY_DEVICE=1).
 td_sanity() {
-    model=$(tr -d '\000' < /proc/device-tree/model 2>/dev/null)
+    model=$(tr -d '\000' < "${TD_MODEL_FILE:-/proc/device-tree/model}" 2>/dev/null)
     case "$model" in
         *"Retroid Pocket 5"*) ;;
-        *) echo "HARD STOP: model is '$model', not a Retroid Pocket 5"; exit 90 ;;
+        *)
+            known=$(cd "$BUILD" 2>/dev/null && python3 screen_map.py --known 2>/dev/null)
+            if [ "$known" = builtin ]; then
+                echo "sanity OK: $model has two built-in screens and a profile built from ROCKNIX's scripts; it has not been tried on this model"
+                return 0
+            fi
+            if [ "${TD_ALLOW_ANY_DEVICE:-}" = 1 ]; then
+                echo "sanity: '$model' is not a model the app knows, going on because TD_ALLOW_ANY_DEVICE=1"
+                return 0
+            fi
+            echo "HARD STOP: model is '$model', not a Retroid Pocket 5 or one of the built-in dual-screen handhelds the app knows"
+            echo "(to try anyway: TD_ALLOW_ANY_DEVICE=1 sh $0 ...)"
+            exit 90 ;;
     esac
     st=$(cat /sys/class/drm/card0-DP-1/status 2>/dev/null)
     mode=$(cat /storage/dual-screen-mode 2>/dev/null)
@@ -50,6 +63,20 @@ td_prune_backups() {
         n=$((n + 1))
         [ "$n" -gt "$keep" ] && rm -rf "$d" && echo "removed old backup $d"
     done
+    return 0
+}
+
+# Writes HOME_DIR/device-profile.env, the screen and touch names the layout daemon reads (screen_map.py --env), from the
+# installed app's own profile. Never fails an install: if the profile cannot be read the old file (or none) stays.
+td_write_device_profile() {
+    tmp="$HOME_DIR/device-profile.env.new"
+    if (cd "$HOME_DIR" && python3 screen_map.py --env > "$tmp" 2>/dev/null) && grep -q "^\(INTERNAL\|BOTTOM_OUTPUT\)='" "$tmp"; then
+        mv "$tmp" "$HOME_DIR/device-profile.env"
+        echo "device profile: $(tr '\n' ' ' < "$HOME_DIR/device-profile.env")"
+    else
+        rm -f "$tmp"
+        echo "device profile: not written (the layout daemon keeps its own names)"
+    fi
     return 0
 }
 

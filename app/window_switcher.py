@@ -118,7 +118,7 @@ HOME_WS_RE = re.compile(r"workspace number (\d+)")
 # sent after enforce_allowed().
 # ---------------------------------------------------------------------------
 PARK_RE = re.compile(r"\[con_id=(\d+)\] move container to workspace " + re.escape(PARK_WS))
-SHOW_RE = re.compile(r"\[con_id=(\d+)\] move container to output (DSI-1|DP-1)")
+SHOW_RE = re.compile(r"\[con_id=(\d+)\] move container to output (%s)" % "|".join(re.escape(o) for o in OUTPUTS))
 FOCUS_RE = re.compile(r"\[con_id=(\d+)\] focus")
 SEP = "; "
 
@@ -330,7 +330,7 @@ class Snapshot:
         self.home_ws = ws_of.get(self.home)
         self.problem = None
         if cc_output not in OUTPUTS:
-            self.problem = "the Command Center's screen %r is not DSI-1 or DP-1" % (cc_output,)
+            self.problem = "the Command Center's screen %r is not %s" % (cc_output, " or ".join(OUTPUTS))
         elif cc_output not in outs:
             self.problem = "%s is not connected" % cc_output
         elif cc_output == es_output:

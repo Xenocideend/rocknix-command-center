@@ -27,3 +27,28 @@ def wanted_ids(devices):
     if DEFAULT_SEAT not in seats.values():
         return set(devices)
     return {i for i, s in seats.items() if s is None or s == DEFAULT_SEAT}
+
+
+class TwinFilter:
+    """For a device whose touch can arrive through either of two seats. A finger id belongs to the first touch device
+    that reports it, and the same id from another device is its twin and is dropped, until the finger lifts or goes
+    quiet for IDLE_NS. accept() says whether to use an event."""
+    IDLE_NS = 500_000_000
+    MAX_OWNED = 64
+
+    def __init__(self, idle_ns=IDLE_NS):
+        self.idle_ns = idle_ns
+        self.owner = {}                     # finger id -> [touch id, time of its last event]
+
+    def accept(self, touch_id, finger_id, timestamp, ends=False):
+        cur = self.owner.get(finger_id)
+        if cur is not None and cur[0] != touch_id and timestamp - cur[1] <= self.idle_ns:
+            return False
+        if ends:
+            self.owner.pop(finger_id, None)
+        else:
+            self.owner[finger_id] = [touch_id, timestamp]
+            if len(self.owner) > self.MAX_OWNED:      # a finger whose lift was never seen
+                for k in sorted(self.owner, key=lambda k: self.owner[k][1])[:len(self.owner) - self.MAX_OWNED]:
+                    del self.owner[k]
+        return True

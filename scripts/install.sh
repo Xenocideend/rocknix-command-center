@@ -36,6 +36,15 @@ for old in 092-dual-screen-persist 092-dual-screen-layout-and-power; do
     fi
 done
 
+# A handheld with two built-in screens has no add-on, no DisplayPort link to sleep-guard and no use for the add-on script:
+# the app's own profile says which kind this is (the app has to be installed first), and install-layout-daemon.sh installs
+# dual-screen-builtin-layout for it. Anything unclear stays on the add-on path below, which is the RP5's.
+kind=$(cd "${RP5DECK_HOME:-/storage/rp5deck}" 2>/dev/null && python3 screen_map.py --kind 2>/dev/null)
+if [ "$kind" = builtin ]; then
+    echo "=== this handheld has two built-in screens: installing dual-screen-builtin-layout ==="
+    exec sh "$HERE/install-layout-daemon.sh" "$@"
+fi
+
 echo "=== dual-screen-layout-and-power ==="
 if [ -f "$AUTOSTART/dual-screen-layout-and-power" ]; then
     cp -p "$AUTOSTART/dual-screen-layout-and-power" "/storage/dual-screen-layout-and-power.bak-$TS"

@@ -55,6 +55,37 @@ TOUCH_EXT="8746:1:RetroidPocket_RDS_Touchscreen"
 TOUCH_INT='0:0:generic_ft5x06_(a0)'
 AUDIO_CARD_NAME="Built-in Audio"
 
+# The device's screen and touch names. /storage/rp5deck/device-profile.env (written by the installer from the app's device
+# profile) can replace the defaults above, one NAME='value' per line. Only these five names are read, and a value with
+# anything but letters, digits and : _ . , ( ) space - is ignored.
+PROFILE_FILE=/storage/rp5deck/device-profile.env
+
+load_device_profile() {
+    local line name val
+    [ -r "$PROFILE_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            INTERNAL=\'*\'|EXTERNAL=\'*\'|TOUCH_EXT=\'*\'|TOUCH_INT=\'*\'|AUDIO_CARD_NAME=\'*\') ;;
+            *) continue ;;
+        esac
+        name=${line%%=*}
+        val=${line#*=}
+        val=${val#\'}
+        val=${val%\'}
+        case "$val" in
+            ""|*[!A-Za-z0-9:_.,\(\)\ -]*) continue ;;
+        esac
+        case "$name" in
+            INTERNAL) INTERNAL=$val ;;
+            EXTERNAL) EXTERNAL=$val ;;
+            TOUCH_EXT) TOUCH_EXT=$val ;;
+            TOUCH_INT) TOUCH_INT=$val ;;
+            AUDIO_CARD_NAME) AUDIO_CARD_NAME=$val ;;
+        esac
+    done < "$PROFILE_FILE"
+}
+load_device_profile
+
 POLL=5
 MAX_LOG=262144
 
@@ -1092,10 +1123,10 @@ import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print("unknown"); sys.exit()
 for o in d:
-    if o.get("name")=="DSI-1":
+    if o.get("name")==sys.argv[1]:
         print("yes" if o.get("active") else "no"); sys.exit()
 print("absent")
-' 2>/dev/null)
+' "$INTERNAL" 2>/dev/null)
                 if [ "$internal_active" = "no" ]; then
                     log "self-heal: $INTERNAL went inactive while docked - re-applying"
                     apply_layout yes

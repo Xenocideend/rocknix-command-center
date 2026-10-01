@@ -5,6 +5,49 @@ fixes things, a new MAJOR changes how something you rely on works. The newest ve
 is at the top. The Command Center's **Settings > About** shows the version you have
 and the first lines of its notes.
 
+## 1.9.0 - 1 Oct 2026
+
+- On a handheld whose top screen has its own backlight, the Top screen brightness slider now moves that backlight. The
+  RP5's add-on has none, so it is still dimmed in software. Which backlight belongs to which screen is a best guess from
+  their order and can be told in the settings file.
+- A guided test for people trying the Command Center on another handheld: it asks a few questions about what they see,
+  collects what the device reports (game names, serial numbers and addresses removed) into one text file, and works out
+  which brightness control each slider moves. There is a guide for it in the docs.
+- The installer no longer stops at "not a Retroid Pocket 5" on the built-in-screens handhelds it knows about, and the
+  start-up script leaves ROCKNIX's dual-screen setting and its touch settings alone on those. On the RP5 nothing changes.
+
+## 1.8.0 - 1 Oct 2026
+
+- A layout helper for handhelds with two built-in screens (AYN Thor and Thor Lite, AYANEO Pocket DS, Anbernic's two
+  dual-screen models). ROCKNIX switches the second screen off until a game needs it, so the helper keeps it on for the
+  Command Center, turns its touch screen on if ROCKNIX left it off, and switches off ROCKNIX's own bottom-screen app,
+  which would sit on the same screen. It changes nothing else and never moves windows. It has not been tried on those
+  devices.
+- Which screen is which on those handhelds is corrected from ROCKNIX's own scripts (it differs by model).
+- The new install script picks the right helper for the device (the Retroid Dual Screen add-on one or the built-in
+  screens one) and never leaves both installed.
+
+## 1.7.1 - 1 Oct 2026
+
+- More groundwork for other ROCKNIX devices. Installing now writes down this device's screen and touch names for the
+  layout helper, which uses its own built-in names when that note is missing, so the RP5 is unchanged.
+- On handhelds where a touch can arrive through two seats, the app now keeps the first report of each finger and drops
+  its twin, instead of listening to one seat only. The RP5 still listens to its first seat only.
+- New read-only report tool for people trying the Command Center on another handheld: it lists the screens, touch
+  screens, seats, windows and brightness controls and what the app picked, hides serial numbers and addresses, and
+  changes nothing. Run it with `sh /storage/rp5deck/tools/device-probe.sh`.
+
+## 1.7.0 - 1 Oct 2026
+
+- First step towards other ROCKNIX devices: what is specific to the RP5 now lives in one place, so a new device only
+  needs its own entry. The RP5 works exactly as before.
+- Entries now exist for the AYN Thor and Thor Lite, AYANEO Pocket DS and Anbernic's two dual-screen models (two
+  built-in screens, ES stays on the first one). They come from ROCKNIX's own scripts and have not been tried on those devices.
+  On them the Swap screens and Top screen tiles are left out, and so are Stick lights, Performance and the Battery
+  settings, which need the RP5's hardware.
+- The screen brightness is found automatically when a device does not name it.
+- The Restart and Shut down prompts say "the device" instead of "the RP5".
+
 ## 1.6.3 - 1 Oct 2026
 
 - New Exit Steam button on the Steam tab, next to the sort button. It closes Steam and goes back to

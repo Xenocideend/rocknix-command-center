@@ -37,6 +37,8 @@ import ctypes
 from ctypes import (CFUNCTYPE, POINTER, Structure, Union, byref, c_char_p,
                     c_int, c_int32, c_uint32, c_void_p, cast, pointer)
 
+import screen_map
+
 # ---------------------------------------------------------------------------
 # libwayland-client ABI
 # ---------------------------------------------------------------------------
@@ -255,7 +257,7 @@ class _Output:
 
 
 class LayerSurface:
-    def __init__(self, display, surface, output_name="DSI-1", layer=LAYER_TOP,
+    def __init__(self, display, surface, output_name=screen_map.CURRENT.bottom, layer=LAYER_TOP,
                  namespace="rp5deck", anchor=ANCHOR_ALL, size=(0, 0),
                  exclusive_zone=0, keyboard=KEYBOARD_NONE, log=print):
         self.display = display

@@ -26,9 +26,10 @@ import os
 import re
 
 import esevents
+import screen_map
 
 ES_SETTINGS = "/storage/.config/emulationstation/es_settings.cfg"
-BACKLIGHT = "/sys/class/backlight/ae94000.dsi.0"
+BACKLIGHT = screen_map.backlight_path()
 STATE_PATH = "/run/rp5deck-screen-idle.json"
 DIM_FRACTION = 0.15
 DIM_MIN = 8

@@ -85,6 +85,24 @@ the two-screen layout, **two screens**. On one screen it runs in
 single-screen mode. Set **Settings > Screens > Screen size preset** if its
 buttons come out too big or too small.
 
+**Device profiles (1.7.0 to 1.9.0).** The app picks a profile from the device's model name (`RP5DECK_DEVICE=<model>` forces
+another, `RP5DECK_SCREENS=BOTTOM,TOP` sets the two output names, `RP5DECK_BACKLIGHTS=BOTTOM,TOP` the two brightness
+controls). The profile says which screen is which, which touch screens and backlights it has, and which RP5-only hardware to
+offer. On the handhelds with two built-in panels (AYN Thor and Thor Lite, AYANEO Pocket DS, Anbernic RG DS and DS Plus) ES
+stays on the first panel, so **Swap screens** and **Top screen** are left out, and so are **Stick lights**, **Performance**
+and the **Battery** settings, which need the RP5's hardware. The Command Center takes the panel ROCKNIX calls `second_con`
+(the one it gives its own bottom-screen app), which differs by model: the Thor and the RG DS have ES on `DSI-2` and the
+Command Center on `DSI-1`, the Thor Lite and the Pocket DS the other way round.
+
+**The helper for those handhelds (1.8.0).** `dual-screen-builtin-layout` replaces the add-on script there. ROCKNIX switches
+the second screen off until a game needs it and leaves some second-screen touch screens disabled, so the helper keeps the
+screen on, turns its touch on and maps it, and switches ROCKNIX's own bottom-screen app (lowerdeck) off through ROCKNIX's
+setting `rocknix.bottomscreen.type` (`--restore-lowerdeck` gives the old value back). It never moves a window, turns a screen
+off or closes a program. The install scripts accept these models, the start-up script leaves ROCKNIX's dual-screen setting
+alone on them, and `scripts/install-layout-daemon.sh` picks the right helper. **All of this was written from ROCKNIX's scripts
+and has not been run on a real device.** [TESTER-GUIDE.md](TESTER-GUIDE.md) is a ten minute guided test that writes a log
+to send back; `tools/device-probe.sh` prints a read-only report of a device's screens and touch screens.
+
 ## 2. Installing, updating, removing
 
 **Honestly: there is currently no polished, one-click installer.** Installing
@@ -155,7 +173,10 @@ on that hardware.
    the add-on's screen from resetting the device (see [Sleep](#sleep)). The
    daemon also puts a web app's window on its own workspace and
    EmulationStation back on its own when you are on a single screen, so
-   update it together with the app when you update.
+   update it together with the app when you update. On a handheld with two
+   built-in screens `install.sh` installs `dual-screen-builtin-layout` instead
+   (through `install-layout-daemon.sh`, which never leaves both installed) and
+   no sleep guard, see [Other ROCKNIX devices](#other-rocknix-devices-untested).
 8. Optional, for Steam: `sh /storage/rp5deck/steam/install-steam-nested.sh install`
    (it comes with `app/`), then `systemctl restart essway`. It runs Steam
    inside the desktop so the Command Center stays up (see

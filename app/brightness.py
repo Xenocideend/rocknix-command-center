@@ -3,7 +3,8 @@
   bottom  the built-in AMOLED's backlight (sysfs, hardware): BottomBacklight
   top     the add-on has no reachable backlight or DDC/CI (see gamma_dim.py), so it's
           dimmed in software by gamma_dim.py, a helper holding sway's gamma control for
-          DP-1: TopDim. 100% means no helper at all.
+          DP-1: TopDim. 100% means no helper at all. A handheld whose top panel has a real
+          backlight gets TopBacklight instead (make_top picks).
   match   keeps the top screen in step with the bottom at the ratio set when Match was
           turned on: matched_top()
 
@@ -16,7 +17,7 @@ import sys
 
 import screen_map
 
-BACKLIGHT = "/sys/class/backlight/ae94000.dsi.0"
+BACKLIGHT = screen_map.backlight_path()
 BOTTOM_MIN_PCT = 5  # never 0, a black panel with no way to see the slider
 TOP_MIN_PCT = 20            # below this the add-on is unreadable in daylight
 GAMMA_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gamma_dim.py")
@@ -45,6 +46,9 @@ def match_ratio(top_pct, bottom_pct):
 
 
 class BottomBacklight:
+    MIN_PCT = BOTTOM_MIN_PCT
+    LABEL = "bottom"
+
     def __init__(self, path=BACKLIGHT):
         self.path = path
 
@@ -64,15 +68,39 @@ class BottomBacklight:
             return None
 
     def set_pct(self, pct):
-        pct = max(BOTTOM_MIN_PCT, min(100, int(pct)))
+        pct = max(self.MIN_PCT, min(100, int(pct)))
         try:
             raw = max(1, int(round(self.max() * pct / 100.0)))
             with open(os.path.join(self.path, "brightness"), "w") as f:
                 f.write(str(raw))
             return True
         except (OSError, ValueError) as e:
-            log.warning("bottom brightness: %s", e)
+            log.warning("%s brightness: %s", self.LABEL, e)
             return False
+
+
+class TopBacklight(BottomBacklight):
+    """The top panel's own backlight, for a device whose top screen has one. Same calls as TopDim, so the controller does
+    not care which it has."""
+    MIN_PCT = TOP_MIN_PCT
+    LABEL = "top"
+
+    def running(self):
+        return False
+
+    def stop(self):
+        """Nothing to hand back: the backlight keeps the level it was given."""
+
+
+def make_top(screens=None, listdir=os.listdir, env=None):
+    """The top screen's brightness control: its real backlight when the profile or the kernel names one, else software
+    dimming of its output."""
+    s = screen_map.CURRENT if screens is None else screens
+    path = screen_map.top_backlight_path(s, listdir, env)
+    if path:
+        log.info("top brightness: backlight %s (bottom %s)", path, screen_map.backlight_path(s, listdir, env))
+        return TopBacklight(path)
+    return TopDim(s.top)
 
 
 class TopDim:

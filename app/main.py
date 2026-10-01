@@ -328,6 +328,7 @@ class App:
         self.surface = (0, 0)       # the real surface; self.w/h is the layout canvas
         self.keyboard_up = False    # ROCKNIX's keyboard has squeezed the panel, see _update_keyboard_dismiss
         self._touch_ok = {}         # SDL touch id -> whether its fingers are used, see _touch_wanted
+        self._twins = touch_seats.TwinFilter() if screen_map.CURRENT.touch_seat == "any" else None
         self._pixels_warned = False  # one-time warning when canvas.pixels() has no data
         self.sdl = self.win = self.ren = self.tex = self.canvas = None
         self.layer = None
@@ -364,7 +365,7 @@ class App:
         self.companion = None           # companion.CompanionController
         self.screen_idle = None  # screen_idle.ScreenIdle
         self.bottom_bl = brightness.BottomBacklight()
-        self.top_dim = brightness.TopDim(screen_map.CURRENT.top)
+        self.top_dim = brightness.make_top()
         self.video = None               # companion.VideoWorker
         self.media_worker = self.io_worker = None
         self.es_watcher = None
@@ -822,9 +823,9 @@ class App:
         self.state_dirty = True
 
     POWER_CONFIRM = {
-        "restart": ("Restart the device?", "Everything closes and the RP5 restarts.", "Restart",
+        "restart": ("Restart the device?", "Everything closes and the device restarts.", "Restart",
                     ("systemctl", "reboot")),
-        "shutdown": ("Shut down the device?", "Everything closes and the RP5 turns off.",
+        "shutdown": ("Shut down the device?", "Everything closes and the device turns off.",
                      "Shut down", ("systemctl", "poweroff")),
     }
 
@@ -1418,6 +1419,9 @@ class App:
             f = sdl.TouchFinger.from_buffer(ev)
             if not self._touch_wanted(f.touchID):
                 return              # the same finger from sway's second seat, see touch_seats.py
+            if self._twins is not None and not self._twins.accept(
+                    f.touchID, f.fingerID, f.timestamp, t in (sdl.EV_FINGER_UP, sdl.EV_FINGER_CANCELED)):
+                return              # its twin through another seat
             if self.cc5 is not None and self.cc5.handle_event(t, f.windowID, ("f", f.fingerID)):
                 return  # a touch on the corner handle's window
             pid = ("f", f.fingerID)
@@ -1469,6 +1473,8 @@ class App:
     def _touch_wanted(self, touch_id):
         """Whether fingers from this touch device are used. Decided from SDL's device list the first time an id is
         seen, and again when a new one shows up (a second seat appearing while the app runs)."""
+        if self._twins is not None:
+            return True                 # every seat is used, the twin of a finger is dropped in _handle
         ok = self._touch_ok.get(touch_id)
         if ok is None:
             devices = self._read_touch_devices()

@@ -105,6 +105,10 @@ OVERLAY_DISABLE=${RP5DECK_OVERLAY_DISABLE:-/storage/.disable-rp5deck-overlay}
 # is gone" never happens (that was the flaky WSL test_supervisor case).
 SWAY_SOCK_DIRS=${RP5DECK_SWAY_SOCK_DIRS:-/run /tmp}
 EXTERNAL="DP-1"
+# Which kind of handheld this is, from the profile file the installer wrote (device-profile.env: a built-in-panels profile
+# has BOTTOM_OUTPUT, the add-on one INTERNAL). "addon" is the RP5's behaviour and what anything unclear gets.
+KIND=addon
+grep -q "^BOTTOM_OUTPUT='" "${RP5DECK_PROFILE_FILE:-${RP5DECK_HOME:-/storage/rp5deck}/device-profile.env}" 2>/dev/null && KIND=builtin
 
 MAX_LOG=262144
 RAPID_SECS=${RP5DECK_RAPID_SECS:-30}   # a run shorter than this is a "rapid" exit
@@ -488,12 +492,18 @@ trap on_signal TERM INT HUP
 # (the 092 window rules + per-emulator settings, DS2) needs none of it. Game
 # launches re-source /etc/profile, so this file takes effect on the next game.
 # To stop pinning: create /storage/.rp5deck-keep-dual-flag.
+# Only for the add-on. A handheld with two built-in panels needs ROCKNIX's flag as it is (its second-screen windows and
+# lowerdeck rely on it), so there it is never touched.
 FLAG_FILE=${RP5DECK_FLAG_FILE:-/storage/.config/profile.d/080-dual_screen_mode}
-if [ ! -e /storage/.rp5deck-keep-dual-flag ] && [ -f "$FLAG_FILE" ] &&
-   grep -q '^DEVICE_HAS_DUAL_SCREEN=true' "$FLAG_FILE" 2>/dev/null; then
-    printf 'DEVICE_HAS_DUAL_SCREEN=false\n' > "$FLAG_FILE.tmp" && mv "$FLAG_FILE.tmp" "$FLAG_FILE" &&
-        log "pinned DEVICE_HAS_DUAL_SCREEN=false (080 had written true)"
-fi
+pin_dual_flag() {
+    [ "$KIND" = addon ] || { log "built-in panels: DEVICE_HAS_DUAL_SCREEN is left to ROCKNIX"; return 0; }
+    if [ ! -e /storage/.rp5deck-keep-dual-flag ] && [ -f "$FLAG_FILE" ] &&
+       grep -q '^DEVICE_HAS_DUAL_SCREEN=true' "$FLAG_FILE" 2>/dev/null; then
+        printf 'DEVICE_HAS_DUAL_SCREEN=false\n' > "$FLAG_FILE.tmp" && mv "$FLAG_FILE.tmp" "$FLAG_FILE" &&
+            log "pinned DEVICE_HAS_DUAL_SCREEN=false (080 had written true)"
+    fi
+}
+pin_dual_flag
 
 # --- environment for the app and the guard (independent of sway) ------------
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}
@@ -515,7 +525,7 @@ for i in $(seq 1 60); do
     nap 1
 done
 [ -n "$SWAYSOCK" ] || finish "FATAL: no sway IPC socket after 60s - doing nothing" 1
-log "sway socket: $SWAYSOCK"
+log "sway socket: $SWAYSOCK (device kind: $KIND)"
 
 # --- wait for sway to list its outputs -----------------------------------------
 # A failed query (empty output while sway is busy) means "ask again", never
@@ -568,6 +578,8 @@ TOUCH_ADDON="${RP5DECK_TOUCH_ADDON:-8746:1:RetroidPocket_RDS_Touchscreen}"
 TOUCH_BUILTIN="${RP5DECK_TOUCH_BUILTIN:-0:0:generic_ft5x06_(a0)}"
 TOUCH_ADDON_MATRIX="${RP5DECK_TOUCH_ADDON_MATRIX:-0 1 0 -1 0 1}"
 apply_touch_config() {
+    # the RP5's touch names: built-in panels have their own (dual-screen-builtin-layout maps those)
+    [ "$KIND" = addon ] || return 0
     # the built-in panel first and on its own: undocked the add-on's lines fail
     swaymsg "input \"$TOUCH_BUILTIN\" map_to_output DSI-1" >/dev/null 2>&1 ||
         log "WARNING: built-in touch not mapped to DSI-1 (swaymsg failed)"

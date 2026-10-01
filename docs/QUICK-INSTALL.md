@@ -11,6 +11,11 @@ unless they detect an RP5 with the add-on's display connected. Without the
 add-on (single-screen use), set `TD_ALLOW_UNDOCKED=1` on the device or pass
 `--undocked` to `deploy_rp5deck.py`.
 
+**A handheld with two built-in screens** (AYN Thor and Thor Lite, AYANEO Pocket DS, Anbernic RG DS and DS Plus) is let
+through too, and `install.sh` then installs `dual-screen-builtin-layout` instead of the add-on scripts. That support is
+untested: follow [TESTER-GUIDE.md](TESTER-GUIDE.md), which also writes the log to send back. Any other model needs
+`TD_ALLOW_ANY_DEVICE=1` in front of the install commands.
+
 ## From a PC
 
 ```bash

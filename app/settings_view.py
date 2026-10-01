@@ -22,6 +22,7 @@ and MediaPriorityPage (a reorderable list with up/down per row).
 """
 import device
 import config
+import screen_map
 import palettes
 import button_colours
 import screen_presets
@@ -48,7 +49,8 @@ HINT_W = 320  # wide enough for "after restart" without an ellipsis
 # A group with no WIRED field gets no tab by construction, not a special case, so a group that
 # loses its last consumer disappears and one that gains one comes back.
 GROUP_ORDER = [g for g in config.GROUPS
-               if any(f["key_path"] in config.WIRED for f in config.fields_in_group(g))] + ["about"]
+               if g not in screen_map.CURRENT.unsupported_groups()
+               and any(f["key_path"] in config.WIRED for f in config.fields_in_group(g))] + ["about"]
 GROUP_TITLES = dict(config.GROUP_LABELS)
 GROUP_TITLES["about"] = "About"
 

@@ -533,7 +533,7 @@ class SampleCache:
         try:
             w, h, rgba = self._decode(png)
         except PngError as e:
-            log.info("DP-1 capture for %s: %s", system, e)
+            log.info("%s capture for %s: %s", screen_map.CURRENT.top, system, e)
             return None
         box = self._exclude_box(w, h) if callable(self._exclude_box) else self._exclude_box
         bg = self._median(w, h, rgba, box)

@@ -23,6 +23,7 @@ import math
 import time
 
 import notepad
+import screen_map
 import swap_ui
 import ui
 from ui import (THEME, Button, Container, Keyboard, Label, LitButton, Sheet, Slider, TextField,
@@ -812,6 +813,8 @@ class Home(Container):
         # saving cant lock anyone out.
         self.order = [t.name for t in self.tiles]
         self.hidden = set()
+        # tiles for hardware this device does not have (screen_map), never shown, not even in edit mode
+        self.unavailable = set(screen_map.CURRENT.unsupported_tiles())
         # One hide/show badge per hideable tile, added after every tile so hit() finds the badge
         # before the tile under it (tapping the badge must never start a drag). Hidden outside edit
         # mode.
@@ -857,7 +860,7 @@ class Home(Container):
         just the shown ones, both in the current order.
         """
         names = self.order if self.edit_mode else [n for n in self.order if n not in self.hidden]
-        return [self._tiles_by_name[n] for n in names if n in self._tiles_by_name]
+        return [self._tiles_by_name[n] for n in names if n in self._tiles_by_name and n not in self.unavailable]
 
     def grid_rows(self):
         """Two rows up to 12 tiles, three past that (14 tiles in 7 columns were too narrow and cut the
