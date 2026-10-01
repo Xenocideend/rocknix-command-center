@@ -182,14 +182,16 @@ log "sway socket: $SWAYSOCK"
 # Matched on the full path and filtered against our own pid. No `pkill -f`, since this script's
 # own command line would match.
 stop_output_monitor() {
-    local pids p
-    pids=$(ps -o pid= -o args= 2>/dev/null \
-           | grep '/usr/bin/output_monitor' \
-           | grep -v grep \
-           | awk '{print $1}')
-    for p in $pids; do
+    local d p line
+    for d in /proc/[0-9]*; do
+        p=${d#/proc/}
         [ "$p" = "$$" ] && continue
-        kill "$p" 2>/dev/null && log "stopped output_monitor pid $p"
+        line=""
+        read -r line 2>/dev/null < "$d/cmdline"
+        case "$line" in
+            *grep*) ;;
+            *'/usr/bin/output_monitor'*) kill "$p" 2>/dev/null && log "stopped output_monitor pid $p" ;;
+        esac
     done
 }
 
@@ -241,8 +243,6 @@ probe_state() {
 
 es_output() {
     # which output currently holds the EmulationStation window
-    swaymsg -t get_tree 2>/dev/null | tr -d ' \n' \
-        | grep -o '"name":"\(DP-1\|DSI-1\)"[^@]*' | tail -1 >/dev/null 2>&1
     swaymsg -t get_tree 2>/dev/null | python3 -c '
 import json,sys
 try: t=json.load(sys.stdin)
@@ -259,7 +259,14 @@ walk(t)
 }
 
 set_audio_internal() {
-    local card target
+    local card target cur
+    # Count only inside the Sinks block. `wpctl status` also prints the configured default device
+    # (HiFi__Speaker__sink) under Settings, which says Speaker whatever profile is really active, so
+    # grepping all of it reports a speaker that isnt there and never changes with the profile.
+    # Checked first so the card and profile lookups only run when the speakers are missing.
+    cur=$(wpctl status 2>/dev/null | sed -n '/Sinks:/,/Sources:/p' \
+          | grep -c 'Speaker Playback')
+    [ "$cur" -eq 0 ] || return 0
     card=$(wpctl status 2>/dev/null | awk -v n="$AUDIO_CARD_NAME" '
         index($0,n) && /\[alsa\]/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.$/) { gsub(/\./,"",$i); print $i; exit } }')
     [ -n "$card" ] || return 0
@@ -267,16 +274,8 @@ set_audio_internal() {
         /Param:Profile:index/ { getline; idx=$2 }
         /Param:Profile:name/  { getline; gsub(/"/,"",$2); if ($2=="HiFi") { print idx; exit } }')
     [ -n "$target" ] || return 0
-    local cur
-    # Count only inside the Sinks block. `wpctl status` also prints the configured default device
-    # (HiFi__Speaker__sink) under Settings, which says Speaker whatever profile is really active, so
-    # grepping all of it reports a speaker that isnt there and never changes with the profile.
-    cur=$(wpctl status 2>/dev/null | sed -n '/Sinks:/,/Sources:/p' \
-          | grep -c 'Speaker Playback')
-    if [ "$cur" -eq 0 ]; then
-        wpctl set-profile "$card" "$target" 2>/dev/null \
-            && log "audio: restored HiFi profile (card $card, profile $target)"
-    fi
+    wpctl set-profile "$card" "$target" 2>/dev/null \
+        && log "audio: restored HiFi profile (card $card, profile $target)"
 }
 
 # --- bring the add-on up when the port comes back as a sink ----------------
@@ -357,15 +356,9 @@ DUAL_FLAG=/storage/.config/profile.d/080-dual_screen_mode
 
 # the built-in touchscreen's send_events ("enabled"/"disabled"), or "" if sway doesnt list it
 touch_int_state() {
-    swaymsg -r -t get_inputs 2>/dev/null | python3 -c '
-import json, sys
-try:
-    for d in json.load(sys.stdin):
-        if d.get("identifier") == sys.argv[1]:
-            print((d.get("libinput") or {}).get("send_events", ""))
-            break
-except ValueError:
-    pass' "$TOUCH_INT"
+    swaymsg -r -t get_inputs 2>/dev/null | awk -v id="$TOUCH_INT" '
+        /^    "identifier": / { s = $0; sub(/^    "identifier": "/, "", s); sub(/",?$/, "", s); found = (s == id); next }
+        found && /"send_events": / { s = $0; sub(/^.*"send_events": "/, "", s); sub(/".*$/, "", s); print s; exit }'
 }
 
 sync_dual_flag() {
@@ -792,7 +785,8 @@ fix_game_windows() {
 # The app's own panel is a layer-shell surface, not a window, so it needs no rule.
 ensure_rp5deck_rules() {
     local pid
-    pid=$(pidof sway 2>/dev/null | awk '{print $1}')
+    pid=$(pidof sway 2>/dev/null)
+    pid=${pid%% *}
     [ -n "$pid" ] || return 0
     [ "$pid" = "$rp5deck_rules_pid" ] && return 0
     if swaymsg "for_window [app_id=\"^rp5deck-web\$\"] move container to output $INTERNAL" >/dev/null 2>&1 &&
@@ -813,7 +807,8 @@ ensure_rp5deck_rules() {
 # against the pre-swap script. Applied again whenever sway's pid changes.
 ensure_undocked_web_rules() {
     local pid
-    pid=$(pidof sway 2>/dev/null | awk '{print $1}')
+    pid=$(pidof sway 2>/dev/null)
+    pid=${pid%% *}
     [ -n "$pid" ] || return 0
     [ "$pid" = "$undocked_web_rules_pid" ] && return 0
     if swaymsg "for_window [app_id=\"^rp5deck-web\$\"] exec $SELF --show-undocked-window web" >/dev/null 2>&1 &&
@@ -842,7 +837,8 @@ ensure_undocked_web_rules() {
 ensure_swap_rules() {
     local pid
     [ "$es_swapped_seen" = "yes" ] || return 0
-    pid=$(pidof sway 2>/dev/null | awk '{print $1}')
+    pid=$(pidof sway 2>/dev/null)
+    pid=${pid%% *}
     [ -n "$pid" ] || return 0
     [ "$pid" = "$swap_rules_pid" ] && return 0
     if swaymsg "for_window [app_id=\"emulationstation\"] move container to workspace number 1, focus" >/dev/null 2>&1 &&

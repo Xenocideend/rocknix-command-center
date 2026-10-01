@@ -67,7 +67,7 @@ OLD_092 = os.path.join(HERE, "fixtures", "dual-screen-layout-and-power-pre-SW1-c
 # 26 Sep: re-pinned for the sway-restart re-layout (was fd3d4104...).
 # 26 Sep: re-pinned for the touchscreen watch (was 9d3a12b0...).
 # 26 Sep: re-pinned for the keyboard-screen rule (was f7c9840f...).
-OLD_SHA = "fc859a1f2ffc7a5d08fb0cf7787883e0b80b37d3dbdaf5bd3861b1d5c31a0db2"   # ... + touch watch + keyboard on the Command Center screen + add-on replug notice + keyboard service restart
+OLD_SHA = "6e25936e647da2776599ed9dda8344114d5567b52435418299f9185f1816561c"   # ... + touch watch + keyboard on the Command Center screen + add-on replug notice + keyboard service restart + cheaper poll (fewer processes per poll)
 SIM = os.path.join(HERE, "sw1_sway_sim.py")
 LINUX = sys.platform.startswith("linux")
 
