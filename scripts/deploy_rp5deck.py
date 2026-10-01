@@ -15,10 +15,14 @@ or would track (not ignored) under rp5deck/, minus screenshots/ and proto/,
 plus a MANIFEST.md5 that td1-verify-build.sh checks byte for byte. td3-install.sh
 backs up the installed app and 094 before replacing them and carries over
 config.json; its rollback is printed at the end.
+
+After a successful install the older staged builds (/storage/rp5deck-*/rp5deck/MANIFEST.md5, about 5 MB
+each) are removed, keeping the newest KEEP_BUILDS including this one. Nothing else under /storage is touched.
 """
 import hashlib
 import io
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -29,6 +33,29 @@ sys.path.insert(0, HERE)
 import rk  # noqa: E402
 
 SKIP_TOP = ("screenshots/", "proto/")
+KEEP_BUILDS = 2
+STAGED = re.compile(r"^/storage/rp5deck-[A-Za-z0-9-]+$")
+
+
+def stale_builds(manifest_paths, current_base, keep=KEEP_BUILDS):
+    """Staged build folders to remove. manifest_paths: /storage/rp5deck-<name>/rp5deck/MANIFEST.md5 paths, newest
+    first. The current build counts as one of the kept ones; a folder whose name is not a staged build's is never
+    returned, whatever the listing says."""
+    builds = []
+    for m in manifest_paths:
+        base = m[:-len("/rp5deck/MANIFEST.md5")] if m.endswith("/rp5deck/MANIFEST.md5") else None
+        if base and STAGED.match(base) and base not in builds:
+            builds.append(base)
+    kept = [current_base] + [b for b in builds if b != current_base][:max(0, keep - 1)]
+    return [b for b in builds if b not in kept]
+
+
+def prune_old_builds(c, current_base, keep=KEEP_BUILDS):
+    rc, out = sh(c, "ls -dt /storage/rp5deck-*/rp5deck/MANIFEST.md5 2>/dev/null")
+    gone = stale_builds(out.split(), current_base, keep)
+    for b in gone:
+        sh(c, "rm -rf %s" % b)
+    print("removed %d older staged build(s), kept the newest %d" % (len(gone), keep))
 
 
 def app_files():
@@ -98,6 +125,8 @@ def main():
             sys.exit("install FAILED (rc %d)" % rc)
         rc, out = sh(c, "%ssh /storage/rp5deck/testday/td3-install.sh guard-live" % env)
         print(out.strip())
+        if rc == 0:
+            prune_old_builds(c, base)
         return rc
     finally:
         c.close()

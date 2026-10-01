@@ -5,6 +5,24 @@ fixes things, a new MAJOR changes how something you rely on works. The newest ve
 is at the top. The Command Center's **Settings > About** shows the version you have
 and the first lines of its notes.
 
+## 1.6.2 - 1 Oct 2026
+
+- Fixed touches landing in the wrong place until a restart. When sway had a second seat (it makes one when
+  EmulationStation starts) every touch reached the app twice, once at the right spot and once without the
+  panel's rotation, and the second one replaced the first. The app now listens to the first seat only.
+- Installing now keeps the newest five backups of the app instead of every one (each is a full copy, about
+  8 MB, and 63 had piled up).
+- Firefox's disk cache is capped at 64 MB for the Browser, Discord and the YouTube App. Left alone it grew to
+  about 150 MB per profile.
+- Removed the "Use Firefox sign-in for YouTube" setting. It only switched code the app no longer runs (the old
+  YouTube search player, with its yt-dlp and mpv calls), so it did nothing. That code is gone too.
+
+## 1.6.1 - 1 Oct 2026
+
+- The on-screen keyboard now has a way to close it. With ROCKNIX's keyboard up the Command Center shrinks to
+  the space above it and had nothing left to close it with. A down arrow now sits on the keyboard's top edge,
+  like Android's, and tapping it hides the keyboard.
+
 ## 1.6.0 - 1 Oct 2026
 
 - Single-screen mode now runs the Browser, Discord and the YouTube App. Open one from the Command

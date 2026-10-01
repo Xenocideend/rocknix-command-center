@@ -13,11 +13,7 @@ script, even transiently).
   3. web_tiles.py: _set_osk() no longer re-shows the keyboard when osk_on
      says "on" but ROCKNIX's killall already took the real process (only a
      fresh focus transition would notice).
-  4. youtube.py: build_command() drops --input-conf, so a tap on the video
-     would no longer reach mpv's "cycle pause" binding at all.
-  5. youtube-input.conf: the MBTN_LEFT -> cycle pause binding itself is
-     dropped from the shipped file (a mistake in the asset, not the code
-     that points at it).
+  (4 and 5 were the YouTube mpv player's tap-to-pause binding, removed with that player.)
   6. browser.py: close() goes back to WebDriver:DeleteSession instead of
      Marionette:Quit - Firefox stays running, no sessionstore flush, tabs
      do not survive Close.
@@ -60,14 +56,6 @@ BREAKS = [
      "if on == self.osk_on:",
      "tests.test_web_tiles.TestKeyboardForFirefox."
      "test_killed_externally_by_rocknix_reshows_on_the_next_poll"),
-    ("youtube.py",
-     '            "--input-conf=%s" % INPUT_CONF_PATH,\n',
-     "",
-     "tests.test_youtube.TestPlayerCommandLine.test_command_has_required_flags"),
-    ("youtube-input.conf",
-     "MBTN_LEFT cycle pause\n",
-     "",
-     "tests.test_youtube.TestInputConfFile.test_binds_a_tap_to_cycle_pause"),
     ("browser.py",
      '                self._send("Marionette:Quit", {"flags": []}, timeout=QUIT_WAIT_TIMEOUT)\n',
      '                self._send("WebDriver:DeleteSession", {}, timeout=QUIT_WAIT_TIMEOUT)\n',

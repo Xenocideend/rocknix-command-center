@@ -242,8 +242,7 @@ class TestSendRecvOverFakeSocket(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Browser controls - command formation, over a mocked _send (mirrors
-# test_youtube.py's TestPlayerControls pattern)
+# Browser controls - command formation, over a mocked _send
 # ---------------------------------------------------------------------------
 
 class TestBrowserControls(unittest.TestCase):

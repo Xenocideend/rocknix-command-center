@@ -195,6 +195,24 @@ class Ipc:
             # an event mixed in on a subscribed socket, skip it
 
 
+def output_height(name, timeout=1.0):
+    """The height in pixels of the named output, or None when sway cannot be asked."""
+    path = find_socket()
+    if not path:
+        return None
+    try:
+        c = Ipc(path, timeout)
+        try:
+            for o in c.request(GET_OUTPUTS):
+                if o.get("name") == name:
+                    return int((o.get("rect") or {}).get("height") or 0) or None
+        finally:
+            c.close()
+    except Exception:       # noqa: BLE001 - the caller treats None as unknown
+        pass
+    return None
+
+
 def query_mode(timeout=2.0, internal=INTERNAL, external=EXTERNAL):
     """One-shot check. Returns (mode, reason) or (None, error text)."""
     path = find_socket()

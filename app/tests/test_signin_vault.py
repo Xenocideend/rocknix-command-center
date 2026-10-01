@@ -127,20 +127,6 @@ class Profile(VaultCase):
                 self.v.prepare(self.profile)
         self.assertEqual(self.read(self.profile, "cookies.sqlite"), SECRET)
 
-    def test_yt_dlp_gets_a_cookie_copy_that_is_removed_after(self):
-        self.v.prepare(self.profile)
-        self.v.release(self.profile)
-        with self.v.cookie_profile(self.profile) as ram:
-            self.assertEqual(self.read(ram, "cookies.sqlite"), SECRET)
-            self.assertFalse(os.path.exists(os.path.join(ram, "storage")))   # cookies only
-        self.assertFalse(os.path.exists(ram))
-
-    def test_yt_dlp_uses_the_live_copy_while_firefox_runs(self):
-        run = self.v.prepare(self.profile)
-        with self.v.cookie_profile(self.profile) as ram:
-            self.assertEqual(ram, run)
-        self.assertTrue(os.path.exists(run))
-
 
 class BrowserUsesTheVault(VaultCase):
     def test_firefox_starts_on_the_ram_copy_and_close_seals_it(self):

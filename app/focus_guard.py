@@ -343,9 +343,6 @@ class Ipc:
     def focus_es(self):
         return self.run_command(ALLOWED_COMMAND)
 
-    def focus_con(self, con_id):
-        return self.run_command(build_focus_con_command(con_id))
-
 
 # ---------------------------------------------------------------------------
 # The daemon

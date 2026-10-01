@@ -241,14 +241,6 @@ class Plan:
     def stop_list(self):
         return [i.line() for i in self.items]
 
-    @property
-    def restart_offered(self):
-        return bool(self.health and self.health.offer_restart)
-
-    @property
-    def restart_forceable(self):
-        return bool(self.health and self.health.allow_force)
-
     def to_dict(self):
         return {"items": [i.to_dict() for i in self.items], "actions": self.actions(),
                 "health": self.health.to_dict() if self.health else None,

@@ -123,7 +123,8 @@ on that hardware.
 4. Install it: `sh testday/td3-install.sh install`. This:
    - backs up the current install (the app folder and the
      `/storage/.config/autostart/command-center-app` autostart entry) to a
-     timestamped folder under `/storage/rp5deck-backups/`;
+     timestamped folder under `/storage/rp5deck-backups/` (each is a full
+     copy of the app, so only the newest five are kept);
    - copies the new files to `/storage/rp5deck`, the app's running
      location;
    - **keeps your existing settings file (`config.json`)**, so updating
@@ -921,7 +922,7 @@ still needs the touch input for the game underneath.
   Command Center that can appear over the game/EmulationStation screen).
 - **Dual-screen layout daemon's log**:
   `/storage/.config/autostart/dual-screen-layout-and-power.log`.
-- **Install backups**: `/storage/rp5deck-backups/<date-and-time>/`.
+- **Install backups**: `/storage/rp5deck-backups/<date-and-time>/`, the newest five.
 
 ## 14. Uninstall
 

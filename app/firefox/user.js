@@ -122,3 +122,9 @@ user_pref("signon.rememberSignons", false);
 user_pref("signon.autofillForms", false);
 user_pref("signon.generation.enabled", false);
 user_pref("browser.formfill.enable", false);
+
+// --- Disk cache capped ---------------------------------------------------------
+// Firefox sizes its disk cache from the free space and let each profile here grow to ~150 MB of flash writes
+// for two web apps. 64 MB is plenty, and smart sizing has to be off or the capacity is ignored.
+user_pref("browser.cache.disk.smart_size.enabled", false);
+user_pref("browser.cache.disk.capacity", 65536);    // KiB

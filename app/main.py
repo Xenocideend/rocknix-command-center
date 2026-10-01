@@ -42,7 +42,7 @@ import signal
 import sys
 import threading
 import time
-from ctypes import byref, c_int, c_void_p
+from ctypes import byref, c_int, c_void_p, pointer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -68,6 +68,7 @@ import hud        # noqa: E402
 import rgb_leds   # noqa: E402  (RG)
 import rgb_view   # noqa: E402  (RG)
 import rocknix_keyboard  # noqa: E402
+import touch_seats  # noqa: E402
 import brightness  # noqa: E402  (batch 1: both screens' brightness)
 import screen_idle  # noqa: E402  (14c: the panel follows ES's screensaver)
 import screens    # noqa: E402
@@ -325,6 +326,8 @@ class App:
         self.started = time.time()
         self.w = self.h = 0
         self.surface = (0, 0)       # the real surface; self.w/h is the layout canvas
+        self.keyboard_up = False    # ROCKNIX's keyboard has squeezed the panel, see _update_keyboard_dismiss
+        self._touch_ok = {}         # SDL touch id -> whether its fingers are used, see _touch_wanted
         self._pixels_warned = False  # one-time warning when canvas.pixels() has no data
         self.sdl = self.win = self.ren = self.tex = self.canvas = None
         self.layer = None
@@ -1159,6 +1162,7 @@ class App:
             log.warning("premultiplied blend refused by the renderer: %s", sdl.error())
         self.canvas = self.gfx.Canvas(w, h)
         self.ui.set_size(w, h)
+        self._update_keyboard_dismiss()
         self._update_active()
         self.counts["resizes"] += 1
         self.state_dirty = True
@@ -1390,6 +1394,8 @@ class App:
         if t in (sdl.EV_FINGER_DOWN, sdl.EV_FINGER_MOTION, sdl.EV_FINGER_UP,
                  sdl.EV_FINGER_CANCELED):
             f = sdl.TouchFinger.from_buffer(ev)
+            if not self._touch_wanted(f.touchID):
+                return              # the same finger from sway's second seat, see touch_seats.py
             if self.cc5 is not None and self.cc5.handle_event(t, f.windowID, ("f", f.fingerID)):
                 return  # a touch on the corner handle's window
             pid = ("f", f.fingerID)
@@ -1425,6 +1431,31 @@ class App:
         elif t == sdl.EV_QUIT:
             if self.stop_reason is None:
                 self.stop_reason = "SDL_EVENT_QUIT"
+
+    def _read_touch_devices(self):
+        """{touch id: name} for the touch devices SDL knows right now."""
+        sdl = self.sdl
+        n = c_int()
+        ids = sdl.GetTouchDevices(pointer(n))
+        out = {}
+        if ids:
+            for k in range(n.value):
+                out[int(ids[k])] = (sdl.GetTouchDeviceName(ids[k]) or b"").decode(errors="replace")
+            sdl.free(ids)
+        return out
+
+    def _touch_wanted(self, touch_id):
+        """Whether fingers from this touch device are used. Decided from SDL's device list the first time an id is
+        seen, and again when a new one shows up (a second seat appearing while the app runs)."""
+        ok = self._touch_ok.get(touch_id)
+        if ok is None:
+            devices = self._read_touch_devices()
+            wanted = touch_seats.wanted_ids(devices)
+            self._touch_ok = {i: i in wanted for i in devices}
+            self._touch_ok.setdefault(touch_id, True)       # not in SDL's list: keep it
+            ok = self._touch_ok[touch_id]
+            log.info("touch devices %s: using %s", devices, sorted(wanted))
+        return ok
 
     def _panel_is_ours_and_docked(self):
         """The backlight is DSI-1's, only act while the Command Center is on DSI-1 and ES is on the
@@ -2358,6 +2389,30 @@ class App:
             row.refresh_from_cfg()
 
     # -- Keyboard -----------------------------------------------------------------------
+    KEYBOARD_SQUEEZE_MIN_PX = 150   # more than the 140 px strip takes
+
+    def _update_keyboard_dismiss(self):
+        """ROCKNIX's wvkbd reserves its height at the bottom of this screen, so the panel gets a shorter surface
+        and shows only what fits, usually just the Companion. The arrow is shown when the panel is that much
+        shorter than its output and the keyboard is running, and it is the way to close the keyboard."""
+        up = False
+        h = self.surface[1]
+        if self.mode in (FULL, hidden_overlay.OVERLAY) and h and rocknix_keyboard.find_pid() is not None:
+            full = sway_ipc.output_height(self.output)
+            up = bool(full and full - h >= self.KEYBOARD_SQUEEZE_MIN_PX)
+        if up != self.keyboard_up:
+            log.info("keyboard %s the panel (surface %d high)", "squeezes" if up else "no longer squeezes", h)
+            self.keyboard_up = up
+        self.ui.set_keyboard_up(up)
+
+    def dismiss_keyboard(self):
+        """The arrow: sends ROCKNIX's keyboard its toggle signal, which hides it while it is up."""
+        log.info("arrow -> hide the keyboard")
+        if rocknix_keyboard.toggle():
+            self.keyboard_up = False
+            self.ui.set_keyboard_up(False)
+            self.state_dirty = True
+
     def toggle_keyboard(self):
         """A toggle, not a sheet. Signals ROCKNIX's own wvkbd (same SIGRTMIN input_sense sends, it
         never starts or stops it). If that works close the Command Center so the keys reach the

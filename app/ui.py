@@ -690,6 +690,14 @@ class Sheet(Container):
         g.fill_rect((x, y + self.HEADER_H - 2, w, 2), THEME["line"])
 
 
+def icon_chevron_down(g, r, color):
+    """A down arrow, the dismiss button on Android's keyboard."""
+    x, y, w, h = r
+    t = max(4, w * 0.12)
+    g.line(x + w * 0.15, y + h * 0.3, x + w * 0.5, y + h * 0.7, color, t)
+    g.line(x + w * 0.5, y + h * 0.7, x + w * 0.85, y + h * 0.3, color, t)
+
+
 def icon_back(g, r, color):
     x, y, w, h = r
     t = max(4, w * 0.12)
@@ -729,11 +737,6 @@ class TextField(Button):
 
     def clear(self):
         self.set_text("")
-
-    def set_focused(self, v):
-        if bool(v) != self.focused:
-            self.focused = bool(v)
-            self.invalidate()
 
     def draw(self, g):
         x, y, w, h = self.rect

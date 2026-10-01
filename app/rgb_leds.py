@@ -435,7 +435,3 @@ class Controller:
         `ledcontrol ${LED_STATE}` over whatever this set.
         """
         return self.keeper_tick(force=True)
-
-    def reset_backoff(self):
-        self._fail_streak = 0
-        self._gave_up = False

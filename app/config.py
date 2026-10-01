@@ -269,13 +269,6 @@ SCHEMA = [
      "label": "Brightness"},
 
     # -- YouTube ----------------------------------------------------------------
-    # yt_feeds.py reads this as its kill switch. Off means never hand yt-dlp
-    # --cookies-from-browser, back to search only, whether youre signed in or not. On by
-    # default since it never sees a password (it reads the sealed profile's cookies) and falls
-    # back to plain search on any failure.
-    {"key_path": ("youtube", "sign_in_enabled"), "type": "bool",
-     "default": True, "restart": False, "group": "youtube",
-     "label": "Use Firefox sign-in for YouTube"},
     # the YouTube TV strip hides after this many seconds without a touch so leanback fills the
     # whole panel. 0 turns it off and the strip keeps its fixed spot like the other BAR apps.
     {"key_path": ("youtube", "tv_bar_hide_s"), "type": "int",
@@ -387,7 +380,6 @@ WIRED = frozenset([
     ("screens", "ui_resolution"),  # screen_presets.layout_size via main.App._resize
     ("screens", "es_screen"),  # dual-screen-layout-and-power moves ES, screen_swap.read_setting()
     ("companion", "system_bg_source"),  # companion's system background (theme_colour)
-    ("youtube", "sign_in_enabled"),  # yt_feeds sign_in_enabled(), the cookie kill switch
     ("youtube", "tv_bar_hide_s"),  # bar_autohide.BarAutoHide.timeout_s
     ("youtube", "tv_swipe_natural"),  # web_tiles.YtAppSession.swipe_natural
     ("steam", "in_game_display"),  # companion _in_game_raw() for a Steam game

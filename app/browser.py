@@ -20,7 +20,7 @@ matches Mozilla's own marionette_driver client (transport.py): `<decimal length>
 commands `[0, id, name, params]`, responses `[1, id, error, result]`.
 
 A dead Firefox never keeps running unseen. is_running() checks the real process
-(Popen.poll()), and close() goes SIGTERM then SIGKILL with a bounded wait, like youtube.py's
+(Popen.poll()), and close() goes SIGTERM then SIGKILL with a bounded wait, like the other helper processes'
 Player.
 
 RP5DECK_BROWSER_HEADLESS=1 adds --headless for tests.

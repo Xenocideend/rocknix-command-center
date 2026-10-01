@@ -908,15 +908,6 @@ class CompanionView(Container):
         self.set_bg_color(bg if self.mode == "system" else None)
         self.invalidate()
 
-    def logo_box(self):
-        """(x, y, w, h) of the logo as placed here, or None. Its this screen's own copy of the logo,
-        not used for anything on the top screen, just for tests and state.
-        """
-        if self.logo is None:
-            return None
-        x, y = self.logo_xy
-        return (x, y, self.logo.w, self.logo.h)
-
     def set_bg_color(self, bg):
         """bg = (bg_rgba, fg_rgba) or None (black and the theme's text colour). Called right away from
         show_info() when the colour is known, or later by the controller when a top screen sample

@@ -178,15 +178,6 @@ def icon_tabs(g, r, color):
     g.round_rect((x + w * 0.05, y + h * 0.40, w * 0.9, h * 0.5), 6, color)
 
 
-def icon_ytapp(g, r, color):
-    """a TV screen (leanback)"""
-    x, y, w, h = r
-    t = max(4, w * 0.07)
-    g.stroke_round_rect((x + w * 0.1, y + h * 0.08, w * 0.8, h * 0.58), 6, color, t)
-    g.fill_rect((x + w * 0.42, y + h * 0.7, w * 0.16, h * 0.14), color)
-    g.fill_rect((x + w * 0.28, y + h * 0.86, w * 0.44, h * 0.08), color)
-
-
 def icon_stick_lights(g, r, color):
     """an analog stick cap with a glow ring around it"""
     x, y, w, h = r
@@ -1561,6 +1552,12 @@ class DeckUI:
         self.root = ui.Root(w, h, bg="bg")
         self.companion = self.root.add(companion) if companion is not None else None
         self.cc = self.root.add(CommandCenter(handlers, title, settings, hotkeys=hotkeys))
+        # ROCKNIX's keyboard takes the bottom of this screen and shrinks the panel to what is left, with
+        # nothing on it that reaches the Keyboard tile. This arrow, on top of everything, sends it away.
+        self.kb_dismiss = self.root.add(Button("", on_click=getattr(handlers, "dismiss_keyboard", None),
+                                               name="kb.dismiss", size=44, icon=ui.icon_chevron_down,
+                                               radius=26))
+        self.kb_dismiss.visible = False
         self.view = "cc"
         self.set_size(w, h)
 
@@ -1592,8 +1589,16 @@ class DeckUI:
         self.root.damage_all()
         return sheet
 
+    KB_DISMISS_SIZE = (230, 104)
+
+    def set_keyboard_up(self, up):
+        """Shows or hides the dismiss arrow (the panel is squeezed by the keyboard)."""
+        self.kb_dismiss.set_visible(bool(up))
+
     def set_size(self, w, h):
         self.root.resize(w, h)
+        bw, bh = self.KB_DISMISS_SIZE
+        self.kb_dismiss.set_rect((w - bw - 24, max(0, h - bh - 16), bw, bh))
         self.cc.layout((0, 0, w, h))
         if self.companion is not None:
             self.companion.layout((0, 0, w, h))

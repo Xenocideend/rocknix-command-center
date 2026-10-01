@@ -139,7 +139,7 @@ _ENUM_DISPLAY_OVERRIDES[("screens", "ui_resolution")] = screen_presets.label
 ABOUT_FREE = "Free software under the GNU GPL v2. If you paid for this, who hurt you?"
 ABOUT_CREDITS = (
     "Made by Xenocideend, written with Claude (Anthropic)",
-    "Runs on ROCKNIX, with SDL3, cairo, poppler, mpv and yt-dlp",
+    "Runs on ROCKNIX, with SDL3, cairo, poppler and mpv",
     "Source: github.com/Xenocideend/rocknix-command-center",
 )
 ABOUT_SUPPORT = (

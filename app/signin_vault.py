@@ -11,7 +11,6 @@ as an encrypted vault file:
   checkpoint()      seals again while Firefox runs (every CHECKPOINT_S), so a crash or a flat
                     battery loses minutes, not the sign-in
   release(profile)  seals once more after Firefox quits, then removes the RAM folder
-  cookie_profile()  a short lived RAM folder with only the cookies, for yt-dlp
 
 First use moves an existing plain profile in: sealed, the vault opened again and compared file
 by file, and only then are the plain files overwritten and removed.
@@ -273,31 +272,6 @@ class Vault:
             stop = self._threads.pop(profile, None)
         if stop is not None:
             stop.set()
-
-    # -- yt-dlp ---------------------------------------------------------------------------------
-    def cookie_profile(self, profile):
-        """A context manager: a folder yt-dlp can read cookies from. The live RAM profile
-        when Firefox has it open; else a temporary RAM folder holding only the cookies,
-        removed afterwards."""
-        vault = self
-
-        class _Ctx:
-            def __enter__(self):
-                run = vault.run_dir(profile)
-                if os.path.isfile(os.path.join(run, "cookies.sqlite")):
-                    self.tmp = None
-                    return run
-                self.tmp = os.path.join(vault.run_root, ".cookies-%d-%d" % (os.getpid(), time.time() * 1000))
-                os.makedirs(self.tmp, mode=0o700)
-                if os.path.exists(vault.vault_path(profile)):
-                    vault.open_into(profile, self.tmp, only={"cookies.sqlite"})
-                return self.tmp
-
-            def __exit__(self, *exc):
-                if self.tmp:
-                    shutil.rmtree(self.tmp, True)
-                return False
-        return _Ctx()
 
 
 def _listing(root, skip_links=False):

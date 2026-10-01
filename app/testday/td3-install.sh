@@ -86,6 +86,7 @@ CARRY
     "$AUTOSTART/command-center-app"            # self-backgrounds
     sleep 8
     echo "BACKUP=$BK   (rollback: sh $0 rollback $BK)"
+    td_prune_backups
     sh "$0" status
     ;;
 status)

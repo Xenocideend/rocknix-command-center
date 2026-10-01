@@ -41,6 +41,18 @@ td_sway() {
 }
 
 # the pid(s) of processes whose command line contains $1 (never this shell's own)
+# Keeps the newest TD_KEEP_BACKUPS (default 5) timestamped install backups (YYYYMMDD-HHMMSS folders) in BK_ROOT and
+# removes older ones, each is a whole copy of the app. Folders with any other name are never touched.
+td_prune_backups() {
+    keep=${TD_KEEP_BACKUPS:-5}
+    n=0
+    for d in $(ls -1d "$BK_ROOT"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r); do
+        n=$((n + 1))
+        [ "$n" -gt "$keep" ] && rm -rf "$d" && echo "removed old backup $d"
+    done
+    return 0
+}
+
 td_pids() {
     for p in /proc/[0-9]*; do
         pid=${p#/proc/}
