@@ -23,6 +23,7 @@ GAP = 20
 NAME_H = 54
 CHECK_DESC = "Steam is not open"
 SORT_LABELS = {"recent": "Recent", "az": "A-Z", "played": "Most played"}
+EXIT_LABEL, EXIT_ARMED_LABEL, EXIT_ARM_S = "Exit Steam", "Tap again to exit", 4.0
 
 
 class GameCard(Button):
@@ -70,6 +71,7 @@ class SteamLibrarySheet(Sheet):
         self.cards = [self.body.add(GameCard((lambda i=i: on_action("steam.card%d" % i)), "steam.card%d" % i))
                       for i in range(PER_PAGE)]
         self.sort = self.add(Button("Recent", name="steam.sort", size=40, on_click=lambda: on_action("steam.sort")))
+        self.exit = self.add(Button(EXIT_LABEL, name="steam.exit", size=40, on_click=lambda: on_action("steam.exit")))
         self.prev = self.add(Button("<", name="steam.prev", size=52, on_click=lambda: on_action("steam.prev")))
         self.next = self.add(Button(">", name="steam.next", size=52, on_click=lambda: on_action("steam.next")))
         self.note = self.body.add(Label("", size=40, color="dim", align="center", name="steam.note"))
@@ -78,7 +80,8 @@ class SteamLibrarySheet(Sheet):
         Sheet.layout(self, rect)
         x, y, w, h = rect
         self.sort.set_rect((x + 320, y + 20, 260, self.HEADER_H - 40))
-        self.title.set_rect((x + 600, y, w - 600 - 340, self.HEADER_H))
+        self.exit.set_rect((x + 600, y + 20, 360, self.HEADER_H - 40))
+        self.title.set_rect((x + 980, y, w - 980 - 340, self.HEADER_H))
         self.prev.set_rect((x + w - 320, y + 20, 140, self.HEADER_H - 40))
         self.next.set_rect((x + w - 160, y + 20, 140, self.HEADER_H - 40))
         bx, by, bw, bh = self.body.rect
@@ -113,6 +116,7 @@ class SteamLibraryController:
         self.size = None
         self.running = None
         self.message = ""
+        self.exit_timer = None
 
     # -- opening ---------------------------------------------------------------------------
     def open(self):
@@ -126,6 +130,7 @@ class SteamLibraryController:
 
     def close(self):
         self.gen += 1
+        self._disarm_exit()
         self.host.close_sheet()
 
     def _root(self):
@@ -203,11 +208,31 @@ class SteamLibraryController:
             self.games = self.steam.sort_games(self.library, self.sort_mode)
             self.page = 0
             self._fill()
+        elif name == "steam.exit":
+            self._exit_tapped()
         elif name.startswith("steam.card"):
             shown = self._page_games()
             i = int(name[len("steam.card"):])
             if i < len(shown):
                 self.launch(shown[i])
+
+    def _exit_tapped(self):
+        """Closing Steam takes two taps, the second within a few seconds, so a stray touch does not end a game."""
+        if self.exit_timer is None:
+            self.sheet.exit.text = EXIT_ARMED_LABEL
+            self.sheet.exit.invalidate()
+            self.exit_timer = self.host.call_later(EXIT_ARM_S, self._disarm_exit)
+            return
+        self._disarm_exit()
+        log.info("steam: exit Steam")
+        self.host.exit_steam_now()
+
+    def _disarm_exit(self):
+        if self.exit_timer is not None:
+            self.host.cancel(self.exit_timer)
+            self.exit_timer = None
+        self.sheet.exit.text = EXIT_LABEL
+        self.sheet.exit.invalidate()
 
     def launch(self, game):
         log.info("steam: launch %s (%d)", game["name"], game["appid"])

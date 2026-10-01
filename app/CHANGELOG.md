@@ -5,6 +5,12 @@ fixes things, a new MAJOR changes how something you rely on works. The newest ve
 is at the top. The Command Center's **Settings > About** shows the version you have
 and the first lines of its notes.
 
+## 1.6.3 - 1 Oct 2026
+
+- New Exit Steam button on the Steam tab, next to the sort button. It closes Steam and goes back to
+  EmulationStation whether or not a game is running (a running game closes with it). It takes two taps, the
+  second within a few seconds, so a stray touch does not end a game.
+
 ## 1.6.2 - 1 Oct 2026
 
 - Fixed touches landing in the wrong place until a restart. When sway had a second seat (it makes one when

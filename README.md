@@ -1,6 +1,6 @@
 # ROCKNIX Command Center (rp5deck)
 
-*Formerly the Dual Screen Command Center.* Version 1.6.0, patch notes in
+*Formerly the Dual Screen Command Center.* Version 1.6.2, patch notes in
 [app/CHANGELOG.md](app/CHANGELOG.md).
 
 A touch app for the Retroid Pocket 5's built-in (bottom) screen when the
@@ -77,7 +77,7 @@ enabled on the device:
    checks every file against:
    `find . -type f ! -name MANIFEST.md5 ! -path '*/__pycache__/*' -print0 | xargs -0 md5sum > MANIFEST.md5`
 3. Run `sh testday/td1-verify-build.sh`, then `sh testday/td3-install.sh install`.
-   This backs up any existing install to `/storage/rp5deck-backups/`, keeps
+   This backs up any existing install to `/storage/rp5deck-backups/` (the newest five are kept), keeps
    your `config.json`, installs `command-center-app` and starts the app.
 4. Run `sh /storage/rp5deck/testday/td3-install.sh guard-live` to switch the
    focus guard from its first-install observe-only mode to normal.

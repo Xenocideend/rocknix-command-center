@@ -762,6 +762,10 @@ Steam features only appear while Steam is open.
   than twelve games make pages, use the arrows at the top right. A game
   with no cached art shows as a name card. If Steam closed meanwhile, the
   tab says so and starts nothing.
+  **Exit Steam**, at the top next to the sort button, closes Steam and goes
+  back to EmulationStation. It works with or without a game running (a
+  running game is closed with it) and takes two taps, the second within a
+  few seconds, so a stray touch does not end your game.
 - **Clean state:** stop the Steam game (Steam stays open) or close Steam.
 - **Over Steam:** the summon button opens the Command Center with Mixer,
   HUD, Hotkeys, Performance, Notes, Settings and Quit game.

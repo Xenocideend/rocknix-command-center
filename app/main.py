@@ -788,6 +788,28 @@ class App:
         self._submit_clean(job, done=self._quit_done)
         self.state_dirty = True
 
+    def exit_steam_now(self):
+        """The Steam tab's Exit Steam: closes Steam (and the game in it, if one is running) and goes back to ES."""
+        import cleanstate
+        self.ui.close()
+        self.ui.bar.show_hint("Closing Steam…")
+        if self.clean is None:
+            log.warning("exit Steam: no clean-state controller")
+            return
+        helper = self.clean.helper or self.clean.helper_factory()
+
+        def job():
+            plan = helper.discover(check_health=False)
+            return helper.execute(plan, [cleanstate.EXIT_STEAM], confirmed=True)
+        self._submit_clean(job, done=self._exit_steam_done)
+        self.state_dirty = True
+
+    def _exit_steam_done(self, steps):
+        ok = bool(steps) and all(getattr(s, "ok", False) for s in steps)
+        log.info("EXIT STEAM: %s", "; ".join(getattr(s, "text", str(s)) for s in steps or []))
+        self.ui.bar.show_hint("Steam closed" if ok else "Steam is still running")
+        self.state_dirty = True
+
     def _quit_done(self, steps):
         ok = bool(steps) and all(getattr(s, "ok", False) for s in steps)
         log.info("QUIT GAME: %s", "; ".join(getattr(s, "text", str(s)) for s in steps or []))
