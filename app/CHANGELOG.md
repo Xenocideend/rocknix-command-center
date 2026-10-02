@@ -5,6 +5,11 @@ fixes things, a new MAJOR changes how something you rely on works. The newest ve
 is at the top. The Command Center's **Settings > About** shows the version you have
 and the first lines of its notes.
 
+## 1.9.1 - 2 Oct 2026
+
+- Settings > About and the guides now say this is not an official ROCKNIX project. The ROCKNIX team didnt make it, review
+  it or endorse it. If something breaks, tell Xenocideend and not the ROCKNIX team.
+
 ## 1.9.0 - 1 Oct 2026
 
 - On a handheld whose top screen has its own backlight, the Top screen brightness slider now moves that backlight. The

@@ -1,5 +1,8 @@
 # ROCKNIX Command Center (rp5deck) — User Guide
 
+> **Not an official ROCKNIX project.** The ROCKNIX team didnt make this, review it or endorse it, so please dont ask
+> them for help with it. If something breaks, tell me (Xenocideend) by opening an issue on this repo, and not them.
+
 **Status:** community project, tested on one Retroid Pocket 5; experimental parts are marked where they apply. This guide is for version 1.6.0. The project used to be called the Dual Screen Command Center.
 
 ## 1. What it is

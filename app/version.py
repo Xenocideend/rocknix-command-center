@@ -5,7 +5,7 @@ Bump VERSION and add a CHANGELOG.md section together, test_version.py fails if t
 import os
 import re
 
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 CHANGELOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md")
 _HEAD = re.compile(r"^## (\d+\.\d+\.\d+) - (.+)$")
 

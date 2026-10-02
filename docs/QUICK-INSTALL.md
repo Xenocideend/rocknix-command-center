@@ -1,5 +1,8 @@
 # Quick install (experienced users)
 
+> **Not an official ROCKNIX project.** The ROCKNIX team didnt make this, review it or endorse it, so please dont ask
+> them for help with it. If something breaks, tell me (Xenocideend) by opening an issue on this repo, and not them.
+
 For users comfortable with SSH on ROCKNIX. The full walkthrough, with what
 each step does and how to undo it, is in
 [COMMAND-CENTER-GUIDE.md](COMMAND-CENTER-GUIDE.md#2-installing-updating-removing).
