@@ -1,7 +1,7 @@
 # Testing the Command Center on your handheld
 
-> **Not an official ROCKNIX project.** The ROCKNIX team didnt make this, review it or endorse it, so please dont ask
-> them for help with it. If something breaks, tell me (Xenocideend) by opening an issue on this repo, and not them.
+> **Not an official ROCKNIX project.** The ROCKNIX team did not make this, review it or endorse it, so please do not ask
+> them for help with it. If something breaks don't yell at the ROCKNIX team, yell at me.
 
 Thank you for trying this. The Command Center was built and tested on a Retroid Pocket 5 only. This guide is for
 handhelds with **two built-in screens** running ROCKNIX: the AYN Thor and Thor Lite, the AYANEO Pocket DS and the Anbernic

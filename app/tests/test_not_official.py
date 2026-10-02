@@ -20,10 +20,10 @@ class TestAbout(unittest.TestCase):
     def test_the_about_credits_say_it_is_not_an_official_rocknix_project(self):
         text = " ".join(settings_view.ABOUT_CREDITS)
         self.assertIn("Not an official ROCKNIX project", text)
-        self.assertIn("didnt make it, review it or endorse it", text)
+        self.assertIn("did not make it, review it or endorse it", text)
 
     def test_the_about_credits_say_who_to_tell_instead(self):
-        self.assertIn("tell Xenocideend and not the ROCKNIX team", " ".join(settings_view.ABOUT_CREDITS))
+        self.assertIn("If something breaks don't yell at the ROCKNIX team, yell at me.", " ".join(settings_view.ABOUT_CREDITS))
 
     def test_each_credit_line_is_short_enough_for_one_row(self):
         for line in settings_view.ABOUT_CREDITS:
@@ -34,8 +34,8 @@ class TestDocuments(unittest.TestCase):
     def check(self, path):
         head = slurp(path)[:900]
         self.assertIn("Not an official ROCKNIX project", head, path)
-        self.assertIn("didnt make this, review it or endorse it", head, path)
-        self.assertIn("and not them", head, path)
+        self.assertIn("did not make this, review it or endorse it", head, path)
+        self.assertIn("If something breaks don't yell at the ROCKNIX team, yell at me.", head, path)
 
     def test_the_guides_start_with_the_notice(self):
         for name in ("COMMAND-CENTER-GUIDE.md", "TESTER-GUIDE.md"):

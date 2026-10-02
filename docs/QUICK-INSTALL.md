@@ -1,7 +1,7 @@
 # Quick install (experienced users)
 
-> **Not an official ROCKNIX project.** The ROCKNIX team didnt make this, review it or endorse it, so please dont ask
-> them for help with it. If something breaks, tell me (Xenocideend) by opening an issue on this repo, and not them.
+> **Not an official ROCKNIX project.** The ROCKNIX team did not make this, review it or endorse it, so please do not ask
+> them for help with it. If something breaks don't yell at the ROCKNIX team, yell at me.
 
 For users comfortable with SSH on ROCKNIX. The full walkthrough, with what
 each step does and how to undo it, is in

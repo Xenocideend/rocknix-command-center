@@ -143,8 +143,8 @@ ABOUT_CREDITS = (
     "Made by Xenocideend, written with Claude (Anthropic)",
     "Runs on ROCKNIX, with SDL3, cairo, poppler and mpv",
     "Source: github.com/Xenocideend/rocknix-command-center",
-    "Not an official ROCKNIX project. The ROCKNIX team didnt make it, review it or endorse it.",
-    "If something breaks, tell Xenocideend and not the ROCKNIX team.",
+    "Not an official ROCKNIX project. The ROCKNIX team did not make it, review it or endorse it.",
+    "If something breaks don't yell at the ROCKNIX team, yell at me.",
 )
 ABOUT_SUPPORT = (
     "Want to support this project? Dont.",

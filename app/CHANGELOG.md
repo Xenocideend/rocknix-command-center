@@ -7,8 +7,8 @@ and the first lines of its notes.
 
 ## 1.9.1 - 2 Oct 2026
 
-- Settings > About and the guides now say this is not an official ROCKNIX project. The ROCKNIX team didnt make it, review
-  it or endorse it. If something breaks, tell Xenocideend and not the ROCKNIX team.
+- Settings > About and the guides now say this is not an official ROCKNIX project. The ROCKNIX team did not make it,
+  review it or endorse it. If something breaks don't yell at the ROCKNIX team, yell at me.
 
 ## 1.9.0 - 1 Oct 2026
 
